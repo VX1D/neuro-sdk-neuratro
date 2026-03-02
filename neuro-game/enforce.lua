@@ -1,33 +1,34 @@
 local Actions = require("actions")
 local State = require("state")
 local ContextCompact = require("context_compact")
-local NeuroConfig = require("config")
+local dotenv = require("dotenv")
 
 local Enforce = {}
 
 local _speed_mult = tonumber(os.getenv("NEURO_SPEED_MULT") or "") or 1.0
 local _fast = _speed_mult < 0.6
-local _m = _fast and 0.5 or 1.0  -- multiplier applied to config values in fast mode
 
-local COOLDOWN_SECONDS = tonumber(os.getenv("NEURO_ENFORCE_COOLDOWN") or "")
-  or (NeuroConfig.action_throttle * _m)
-local STATE_COOLDOWN_SECONDS = (function()
-  local t = {}
-  for k, v in pairs(NeuroConfig.action_throttle_by_state) do
-    t[k] = v * _m
-  end
-  return t
-end)()
+local COOLDOWN_SECONDS = dotenv.num("NEURO_ENFORCE_COOLDOWN", _fast and 0.18 or 0.60)
+local STATE_COOLDOWN_SECONDS = {
+  SHOP           = dotenv.num("NEURO_THROTTLE_SHOP",          _fast and 0.30 or 1.20),
+  TAROT_PACK     = dotenv.num("NEURO_THROTTLE_TAROT_PACK",    _fast and 0.35 or 1.20),
+  PLANET_PACK    = dotenv.num("NEURO_THROTTLE_PLANET_PACK",   _fast and 0.35 or 1.20),
+  SPECTRAL_PACK  = dotenv.num("NEURO_THROTTLE_SPECTRAL_PACK", _fast and 0.35 or 1.20),
+  STANDARD_PACK  = dotenv.num("NEURO_THROTTLE_STANDARD_PACK", _fast and 0.35 or 1.20),
+  BUFFOON_PACK   = dotenv.num("NEURO_THROTTLE_BUFFOON_PACK",  _fast and 0.35 or 1.20),
+}
 -- Global minimum gap between ANY two actions (prevents interleaving different actions too fast)
-local GLOBAL_COOLDOWN_SECONDS = tonumber(os.getenv("NEURO_GLOBAL_COOLDOWN") or "")
-  or (NeuroConfig.global_action_throttle * _m)
-local GLOBAL_STATE_COOLDOWN_SECONDS = (function()
-  local t = {}
-  for k, v in pairs(NeuroConfig.global_throttle_by_state) do
-    t[k] = v * _m
-  end
-  return t
-end)()
+local GLOBAL_COOLDOWN_SECONDS = dotenv.num("NEURO_GLOBAL_COOLDOWN", _fast and 0.65 or 2.0)
+local GLOBAL_STATE_COOLDOWN_SECONDS = {
+  SELECTING_HAND = dotenv.num("NEURO_GLOBAL_THROTTLE_SELECTING_HAND", _fast and 0.55 or 1.8),
+  SHOP           = dotenv.num("NEURO_GLOBAL_THROTTLE_SHOP",           _fast and 2.20 or 6.0),
+  BLIND_SELECT   = dotenv.num("NEURO_GLOBAL_THROTTLE_BLIND_SELECT",   _fast and 0.80 or 3.0),
+  TAROT_PACK     = dotenv.num("NEURO_GLOBAL_THROTTLE_TAROT_PACK",     _fast and 1.40 or 4.5),
+  PLANET_PACK    = dotenv.num("NEURO_GLOBAL_THROTTLE_PLANET_PACK",    _fast and 1.40 or 4.5),
+  SPECTRAL_PACK  = dotenv.num("NEURO_GLOBAL_THROTTLE_SPECTRAL_PACK",  _fast and 1.40 or 4.5),
+  STANDARD_PACK  = dotenv.num("NEURO_GLOBAL_THROTTLE_STANDARD_PACK",  _fast and 1.40 or 4.5),
+  BUFFOON_PACK   = dotenv.num("NEURO_GLOBAL_THROTTLE_BUFFOON_PACK",   _fast and 1.40 or 4.5),
+}
 local DEFAULT_MAX_REPEAT = 3
 local MAX_REROLL_SHOP_REPEAT = 30
 local FORCE_ONLY = false
@@ -145,6 +146,10 @@ local function send_context_refresh(bridge)
 end
 
 local function get_max_repeat(state_name, name)
+  if state_name == "GAME_OVER" or state_name == "MENU" or state_name == "SPLASH" or state_name == "RUN_SETUP" then
+    return 15
+  end
+
   if state_name == "SELECTING_HAND" and (
     name == "set_hand_highlight"
     or name == "play_cards_from_highlighted"

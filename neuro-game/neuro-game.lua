@@ -33,6 +33,8 @@ if not ok_anim then NeuroAnim = {} end
 local bridge_attempted = false
 local last_neuro_error = nil
 local error_cooldown = 0
+local _game_err_cd = 0
+local _game_err_last_msg = nil
 
 local _NEURO_DEBUG = (os.getenv("NEURO_DEBUG") or "") ~= "" and os.getenv("NEURO_DEBUG") ~= "0"
 local function neuro_log(...)
@@ -211,29 +213,28 @@ local function neuro_now()
   return os.clock()
 end
 
+local dotenv = require("dotenv")
+
 local _speed_mult = tonumber(os.getenv("NEURO_SPEED_MULT") or "") or 1.0
 local _fast = _speed_mult < 0.6
 
-local NEURO_STATE_COOLDOWN = tonumber(os.getenv("NEURO_STATE_COOLDOWN") or "")
-  or (_fast and 0.04 or 0.08)
+local NEURO_STATE_COOLDOWN = dotenv.num("NEURO_STATE_COOLDOWN", _fast and 0.04 or 0.15)
 local neuro_state_changed_at = 0
-local NEURO_ACTION_COOLDOWN = tonumber(os.getenv("NEURO_ACTION_COOLDOWN") or "")
-  or (_fast and 0.06 or 0.15)
-local NEURO_FORCE_DEBOUNCE = tonumber(os.getenv("NEURO_FORCE_DEBOUNCE") or "")
-  or (_fast and 0.10 or 0.22)
+local NEURO_ACTION_COOLDOWN = dotenv.num("NEURO_ACTION_COOLDOWN", _fast and 0.06 or 0.30)
+local NEURO_FORCE_DEBOUNCE = dotenv.num("NEURO_FORCE_DEBOUNCE", _fast and 0.10 or 0.40)
 local neuro_last_force_attempt_at = 0
 -- Per-state entry cooldown: wait this long after entering a state before forcing
 -- ROUND_EVAL: let viewers see earnings; SHOP: let items load
 local STATE_ENTRY_COOLDOWN = {
-  ROUND_EVAL      = 3.0,
-  SHOP            = 1.2,
+  ROUND_EVAL           = dotenv.num("NEURO_ENTRY_CD_ROUND_EVAL", 5.0),
+  SHOP                 = dotenv.num("NEURO_ENTRY_CD_SHOP", 2.5),
   -- Pack states: wait for opening animation before forcing a pick
-  SMODS_BOOSTER_OPENED = 2.5,
-  BUFFOON_PACK    = 2.5,
-  TAROT_PACK      = 2.5,
-  PLANET_PACK     = 2.5,
-  SPECTRAL_PACK   = 2.5,
-  STANDARD_PACK   = 2.5,
+  SMODS_BOOSTER_OPENED = dotenv.num("NEURO_ENTRY_CD_SMODS_BOOSTER_OPENED", 4.5),
+  BUFFOON_PACK         = dotenv.num("NEURO_ENTRY_CD_BUFFOON_PACK", 4.5),
+  TAROT_PACK           = dotenv.num("NEURO_ENTRY_CD_TAROT_PACK", 4.5),
+  PLANET_PACK          = dotenv.num("NEURO_ENTRY_CD_PLANET_PACK", 4.5),
+  SPECTRAL_PACK        = dotenv.num("NEURO_ENTRY_CD_SPECTRAL_PACK", 4.5),
+  STANDARD_PACK        = dotenv.num("NEURO_ENTRY_CD_STANDARD_PACK", 4.5),
 }
 
 local function mark_force_dirty()
@@ -1041,18 +1042,18 @@ end
 local function joker_fx(c)
   local ab = c and c.ability or {}
   if ab.x_mult and ab.x_mult > 1 then return "x" .. ab.x_mult end
-  if ab.h_mult then return "+" .. ab.h_mult .. " Mult" end
-  if ab.h_mod then return "+" .. ab.h_mod .. " Chips" end
-  if ab.t_mult then return "+" .. ab.t_mult .. " Mult" end
-  if ab.t_chips then return "+" .. ab.t_chips .. " Chips" end
-  if ab.d_mult then return "+" .. ab.d_mult .. " Mult" end
+  if ab.h_mult and ab.h_mult > 0 then return "+" .. ab.h_mult .. " Mult" end
+  if ab.h_mod and ab.h_mod > 0 then return "+" .. ab.h_mod .. " Chips" end
+  if ab.t_mult and ab.t_mult > 0 then return "+" .. ab.t_mult .. " Mult" end
+  if ab.t_chips and ab.t_chips > 0 then return "+" .. ab.t_chips .. " Chips" end
+  if ab.d_mult and ab.d_mult > 0 then return "+" .. ab.d_mult .. " Mult" end
   if ab.extra then
-    if type(ab.extra) == "number" then return "+" .. ab.extra end
+    if type(ab.extra) == "number" and ab.extra > 0 then return "+" .. ab.extra end
     if type(ab.extra) == "table" then
-      if ab.extra.x_mult then return "x" .. ab.extra.x_mult end
-      if ab.extra.mult then return "+" .. ab.extra.mult .. " Mult" end
-      if ab.extra.chips then return "+" .. ab.extra.chips .. " Chips" end
-      if ab.extra.money then return "+$" .. ab.extra.money end
+      if ab.extra.x_mult and ab.extra.x_mult > 1 then return "x" .. ab.extra.x_mult end
+      if ab.extra.mult and ab.extra.mult > 0 then return "+" .. ab.extra.mult .. " Mult" end
+      if ab.extra.chips and ab.extra.chips > 0 then return "+" .. ab.extra.chips .. " Chips" end
+      if ab.extra.money and ab.extra.money > 0 then return "+$" .. ab.extra.money end
     end
   end
   return ""
@@ -1283,6 +1284,7 @@ local function draw_neuro_indicator()
   if panel_font then love.graphics.setFont(panel_font) end
   trace("TRACE-IND: font ready, G.NEURO=" .. tostring(G.NEURO ~= nil))
 
+  local draw_buy_panel
   if G.NEURO then
     trace("IND: G.NEURO block entered")
     local logo = get_neuro_logo()
@@ -1311,7 +1313,7 @@ local function draw_neuro_indicator()
     local trunc
     local wrapped_lines
 
-    local function draw_buy_panel()
+    draw_buy_panel = function()
       if not _buy_showcase then return end
       local area_tag = tostring(_buy_showcase.area or "shop")
       if area_tag == "booster_choice" or area_tag == "pack_browse" then return end
@@ -1607,7 +1609,7 @@ local function draw_neuro_indicator()
     local action_row_h = action_text and (text_h + 10) or 0
     local function row_h(r)
       if r[5] then return sep_h
-      elseif r[10] then return card_line_h + small_line_h * 2 + 18
+      elseif r[10] then return card_line_h + small_line_h * 3 + 18
       elseif r[6] then
         if r[8] then
           local indent = r[4] or 0
@@ -2491,12 +2493,15 @@ local function draw_neuro_indicator()
                   local ok, d = pcall(Utils.safe_description, jc2.config.center.loc_txt, jc2)
                   if ok and type(d) == "string" then desc = d end
                 end
-                local show  = (fx ~= "" and fx) or desc
+                local show = desc
+                if show == "" then show = fx end
                 local sf2   = panel_font_small or font
                 local lns   = show ~= "" and wrapped_lines(show, content_w - 36, sf2) or {}
                 local rc2   = rarity_color(jc2)
                 if not rc2 or type(rc2) ~= "table" then rc2 = {1,1,1} end
-                cached = { name = card_display_name(jc2) or "?", show = show,
+                local dname = card_display_name(jc2) or "?"
+                if fx ~= "" and desc ~= "" then dname = dname .. "  " .. fx end
+                cached = { name = dname, show = show,
                            lines = lns, rc = rc2, jc = jc2 }
                 _desc_cache[_desc_slot] = cached
               end
@@ -2511,7 +2516,7 @@ local function draw_neuro_indicator()
 
               -- subtle background tray
               love.graphics.setColor(rc[1], rc[2], rc[3], 0.06)
-              love.graphics.rectangle("fill", p_x + 3, cy, p_w - 6, card_line_h + small_line_h * 2 + 4, 5, 5)
+              love.graphics.rectangle("fill", p_x + 3, cy, p_w - 6, card_line_h + small_line_h * 3 + 4, 5, 5)
 
               -- mini card sprite box
               local sprite_h = card_line_h - 4
@@ -2543,10 +2548,9 @@ local function draw_neuro_indicator()
               love.graphics.setColor(pg[1], pg[2], pg[3], 0.45 + 0.15 * pulse)
               love.graphics.print(slot_txt, p_x + p_w - p_pad_x - stw, cy + (card_line_h - small_text_h) / 2)
 
-              -- fx / desc text (up to 2 lines)
               if #lns > 0 then
                 local desc_y = cy + card_line_h
-                for li = 1, math.min(#lns, 2) do
+                for li = 1, math.min(#lns, 3) do
                   love.graphics.setColor(0, 0, 0, 0.20 * fade_a)
                   love.graphics.print(lns[li], p_x + p_pad_x + text_off + 1, desc_y + 1)
                   love.graphics.setColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.88 * fade_a)
@@ -2557,7 +2561,7 @@ local function draw_neuro_indicator()
               if panel_font_small then love.graphics.setFont(font) end
 
               -- progress bar (ALWAYS fully opaque — tracks SHOW phase, not fade)
-              local bar_y = cy + card_line_h + small_line_h * 2 + 3
+              local bar_y = cy + card_line_h + small_line_h * 3 + 3
               local bar_x = p_x + p_pad_x
               love.graphics.setColor(p[1], p[2], p[3], 0.18)
               love.graphics.rectangle("fill", bar_x, bar_y, content_w, 3, 1, 1)
@@ -2693,7 +2697,7 @@ local function draw_neuro_indicator()
     if _right_panel_slide_frac > 0 then love.graphics.pop() end
   end
 
-  draw_buy_panel()
+  if draw_buy_panel then draw_buy_panel() end
 
   trace("IND: footer done")
   love.graphics.setColor(1, 1, 1, 1)
@@ -3004,6 +3008,15 @@ end
 local original_love_update = love.update
 
 love.update = function(dt)
+  if G then
+    local areas = {G.hand, G.jokers, G.consumeables, G.shop_jokers, G.shop_vouchers, G.shop_booster, G.pack_cards}
+    for i = 1, #areas do
+      if areas[i] and areas[i].cards == nil then
+        areas[i].cards = {}
+      end
+    end
+  end
+
   local update_success, update_err = pcall(function()
     if original_love_update then
       original_love_update(dt)
@@ -3011,7 +3024,18 @@ love.update = function(dt)
   end)
 
   if not update_success then
-    print("[neuro-game] Warning: Game update error: " .. tostring(update_err))
+    local now = os.clock()
+    local msg = tostring(update_err)
+    if _game_err_cd <= 0 or msg ~= _game_err_last_msg then
+      print("[neuro-game] Warning: Game update error: " .. msg)
+      _game_err_last_msg = msg
+      _game_err_cd = now + 5
+    end
+  else
+    if _game_err_cd > 0 and os.clock() > _game_err_cd then
+      _game_err_cd = 0
+      _game_err_last_msg = nil
+    end
   end
 
   if not _neuro_card_draw_hooked then
@@ -3337,96 +3361,96 @@ local HIYORI_COLORS = {
 }
 
 local NEURO_COLORS = {
-  RED          = { 0.851, 0.247, 0.361, 1 },
-  BLUE         = { 0.275, 0.847, 0.812, 1 },
-  PURPLE       = { 0.608, 0.533, 0.816, 1 },
-  GREEN        = { 0.565, 0.800, 0.592, 1 },
-  GOLD         = { 0.949, 0.859, 0.682, 1 },
-  ORANGE       = { 0.945, 0.643, 0.349, 1 },
-  YELLOW       = { 0.973, 0.918, 0.643, 1 },
-  BLACK        = { 0.118, 0.129, 0.157, 1 },
-  L_BLACK      = { 0.180, 0.192, 0.227, 1 },
-  GREY         = { 0.485, 0.533, 0.620, 1 },
-  WHITE        = { 0.965, 0.975, 0.992, 1 },
-  JOKER_GREY   = { 0.744, 0.777, 0.842, 1 },
+  RED          = { 1.000, 0.302, 0.580, 1 },
+  BLUE         = { 0.000, 0.898, 1.000, 1 },
+  PURPLE       = { 0.608, 0.447, 0.902, 1 },
+  GREEN        = { 0.482, 0.769, 0.565, 1 },
+  GOLD         = { 1.000, 0.843, 0.000, 1 },
+  ORANGE       = { 1.000, 0.502, 0.400, 1 },
+  YELLOW       = { 1.000, 0.878, 0.200, 1 },
+  BLACK        = { 0.098, 0.086, 0.118, 1 },
+  L_BLACK      = { 0.157, 0.141, 0.184, 1 },
+  GREY         = { 0.490, 0.467, 0.557, 1 },
+  WHITE        = { 0.984, 0.984, 1.000, 1 },
+  JOKER_GREY   = { 0.745, 0.725, 0.800, 1 },
 
-  MULT         = { 0.965, 0.975, 0.992, 1 },
-  CHIPS        = { 0.400, 0.929, 0.894, 1 },
-  XMULT        = { 0.902, 0.302, 0.373, 1 },
+  MULT         = { 1.000, 0.651, 0.788, 1 },
+  CHIPS        = { 0.502, 0.875, 1.000, 1 },
+  XMULT        = { 1.000, 0.302, 0.580, 1 },
 
-  UI_MULT      = { 0.965, 0.975, 0.992, 1 },
-  UI_CHIPS     = { 0.400, 0.929, 0.894, 1 },
-  MONEY        = { 0.949, 0.859, 0.682, 1 },
-  BOOSTER      = { 0.275, 0.847, 0.812, 1 },
+  UI_MULT      = { 1.000, 0.651, 0.788, 1 },
+  UI_CHIPS     = { 0.502, 0.875, 1.000, 1 },
+  MONEY        = { 1.000, 0.843, 0.000, 1 },
+  BOOSTER      = { 0.000, 0.898, 1.000, 1 },
 
-  EDITION      = { 0.867, 0.892, 0.953, 1 },
-  DARK_EDITION = { 0.556, 0.611, 0.741, 1 },
-  IMPORTANT    = { 0.851, 0.247, 0.361, 1 },
-  FILTER       = { 0.851, 0.247, 0.361, 1 },
-  VOUCHER      = { 0.949, 0.859, 0.682, 1 },
-  CHANCE       = { 0.275, 0.847, 0.812, 1 },
+  EDITION      = { 0.855, 0.835, 0.925, 1 },
+  DARK_EDITION = { 0.530, 0.490, 0.680, 1 },
+  IMPORTANT    = { 1.000, 0.302, 0.580, 1 },
+  FILTER       = { 1.000, 0.302, 0.580, 1 },
+  VOUCHER      = { 1.000, 0.843, 0.000, 1 },
+  CHANCE       = { 0.000, 0.898, 1.000, 1 },
 
-  PALE_GREEN   = { 0.678, 0.855, 0.667, 1 },
-  ETERNAL      = { 0.769, 0.220, 0.349, 1 },
-  PERISHABLE   = { 0.604, 0.639, 0.757, 1 },
-  RENTAL       = { 0.757, 0.729, 0.651, 1 },
+  PALE_GREEN   = { 0.580, 0.820, 0.630, 1 },
+  ETERNAL      = { 1.000, 0.302, 0.580, 1 },
+  PERISHABLE   = { 0.590, 0.565, 0.690, 1 },
+  RENTAL       = { 0.780, 0.750, 0.620, 1 },
 
   BACKGROUND = {
-    L = { 0.949, 0.906, 0.820, 1 },
-    D = { 0.773, 0.867, 0.910, 1 },
-    C = { 0.678, 0.812, 0.878, 1 },
+    L = { 1.000, 0.780, 0.855, 1 },
+    D = { 0.502, 0.875, 1.000, 1 },
+    C = { 0.380, 0.780, 0.920, 1 },
   },
 
   BLIND = {
-    Small = { 0.784, 0.894, 0.949, 1 },
-    Big   = { 0.949, 0.914, 0.820, 1 },
-    Boss  = { 0.902, 0.302, 0.373, 1 },
-    won   = { 0.455, 0.824, 0.800, 1 },
+    Small = { 0.502, 0.875, 1.000, 1 },
+    Big   = { 1.000, 0.780, 0.855, 1 },
+    Boss  = { 1.000, 0.302, 0.580, 1 },
+    won   = { 0.000, 0.898, 1.000, 1 },
   },
 
   DYN_UI = {
-    MAIN      = { 0.118, 0.129, 0.157, 1 },
-    DARK      = { 0.086, 0.094, 0.118, 1 },
-    BOSS_MAIN = { 0.176, 0.188, 0.220, 1 },
-    BOSS_DARK = { 0.118, 0.129, 0.161, 1 },
-    BOSS_PALE = { 0.286, 0.337, 0.396, 1 },
+    MAIN      = { 0.118, 0.106, 0.145, 1 },
+    DARK      = { 0.082, 0.075, 0.110, 1 },
+    BOSS_MAIN = { 0.180, 0.160, 0.210, 1 },
+    BOSS_DARK = { 0.120, 0.108, 0.155, 1 },
+    BOSS_PALE = { 0.310, 0.290, 0.380, 1 },
   },
 
   UI = {
-    TEXT_LIGHT          = { 0.965, 0.975, 0.992, 1 },
-    TEXT_DARK           = { 0.118, 0.129, 0.157, 1 },
-    TEXT_INACTIVE       = { 0.620, 0.675, 0.760, 0.66 },
-    BACKGROUND_LIGHT    = { 0.949, 0.906, 0.820, 1 },
-    BACKGROUND_WHITE    = { 0.965, 0.975, 0.992, 1 },
-    BACKGROUND_DARK     = { 0.118, 0.129, 0.157, 1 },
-    BACKGROUND_INACTIVE = { 0.188, 0.200, 0.235, 1 },
-    OUTLINE_LIGHT       = { 0.275, 0.847, 0.812, 1 },
-    OUTLINE_LIGHT_TRANS = { 0.275, 0.847, 0.812, 0.45 },
-    OUTLINE_DARK        = { 0.118, 0.129, 0.157, 1 },
-    TRANSPARENT_LIGHT   = { 0.965, 0.975, 0.992, 0.18 },
-    TRANSPARENT_DARK    = { 0.118, 0.129, 0.157, 0.16 },
-    HOVER               = { 0.275, 0.847, 0.812, 0.28 },
+    TEXT_LIGHT          = { 0.984, 0.984, 1.000, 1 },
+    TEXT_DARK           = { 0.098, 0.086, 0.118, 1 },
+    TEXT_INACTIVE       = { 0.600, 0.575, 0.690, 0.66 },
+    BACKGROUND_LIGHT    = { 1.000, 0.780, 0.855, 1 },
+    BACKGROUND_WHITE    = { 0.984, 0.984, 1.000, 1 },
+    BACKGROUND_DARK     = { 0.098, 0.086, 0.118, 1 },
+    BACKGROUND_INACTIVE = { 0.170, 0.155, 0.200, 1 },
+    OUTLINE_LIGHT       = { 0.000, 0.898, 1.000, 1 },
+    OUTLINE_LIGHT_TRANS = { 0.000, 0.898, 1.000, 0.45 },
+    OUTLINE_DARK        = { 0.098, 0.086, 0.118, 1 },
+    TRANSPARENT_LIGHT   = { 0.984, 0.984, 1.000, 0.18 },
+    TRANSPARENT_DARK    = { 0.098, 0.086, 0.118, 0.16 },
+    HOVER               = { 0.000, 0.898, 1.000, 0.28 },
   },
 
   SET = {
-    Default  = { 0.973, 0.976, 0.980, 1 },
-    Enhanced = { 0.973, 0.976, 0.980, 1 },
-    Joker    = { 0.145, 0.137, 0.153, 1 },
-    Tarot    = { 0.145, 0.137, 0.153, 1 },
-    Planet   = { 0.145, 0.137, 0.153, 1 },
-    Spectral = { 0.145, 0.137, 0.153, 1 },
-    Voucher  = { 0.145, 0.137, 0.153, 1 },
+    Default  = { 0.975, 0.960, 0.975, 1 },
+    Enhanced = { 0.975, 0.960, 0.975, 1 },
+    Joker    = { 0.140, 0.125, 0.165, 1 },
+    Tarot    = { 0.140, 0.125, 0.165, 1 },
+    Planet   = { 0.140, 0.125, 0.165, 1 },
+    Spectral = { 0.140, 0.125, 0.165, 1 },
+    Voucher  = { 0.140, 0.125, 0.165, 1 },
   },
 
   SECONDARY_SET = {
-    Default  = { 0.949, 0.906, 0.820, 1 },
-    Enhanced = { 0.357, 0.843, 0.839, 1 },
-    Joker    = { 0.878, 0.271, 0.341, 1 },
-    Tarot    = { 0.835, 0.376, 0.471, 1 },
-    Planet   = { 0.357, 0.843, 0.839, 1 },
-    Spectral = { 0.608, 0.533, 0.816, 1 },
-    Voucher  = { 0.949, 0.859, 0.682, 1 },
-    Edition  = { 0.400, 0.929, 0.894, 1 },
+    Default  = { 1.000, 0.780, 0.855, 1 },
+    Enhanced = { 0.000, 0.898, 1.000, 1 },
+    Joker    = { 1.000, 0.302, 0.580, 1 },
+    Tarot    = { 0.608, 0.447, 0.902, 1 },
+    Planet   = { 0.502, 0.875, 1.000, 1 },
+    Spectral = { 0.608, 0.447, 0.902, 1 },
+    Voucher  = { 1.000, 0.843, 0.000, 1 },
+    Edition  = { 0.502, 0.875, 1.000, 1 },
   },
 }
 

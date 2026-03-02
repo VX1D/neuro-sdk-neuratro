@@ -1,4 +1,5 @@
 local json = require("neuro_json")
+local dotenv = require("dotenv")
 
 local Bridge = {}
 Bridge.__index = Bridge
@@ -82,7 +83,7 @@ function Bridge:new(opts)
   o.last_context_full = nil
   o.last_context_state = nil
   o.delta_context = not truthy_env("NEURO_DISABLE_CONTEXT_DELTA")
-  o.transition_cooldown = tonumber(os.getenv("NEURO_TRANSITION_COOLDOWN") or "") or 0.1
+  o.transition_cooldown = dotenv.num("NEURO_TRANSITION_COOLDOWN", 0.15)
   return o
 end
 

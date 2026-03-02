@@ -1,6 +1,5 @@
 local ContextCompact = {}
 local Utils = require "utils"
-local NeuroConfig = require "config"
 local safe_name = Utils.safe_name
 local flatten_description = Utils.flatten_description
 local safe_description = Utils.safe_description
@@ -61,7 +60,7 @@ local STATE_PRIORITY = {
   },
   SELECTING_HAND = {
     must_keep = { "CTX", "STATE", "B", "BD", "WIN", "HL", "HG", "H", "LA" },
-    drop_order = { "AH", "DC", "K", "PS", "FM", "M", "R", "DK", "C", "DSIM", "L", "JTRIG", "CB", "J" },
+    drop_order = { "AH", "DC", "K", "PS", "FM", "M", "R", "DK", "C", "DSIM", "L", "CB", "J" },
   },
   SHOP = {
     must_keep = { "CTX", "STATE", "SH", "I", "LA" },
@@ -118,7 +117,7 @@ local function section_id(section)
 end
 
 local FP_KEYS = {
-  SELECTING_HAND = { B = true, BD = true, WIN = true, HL = true, H = true, HG = true, J = true, L = true, CB = true, AH = true, JTRIG = true },
+  SELECTING_HAND = { B = true, BD = true, WIN = true, HL = true, H = true, HG = true, J = true, L = true, CB = true, AH = true },
   SHOP = { SH = true, I = true, AH = true },
   BLIND_SELECT = { BS = true, BA = true, BO = true },
   ROUND_EVAL = { RE = true, REA = true },
@@ -2090,15 +2089,8 @@ local function simulate_best_plays(cards, opts)
     return nil
   end
 
-  local function hand_tier(hand_type)
-    if NeuroConfig.prefer_named_hands == false then return 1 end
-    return (hand_type == "High Card") and 2 or 1
-  end
   table.sort(candidates, function(a, b)
-    -- Named hands always beat High Card regardless of raw score
-    local ta, tb = hand_tier(a.hand_type), hand_tier(b.hand_type)
-    if ta ~= tb then return ta < tb end
-    -- Different named hand types: prefer higher score
+    -- Different hand types: prefer higher score (Flush > Pair regardless of card count)
     if a.hand_type ~= b.hand_type then
       return a.score > b.score
     end
@@ -2231,33 +2223,19 @@ local function combos_section()
   if #score_lines > 0 then
     result = result .. "\nSCORE_EST:" .. table.concat(score_lines, "|") .. target .. sim_tokens
   end
-  return result
-end
-
-local function win_section()
-  if not (G and G.GAME and G.GAME.blind) then return nil end
-  local t = (G.GAME.blind.chips or 0) * (G.GAME.blind.mult or 1)
-  local score_so_far = G.GAME.chips or 0
-  local target_remaining = t - score_so_far
-
-  local best_score = 0
-  if G.NEURO_SIM1_PLAY then
-    best_score = tonumber(G.NEURO_SIM1_PLAY.score) or 0
+  if type(target_remaining) == "number" then
+    local hands_left = G.GAME and G.GAME.current_round and G.GAME.current_round.hands_left or 0
+    local discards_left = G.GAME and G.GAME.current_round and G.GAME.current_round.discards_left or 0
+    local deck_sz = G.deck and G.deck.cards and #G.deck.cards or 0
+    result = result .. string.format("\nWIN|REM:%d|BEST:%d|CLR:%s|H:%d|D:%d|DK:%d",
+      math.max(0, math.floor(target_remaining)),
+      math.max(0, math.floor(best_score or 0)),
+      can_clear_now,
+      math.max(0, math.floor(hands_left or 0)),
+      math.max(0, math.floor(discards_left or 0)),
+      deck_sz
+    )
   end
-  local can_clear_now = (target_remaining > 0 and best_score >= target_remaining) and "Y" or "N"
-  local hands_left = G.GAME.current_round and G.GAME.current_round.hands_left or 0
-  local discards_left = G.GAME.current_round and G.GAME.current_round.discards_left or 0
-  local deck_sz = G.deck and G.deck.cards and #G.deck.cards or 0
-
-  local result = string.format("WIN|REM:%d|BEST:%d|CLR:%s|H:%d|D:%d|DK:%d",
-    math.max(0, math.floor(target_remaining)),
-    math.max(0, math.floor(best_score)),
-    can_clear_now,
-    math.max(0, math.floor(hands_left)),
-    math.max(0, math.floor(discards_left)),
-    deck_sz
-  )
-
   if G.GAME and G.GAME.hands then
     local hp_parts = {}
     for nm, hd in pairs(G.GAME.hands) do
@@ -2277,7 +2255,6 @@ local function win_section()
 
   if G.hand and G.hand.highlighted and #G.hand.highlighted > 0
       and G.hand.cards and G.FUNCS and G.FUNCS.get_poker_hand_info then
-    local cards = G.hand.cards
     local hl_idx = {}
     local hl_sel = {}
     for _, hc in ipairs(G.hand.highlighted) do
@@ -2292,30 +2269,12 @@ local function win_section()
         if est then
           result = result .. "\nHGS:" .. compact_text(info.type, 16) .. "~" .. tostring(est)
         end
+        local jtrig = joker_trigger_labels(info.type, hl_idx, cards)
+        if jtrig then result = result .. "\n" .. jtrig end
       end
     end
   end
-
   return result
-end
-
-local function jtrig_section()
-  if not (G and G.hand and G.hand.highlighted and #G.hand.highlighted > 0
-      and G.hand.cards and G.FUNCS and G.FUNCS.get_poker_hand_info) then
-    return nil
-  end
-  local cards = G.hand.cards
-  local hl_idx = {}
-  local hl_sel = {}
-  for _, hc in ipairs(G.hand.highlighted) do
-    for i, c in ipairs(cards) do
-      if c == hc then hl_idx[#hl_idx + 1] = i; hl_sel[#hl_sel + 1] = c; break end
-    end
-  end
-  if #hl_idx == 0 then return nil end
-  local ok, info = pcall(G.FUNCS.get_poker_hand_info, hl_sel)
-  if not (ok and type(info) == "table" and info.type) then return nil end
-  return joker_trigger_labels(info.type, hl_idx, cards)
 end
 
 local function consumables_section()
@@ -2823,8 +2782,6 @@ function ContextCompact.build(state_name, allowed_actions, opts)
     if (not has_filters) or has_action(action_set, "simulate_hand") or has_action(action_set, "set_hand_highlight")
       or has_action(action_set, "play_cards_from_highlighted") or has_action(action_set, "discard_cards_from_highlighted") then
       sections[#sections + 1] = combos_section()
-      sections[#sections + 1] = win_section()
-      sections[#sections + 1] = jtrig_section()
     end
     if (not has_filters) or has_action(action_set, "discard_cards_from_highlighted") or has_action(action_set, "set_hand_highlight") then
       sections[#sections + 1] = discard_heuristics_section()

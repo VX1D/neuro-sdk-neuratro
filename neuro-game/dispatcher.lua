@@ -3,6 +3,7 @@ local Filtered = require("filtered")
 local Actions = require("actions")
 local Enforce = require("enforce")
 local Utils = require("utils")
+local dotenv = require("dotenv")
 local safe_name = Utils.safe_name
 local ok_anim, NeuroAnim = pcall(require, "neuro-anim")
 if not ok_anim then NeuroAnim = {} end
@@ -988,6 +989,25 @@ local function handle_use_card(data)
 
   local is_playing_card = card.base ~= nil and card.base.suit ~= nil
 
+  local hand_indices = nil
+  if data.hand_indices and type(data.hand_indices) == "table" and #data.hand_indices > 0 then
+    if not G.hand or not G.hand.cards then
+      return nil, "Hand is not available. Cannot highlight cards for consumable use."
+    end
+    hand_indices = normalize_indices(data.hand_indices, #G.hand.cards)
+    if #hand_indices == 0 then
+      return nil, "No valid hand_indices provided. Hand has " .. #G.hand.cards .. " cards, use indices 1-" .. #G.hand.cards .. "."
+    end
+    local mh = card.ability and card.ability.consumeable and card.ability.consumeable.max_highlighted
+    local mn = card.ability and card.ability.consumeable and card.ability.consumeable.min_highlighted or 1
+    if mh and #hand_indices > mh then
+      return nil, string.format("Too many cards: '%s' needs at most %d highlighted, you provided %d.", card_name, mh, #hand_indices)
+    end
+    if mh and #hand_indices < mn then
+      return nil, string.format("Too few cards: '%s' needs at least %d highlighted, you provided %d.", card_name, mn, #hand_indices)
+    end
+  end
+
   return function()
     local pack_snapshot = nil
     local bp = G and (G.pack_cards or G.booster_pack)
@@ -1006,15 +1026,17 @@ local function handle_use_card(data)
         pcall(function() NeuroAnim.hover_pack_card(card, bp) end)
       end
 
-      -- Delay the actual pick so the highlight is visible (~1.3s)
+      -- Delay the actual pick so the highlight is visible
+      local pack_pick_block = dotenv.num("NEURO_PACK_PICK_BLOCK", 3.0)
+      local pack_pick_delay = dotenv.num("NEURO_PACK_PICK_DELAY", 2.2)
       local t = (G.TIMERS and G.TIMERS.REAL) or os.clock()
-      G.NEURO_LAST_ACTION_AT = t + 1.8  -- neuro_can_act blocked for 1.8s
+      G.NEURO_LAST_ACTION_AT = t + pack_pick_block
 
       if G.E_MANAGER and Event then
         local fn = G.FUNCS and G.FUNCS.use_card
         G.E_MANAGER:add_event(Event({
           trigger = "after",
-          delay   = 1.3,
+          delay   = pack_pick_delay,
           func    = function()
             pcall(function()
               card.highlighted = false
@@ -1049,6 +1071,13 @@ local function handle_use_card(data)
         queue_pick_showcase("booster_pick", 0)
       end
     else
+      if hand_indices and G.hand and G.hand.cards then
+        clear_area_highlight(G.hand)
+        for _, idx in ipairs(hand_indices) do
+          local hcard = G.hand.cards[idx]
+          if hcard then add_area_highlight(G.hand, hcard) end
+        end
+      end
       local fn = G.FUNCS and G.FUNCS.use_card
       if fn then fn({ config = { ref_table = card }, UIBox = mock_UIBox }) end
     end
@@ -1119,13 +1148,15 @@ local function handle_buy_from_shop(data)
       card.highlighted = true
       if G and G.NEURO_AI_HIGHLIGHTED then G.NEURO_AI_HIGHLIGHTED[card] = true end
     end)
+    local shop_buy_block = dotenv.num("NEURO_SHOP_BUY_BLOCK", 2.2)
+    local shop_buy_delay = dotenv.num("NEURO_SHOP_BUY_DELAY", 2.2)
     local t = (G and G.TIMERS and G.TIMERS.REAL) or os.clock()
-    G.NEURO_LAST_ACTION_AT = t + 1.3  -- block force system during highlight window
+    G.NEURO_LAST_ACTION_AT = t + shop_buy_block
     queue_purchase_showcase()  -- show panel immediately
     if G and G.E_MANAGER and Event then
       G.E_MANAGER:add_event(Event({
         trigger   = "after",
-        delay     = 1.3,
+        delay     = shop_buy_delay,
         blockable = false,
         func      = function()
           pcall(function()
@@ -2642,33 +2673,30 @@ end
 local FORCE_HANDLERS = {}
 
 local DECK_INFO = {
-  ["Red Deck"]       = "+1 discard per round. More chances to cycle for better cards. ",
-  ["Blue Deck"]      = "+1 hand per round. Extra hand means you can afford weaker exploratory plays. ",
-  ["Yellow Deck"]    = "Started with extra money. Standard card pool. ",
-  ["Green Deck"]     = "+$1 per hand played, +$1 per discard used, no interest. Use all hands and discards for income. ",
-  ["Black Deck"]     = "+1 joker slot, -1 hand per round. Fewer hands — each play counts more. ",
-  ["Magic Deck"]     = "Crystal Ball voucher active. Standard card pool. ",
-  ["Nebula Deck"]    = "+1 consumable slot, -1 hand per round. Fewer hands — each play counts more. ",
-  ["Ghost Deck"]     = "Spectral cards may appear. Standard card pool. ",
-  ["Zodiac Deck"]    = "Telescope voucher active. Standard card pool. ",
-  ["Plasma Deck"]    = "Chips and mult are averaged together before multiplying. Balanced hands outscore lopsided ones. ",
-  ["Erratic Deck"]   = "Ranks and suits were randomized. Unusual distributions — check combos carefully. ",
-  ["Abandoned Deck"] = "No face cards (J/Q/K) in deck. Aces are highest value. Face cards will never appear in draws. ",
-  ["Painted Deck"]   = "Hand size is 10 cards (play max 5). You see more cards — find the strongest 5-card hand. ",
-  ["Checkered Deck"] = "Only Spades and Hearts, with 2 copies of each card. Flushes and pairs are more common. ",
-  ["Anaglyph Deck"]  = "Double tags after Boss Blinds. Standard card pool. ",
-  ["Twin deck"]      = "Face cards replaced with 4 Kings of Spades and 4 Kings of Hearts. Only Kings as face cards — pairs and trips of Kings are very likely. ",
-  ["Invader deck"]   = "6 random Gleeb cards added to deck each blind. Deck grows each round with unusual Glorpsuit cards. ",
-  ["Euchre deck"]    = "Only 9s through Aces, plus 8 Jacks (4 wild). Hand size is 5. Jacks are the most common card. ",
+  ["Red Deck"]       = "+1 discard per round. Use extra discards aggressively to fish for better hands. Discard weak cards early, chase straights and flushes more freely. Priority: Pairs/Trips > Flush > Straight. ",
+  ["Blue Deck"]      = "+1 hand per round. Extra hand lets you play one exploratory or low-value hand safely. Use the spare hand to test combos or clear weak cards, save strong hands for scoring. ",
+  ["Yellow Deck"]    = "Started with +$10. Buy a strong joker or booster on round 1. Standard 52-card pool, no composition changes. Play normally but leverage early economy lead. ",
+  ["Green Deck"]     = "+$1 per hand played, +$1 per discard used, no interest. Use ALL hands and ALL discards every round for max income. Even weak plays and throwaway discards earn money. Never save discards. ",
+  ["Black Deck"]     = "+1 joker slot (6 total), -1 hand per round. Every play must count with fewer hands. Always pick your strongest hand, never explore. Extra joker slot means prioritize buying jokers in shop. ",
+  ["Magic Deck"]     = "Crystal Ball voucher active (+1 consumable slot). Started with 2 Fool tarots (copy last tarot used). Use tarots aggressively since you have extra slot. Buy and use consumables more freely than normal. ",
+  ["Nebula Deck"]    = "Telescope voucher active (levels up most played hand on blind defeat), +1 consumable slot, -1 hand per round. Fewer hands so every play matters. Focus on one hand type to maximize Telescope leveling. ",
+  ["Ghost Deck"]     = "Spectral cards may appear in shop and from packs. Started with Hex spectral (add Polychrome to a random joker). Spectral cards are powerful but risky. Buy spectral packs when available. ",
+  ["Zodiac Deck"]    = "Tarot Merchant, Planet Merchant, and Overstock vouchers all active. Shop has extra consumable slots and better consumable rates. Buy planets to level your best hand type, buy tarots to enhance key cards. ",
+  ["Plasma Deck"]    = "Chips and mult are averaged together: score = ((chips+mult)/2)^2. Balanced hands outscore lopsided ones. A high-chip pair can beat low-chip trips. Avoid hands with extreme chip/mult imbalance. ",
+  ["Erratic Deck"]   = "All ranks and suits were randomized at start. Unusual distributions everywhere. Check your actual hand for unexpected pairs, flushes, or combos. Do not assume standard distributions. ",
+  ["Abandoned Deck"] = "No face cards (J/Q/K) in deck. 40 cards, 10 per suit. Flushes are more concentrated (fewer cards = higher flush chance). Straights only span A-5 through 6-10. Priority: Pairs/Trips > Flush > Straight. ",
+  ["Painted Deck"]   = "+2 hand size (see 10 cards), -1 joker slot. You see more cards so flushes and straights appear naturally. Pick the strongest 5-card combo from your 10. Fewer joker slots means each joker must be high impact. ",
+  ["Checkered Deck"] = "Only Spades and Hearts, 2 copies of each rank (52 cards). ~50%% flush chance per hand. Priority: Flush >>> Pairs > Full House. Always check for flush first. Two-pair and full house also more common with duplicate ranks. ",
+  ["Anaglyph Deck"]  = "Earn a Double Tag after every Boss Blind (gives copy of next tag). Standard 52-card pool. Play normally but always defeat Boss Blinds for double tag value. Skip small/big blinds only if tags are worth doubling. ",
+  ["Twin deck"]      = "8 Kings in 48 cards (16.7%%). King pairs/trips near-guaranteed. Priority: King Pairs/Trips first. Start: 2 'The Twins' tarots. Use them ASAP on your best Kings to add Twin enhancement (+15 chips +2 mult each). ",
+  ["Invader deck"]   = "6 random Gleeb (Glorpsuit) cards added each blind. Gleeb cards give 10x base chips when scored but BREAK at end of round. Play them NOW, they vanish anyway. Deck grows each round so specific draws get harder. Envious Joker (+6 mult per Gleeb scored) is a must-buy. Mix hands (5 different suits) possible with Gleeb as 5th suit. ",
+  ["Euchre deck"]    = "Only 9-K and Aces, 28 cards total, 8 Jacks (4 wild). Hand size 5, 7 cards per suit. Flush chance ~18%%. Wild Jacks count as any suit for flushes. Priority: Jack Pairs/Trips > Flush > Straight (only 9-K or 10-A runs). ",
 }
 
 local function deck_strategy_info()
   local back = G and G.GAME and (G.GAME.back or G.GAME.selected_back)
   if not back then return "" end
   local center = back.effect and back.effect.center
-  if center and center.config and center.config.remove_faces then
-    return "Deck has only 9 through Ace (no 2-8). J/Q/K/A are the strongest cards in this deck. "
-  end
   local name = center and get_back_display_name(center) or back.name or ""
   return DECK_INFO[name] or ""
 end
@@ -2727,12 +2755,80 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
 
   local deck_strategy = once_per_state_entry_hint("deck_strategy", deck_strategy_info())
 
+  local consumable_hint = ""
+  local has_usable_consumable = false
+  if G.consumeables and G.consumeables.cards then
+    local deck_name = ""
+    local back = G.GAME and (G.GAME.back or G.GAME.selected_back)
+    local center = back and back.effect and back.effect.center
+    if center then deck_name = get_back_display_name(center) or "" end
+
+    for i, c in ipairs(G.consumeables.cards) do
+      local nm = c and c.ability and c.ability.name or ""
+      local mh = c and c.ability and c.ability.consumeable and c.ability.consumeable.max_highlighted
+      if mh then
+        local highlighted_count = G.hand and G.hand.highlighted and #G.hand.highlighted or 0
+        local min_h = c.ability.consumeable.min_highlighted or 1
+        local target_advice = ""
+        if nm == "The Twins" or nm == "The Bit" then
+          if deck_name == "Twin deck" then
+            target_advice = "Pick your 2 best Kings (your most common card). Twin-enhanced Kings give +15 chips +2 mult each, stacking with your King pairs/trips. "
+          elseif deck_name == "Euchre deck" then
+            target_advice = "Pick your 2 best Jacks (most common card in Euchre). "
+          elseif deck_name == "Checkered Deck" then
+            target_advice = "Pick 2 high-value cards of the same suit to strengthen your flush plays. "
+          else
+            target_advice = "Pick your 2 highest-value cards that you play most often. Enhanced cards give +15 chips +2 mult when scored. "
+          end
+        end
+        consumable_hint = consumable_hint .. string.format(
+          "CONSUMABLE slot %d: '%s' (select %d-%d hand cards). %sUSE NOW: use_card|{\"area\":\"consumeables\",\"index\":%d,\"hand_indices\":[i,j]} where i,j are 1-indexed hand card positions. ",
+          i, nm, min_h, mh, target_advice, i
+        )
+        has_usable_consumable = true
+      elseif c and c.ability and c.ability.consumeable and c.ability.consumeable.hand_type then
+        consumable_hint = consumable_hint .. string.format(
+          "Consumable slot %d: '%s' (planet card, levels up a hand type). Use: use_card|{\"area\":\"consumeables\",\"index\":%d}. ",
+          i, nm, i
+        )
+        has_usable_consumable = true
+      end
+    end
+  end
+
+  local enhanced_in_hand = ""
+  if G.hand and G.hand.cards then
+    local enh_cards = {}
+    for idx, card in ipairs(G.hand.cards) do
+      local enh = card.ability and card.ability.enhancement
+      if enh and enh ~= "" then
+        local rank = card.base and card.base.value or "?"
+        local suit = card.base and card.base.suit or "?"
+        local enh_name = ({m_twin="Twin",m_bonus="Bonus",m_gold="Gold",m_steel="Steel",m_glass="Glass",m_mult="Mult",m_dono="Donation",m_glorp="Glorpy"})[enh] or enh
+        enh_cards[#enh_cards + 1] = string.format("%d=%s %s(%s)", idx, rank, suit:sub(1,1), enh_name)
+      end
+    end
+    if #enh_cards > 0 then
+      local has_glorp = false
+      for _, s in ipairs(enh_cards) do
+        if s:find("Glorpy") then has_glorp = true break end
+      end
+      local enh_advice = "Prioritize hands that include these cards for bonus scoring. "
+      if has_glorp then
+        enh_advice = "Glorpy cards give 10x chips but BREAK at end of round — play them NOW, they vanish anyway. "
+      end
+      enhanced_in_hand = "Enhanced cards in hand: [" .. table.concat(enh_cards, ", ") .. "]. " .. enh_advice
+    end
+  end
+
   local query = rules .. "State: SELECTING_HAND. "
     .. "MODE: " .. mode .. ". "
     .. mode_hint
     .. "(Score/target/hands/discards in B+WIN lines.) "
     .. structure
     .. deck_strategy
+    .. consumable_hint
+    .. enhanced_in_hand
     .. debuff_info
     .. token_legend
     .. strategy_hint
@@ -2744,15 +2840,23 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
   end
   query = query .. failed_action_warning()
   local sim1_score = sim1 and tonumber(sim1.score) or 0
+  local hand_actions = { "set_hand_highlight" }
+  if has_usable_consumable then hand_actions[#hand_actions + 1] = "use_card" end
+
   if sim1_str and sim1_score > 0 and remaining > 0 and sim1_score > remaining * 2 then
     query = query .. "SIM1 wins easily (" .. tostring(math.floor(sim1_score)) .. " vs " .. tostring(math.floor(remaining)) .. " remaining). Play indices [" .. sim1_str .. "]. No thinking needed."
-    return { query = query, actions = { "set_hand_highlight" } }
+    return { query = query, actions = hand_actions }
   end
   if sim1_str then
     query = query .. "Best simulated play: indices [" .. sim1_str .. "] as " .. (sim1_hand or "best") .. " for ~" .. tostring(math.floor(sim1_score)) .. " chips. "
   end
-  query = query .. "Use the information above to decide: play your best hand, or discard weak cards to draw better ones. "
-  query = query .. "Return: set_hand_highlight|{\"indices\":[...],\"action\":\"play\"|\"discard\"}."
+  if has_usable_consumable then
+    query = query .. "You have usable consumables. Consider using them BEFORE playing. "
+    query = query .. "Return: use_card|{...} to use a consumable, OR set_hand_highlight|{\"indices\":[...],\"action\":\"play\"|\"discard\"} to play/discard."
+  else
+    query = query .. "Use the information above to decide: play your best hand, or discard weak cards to draw better ones. "
+    query = query .. "Return: set_hand_highlight|{\"indices\":[...],\"action\":\"play\"|\"discard\"}."
+  end
 
   if hands_left <= 0 and disc <= 0 then
     return nil
@@ -2760,7 +2864,7 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
 
   return {
     query = query,
-    actions = { "set_hand_highlight" }
+    actions = hand_actions
   }
 end
 
@@ -2908,20 +3012,13 @@ FORCE_HANDLERS["SHOP"] = function(rules)
   if can_buy_action then force_actions[#force_actions + 1] = "buy_from_shop" end
   if not must_buy_phase then
     if can_sell_action then force_actions[#force_actions + 1] = "sell_card" end
-    if can_use_action then force_actions[#force_actions + 1] = "use_card" end
     if can_reroll_action then
       force_actions[#force_actions + 1] = "reroll_shop"
     end
   end
+  if can_use_action then force_actions[#force_actions + 1] = "use_card" end
+  if can_toggle_action then force_actions[#force_actions + 1] = "toggle_shop" end
   if #force_actions == 0 and can_reorder_action then force_actions[#force_actions + 1] = "set_joker_order" end
-
-  if can_toggle_action and (not must_buy_phase or not can_buy_action) then
-    force_actions[#force_actions + 1] = "toggle_shop"
-  end
-
-  if #force_actions == 0 and can_toggle_action then
-    force_actions[#force_actions + 1] = "toggle_shop"
-  end
 
   if #force_actions == 0 then
     return nil
@@ -2963,6 +3060,7 @@ FORCE_HANDLERS["SHOP"] = function(rules)
       end
     end
   end
+  local deck_shop_hint = once_per_state_entry_hint("shop_deck", deck_strategy_info())
   local recent = recent_actions_summary(5)
 
   local query = rules .. "State: SHOP. "
@@ -2972,6 +3070,7 @@ FORCE_HANDLERS["SHOP"] = function(rules)
     .. token_legend
     .. shop_strategy
     .. shop_heuristics
+    .. deck_shop_hint
     .. joker_slot_warn
     .. joker_order_hint
     .. "Buy payload must use area exactly one of: shop_jokers, shop_vouchers, shop_booster and index from current items. "
@@ -3165,7 +3264,7 @@ FORCE_HANDLERS["GAME_OVER"] = function(rules)
   if hg then return hg end
   return {
     query = rules .. "State: GAME_OVER. Use setup_run to open the run setup screen and start a new run.",
-    actions = { "setup_run", "start_challenge_run", "help" }
+    actions = { "setup_run", "exit_overlay_menu", "help" }
   }
 end
 
@@ -3225,9 +3324,13 @@ function Dispatcher.get_force_for_state(state_name)
   -- Check for blocking overlay before anything else, even if the current state
   -- has no handler (unlock popups fire during transitions/animations).
   if Actions.is_action_valid("exit_overlay_menu") then
+    local overlay_actions = { "exit_overlay_menu" }
+    if state_name == "GAME_OVER" or state_name == "MENU" or state_name == "SPLASH" then
+      overlay_actions[#overlay_actions + 1] = "setup_run"
+    end
     return {
-      query = "A popup is blocking the game — this may be a new joker or deck unlock screen. Close it using exit_overlay_menu.",
-      actions = { "exit_overlay_menu" },
+      query = "A popup is blocking the game. Close it using exit_overlay_menu, or use setup_run to start a new run.",
+      actions = overlay_actions,
     }
   end
 

@@ -39,11 +39,12 @@ local function build_param_actions()
     properties = { blind = { enum = { "small", "big", "boss" }, description = "Which blind to select" } },
     required = { "blind" }
     }),
-    use_card = action_def("use_card", "Use a card from the specified area and index.", {
+    use_card = action_def("use_card", "Use a card from the specified area and index. For tarots that need hand cards, pass hand_indices to select them.", {
     type = "object",
     properties = {
       area = { enum = { "hand", "consumeables", "shop_jokers", "shop_vouchers", "shop_booster", "booster_pack" }, description = "Which area the card is in" },
-      index = { type = "integer", minimum = 1, description = "Card position (1-indexed from left to right)" }
+      index = { type = "integer", minimum = 1, description = "Card position (1-indexed from left to right)" },
+      hand_indices = { type = "array", items = { type = "integer", minimum = 1 }, description = "Hand card positions to highlight before using (for tarots needing selected cards)" }
     },
     required = { "area", "index" }
     }),
@@ -280,6 +281,26 @@ local function build_param_actions()
   }
 end
 
+local function get_cheapest_shop_cost()
+  local cheapest = nil
+  local function scan(area)
+    if not (area and area.cards) then return end
+    for _, card in ipairs(area.cards) do
+      local cost = card and card.cost
+      if type(cost) == "number" and cost >= 0 then
+        if not cheapest or cost < cheapest then
+          cheapest = cost
+        end
+      end
+    end
+  end
+
+  scan(G and G.shop_jokers)
+  scan(G and G.shop_vouchers)
+  scan(G and G.shop_booster)
+  return cheapest
+end
+
 local function get_spendable_dollars()
   if not (G and G.GAME) then return 0 end
   local dollars = tonumber(G.GAME.dollars or 0) or 0
@@ -432,6 +453,12 @@ local STATE_ACTIONS = {
     "choose_persona",
     "setup_run",
     "start_challenge_run",
+    "exit_overlay_menu",
+    "toggle_seeded_run",
+    "paste_seed",
+    "change_stake",
+    "change_selected_back",
+    "start_setup_run",
     "help",
   },
   BLIND_SELECT = {
@@ -452,6 +479,7 @@ local STATE_ACTIONS = {
   },
   SELECTING_HAND = {
     "set_hand_highlight",
+    "use_card",
     "highlight_card",
     "unhighlight_all",
     "card_click",
@@ -546,6 +574,22 @@ STATE_ACTIONS.SPECTRAL_PACK = PACK_ACTIONS
 STATE_ACTIONS.STANDARD_PACK = PACK_ACTIONS
 STATE_ACTIONS.BUFFOON_PACK = PACK_ACTIONS
 STATE_ACTIONS.SMODS_BOOSTER_OPENED = PACK_ACTIONS
+
+function Actions.get_action_defs(names)
+  local action_set = build_action_set()
+  local defs = {}
+  for _, name in ipairs(names) do
+    if action_set[name] then
+      defs[#defs + 1] = action_set[name]
+    end
+  end
+  return defs
+end
+
+function Actions.get_actions_for_state(state_name)
+  local list = Actions.get_action_names_for_state(state_name)
+  return Actions.get_action_defs(list)
+end
 
 function Actions.get_action_names_for_state(state_name)
   local list = STATE_ACTIONS[state_name]
@@ -665,12 +709,6 @@ function Actions.is_action_valid(action_name)
     end
   end
 
-  if action_name == "toggle_shop" then
-    if early_shop_buy_priority_active() then
-      return false
-    end
-  end
-
   if action_name == "skip_blind" then
     local on_deck = get_selectable_blind_key()
     if on_deck == nil or on_deck == "Boss" then
@@ -773,6 +811,10 @@ function Actions.get_static_actions()
   table.sort(res, function(a, b) return a.name < b.name end)
   _static_actions_cache = res
   return res
+end
+
+function Actions.get_all_actions()
+  return Actions.get_static_actions()
 end
 
 return Actions
