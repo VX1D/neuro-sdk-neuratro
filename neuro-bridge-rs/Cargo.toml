@@ -1,0 +1,18 @@
+[package]
+name = "neuro-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+futures-util = "0.3"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time", "fs", "sync"] }
+tokio-tungstenite = "0.21"
+notify = "8"
+url = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

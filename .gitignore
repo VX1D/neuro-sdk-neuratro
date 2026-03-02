@@ -1,0 +1,48 @@
+# Build artifacts
+target/
+__pycache__/
+*.pyc
+
+# Runtime / IPC
+ipc/
+neuro_outbox.jsonl
+neuro_inbox.jsonl
+neuro_state.json
+neuro_ipc_dir.txt
+game_state.json
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+
+# Test-only wrappers (not shipped)
+opencode-wrapper.py
+opencode-wrapper-config.json
+lm-bridge.py
+lm-bridge-config.json
+
+# Local overrides
+*.local.ps1
+*.local.py
+
+# Editor / OS junk
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Debug artifacts
+*.bak*
+elo.txt
+action.txt
+test.txt
+stderr_out.txt
+stdout_out.txt
+opencode_stderr.txt
+nul
