@@ -60,11 +60,11 @@ local STATE_PRIORITY = {
   },
   SELECTING_HAND = {
     must_keep = { "CTX", "STATE", "B", "BD", "WIN", "HL", "HG", "H", "LA" },
-    drop_order = { "AH", "DC", "K", "PS", "FM", "M", "R", "DK", "C", "DSIM", "L", "CB", "J" },
+    drop_order = { "AH", "DC", "K", "PS", "FM", "M", "R", "DK", "C", "DSIM", "PLAY_PREV", "L", "CB", "J" },
   },
   SHOP = {
     must_keep = { "CTX", "STATE", "SH", "I", "LA" },
-    drop_order = { "AH", "K", "PS", "FM", "M", "R", "C", "J" },
+    drop_order = { "H", "AH", "K", "PS", "FM", "M", "R", "C", "J" },
   },
   BLIND_SELECT = {
     must_keep = { "CTX", "STATE", "BS", "BA", "BO", "LA" },
@@ -76,19 +76,19 @@ local STATE_PRIORITY = {
   },
   TAROT_PACK = {
     must_keep = { "CTX", "STATE", "PK", "PC" },
-    drop_order = { "K", "PS", "FM", "M", "R", "C", "J" },
+    drop_order = { "H", "K", "PS", "FM", "M", "R", "C", "J" },
   },
   PLANET_PACK = {
     must_keep = { "CTX", "STATE", "PK", "PC" },
-    drop_order = { "K", "PS", "FM", "M", "R", "C", "J" },
+    drop_order = { "L", "K", "PS", "FM", "M", "R", "C", "J" },
   },
   SPECTRAL_PACK = {
     must_keep = { "CTX", "STATE", "PK", "PC" },
-    drop_order = { "K", "PS", "FM", "M", "R", "C", "J" },
+    drop_order = { "H", "K", "PS", "FM", "M", "R", "C", "J" },
   },
   STANDARD_PACK = {
     must_keep = { "CTX", "STATE", "PK", "PC" },
-    drop_order = { "K", "PS", "FM", "M", "R", "C", "J" },
+    drop_order = { "DK", "H", "K", "PS", "FM", "M", "R", "C", "J" },
   },
   BUFFOON_PACK = {
     must_keep = { "CTX", "STATE", "PK", "PC" },
@@ -118,13 +118,13 @@ end
 
 local FP_KEYS = {
   SELECTING_HAND = { B = true, BD = true, WIN = true, HL = true, H = true, HG = true, J = true, L = true, CB = true, AH = true },
-  SHOP = { SH = true, I = true, AH = true },
+  SHOP = { SH = true, I = true, AH = true, H = true },
   BLIND_SELECT = { BS = true, BA = true, BO = true },
   ROUND_EVAL = { RE = true, REA = true },
-  TAROT_PACK = { PK = true, PC = true },
-  PLANET_PACK = { PK = true, PC = true },
-  SPECTRAL_PACK = { PK = true, PC = true },
-  STANDARD_PACK = { PK = true, PC = true },
+  TAROT_PACK = { PK = true, PC = true, H = true },
+  PLANET_PACK = { PK = true, PC = true, L = true },
+  SPECTRAL_PACK = { PK = true, PC = true, H = true },
+  STANDARD_PACK = { PK = true, PC = true, H = true, DK = true },
   BUFFOON_PACK = { PK = true, PC = true },
   SMODS_BOOSTER_OPENED = { PK = true, PC = true },
   MENU = { SD = true, SDC = true, SDK = true },
@@ -371,17 +371,27 @@ local function joker_tags(card)
   if not card then return "-" end
   local ability = card.ability or {}
   local tags = {}
-  if ability.eternal then tags[#tags + 1] = "eternal" end
+  if ability.eternal then tags[#tags + 1] = "eternal(unsellable)" end
   if ability.perishable then
-    tags[#tags + 1] = "perishable"
     local tally = ability.perish_tally
-    if tally then tags[#tags + 1] = "perish_in=" .. tostring(tally) end
+    if tally and tally <= 1 then
+      tags[#tags + 1] = "perishable(GONE_END_OF_ROUND)"
+    elseif tally then
+      tags[#tags + 1] = "perishable(rounds_left=" .. tostring(tally) .. ")"
+    else
+      tags[#tags + 1] = "perishable"
+    end
   end
-  if ability.rental then tags[#tags + 1] = "rental" end
+  if ability.rental then tags[#tags + 1] = "rental($1_per_hand)" end
   if ability.blueprint then tags[#tags + 1] = "blueprint" end
   local edition = card.edition
-  if type(edition) == "table" and edition.name then
-    tags[#tags + 1] = compact_text(edition.name, 16)
+  if type(edition) == "table" then
+    if edition.polychrome then tags[#tags + 1] = "Poly(x1.5m)"
+    elseif edition.holo     then tags[#tags + 1] = "Holo(+10m)"
+    elseif edition.foil     then tags[#tags + 1] = "Foil(+50c)"
+    elseif edition.filtered then tags[#tags + 1] = "Filtered(50/50:retrigger_or_debuff_EOround)"
+    elseif edition.name     then tags[#tags + 1] = compact_text(tostring(edition.name), 16)
+    end
   end
   if #tags == 0 then return "-" end
   return compact_text(table.concat(tags, "/"), 40)
@@ -463,10 +473,17 @@ end
 local SUIT_ORDER = { Clubs = 1, Diamonds = 2, Hearts = 3, Spades = 4 }
 
 local ENH_SHORT = {
-  m_bonus = "Bonus",
-  m_gold = "Gold", m_stone = "Stone", m_steel = "Steel",
-  m_glass = "Glass", m_lucky = "Lucky", m_mult = "Mult",
-  m_wild = "Wild",
+  m_bonus = "Bonus(+30c)",
+  m_gold  = "Gold(+$3_when_scored)",
+  m_stone = "Stone(no_suit_no_rank+50c_always)",
+  m_steel = "Steel(x1.5m_per_copy_held_not_played)",
+  m_glass = "Glass(x2m_always_then_25%_destroyed)",
+  m_lucky = "Lucky(1/5:+20m_or_1/15:+20$)",
+  m_mult  = "Mult(+4m)",
+  m_wild  = "Wild(counts_as_any_suit)",
+  m_twin  = "Twin(+15c+2m)",
+  m_dono  = "Dono($2_scored_or_xmult_if_Highlighted)",
+  m_glorp = "Glorpy(breaks_EOround)",
 }
 
 local function short_enh(card)
@@ -477,14 +494,29 @@ local function short_enh(card)
   return ENH_SHORT[enh] or enh
 end
 
+local SEAL_DESC = {
+  Red               = "Red(x2_trigger_when_scored)",
+  Blue              = "Blue(hold_in_hand=free_planet_EOround)",
+  Gold              = "Gold(+$3_when_scored)",
+  Purple            = "Purple(discard=free_tarot)",
+  shoomiminion_seal = "Shoominion(destroyed=spawns_2_copies)",
+  osu_seal          = "Osu!(+5m_per_play_reset_on_discard)",
+}
 local function short_seal(card)
   if not card then return "" end
   local seal = card.seal
   if not seal then return "" end
+  local key
   if type(seal) == "table" then
-    return seal.name or ""
+    local raw = seal.key and seal.key:match("seal_(%a+)") or seal.name or ""
+    -- Normalise to Title Case ("red" → "Red", "Red Seal" → "Red Seal")
+    key = raw:sub(1, 1):upper() .. raw:sub(2)
+  else
+    key = tostring(seal)
   end
-  return tostring(seal)
+  -- Strip trailing " Seal" if present ("Red Seal" → "Red")
+  key = key:match("^(%a+)%s+[Ss]eal$") or key
+  return SEAL_DESC[key] or key or ""
 end
 
 local function short_edition(card)
@@ -492,10 +524,11 @@ local function short_edition(card)
   local edition = card.edition
   if not edition then return "" end
   if type(edition) == "table" then
-    if edition.polychrome then return "Polychrome"
-    elseif edition.holo   then return "Holo"
-    elseif edition.foil   then return "Foil"
-    elseif edition.name   then return tostring(edition.name)
+    if edition.polychrome then return "Poly(x1.5m)"
+    elseif edition.holo     then return "Holo(+10m)"
+    elseif edition.foil     then return "Foil(+50c)"
+    elseif edition.filtered then return "Filtered(50/50:retrigger_or_debuff_EOround)"
+    elseif edition.name     then return tostring(edition.name)
     end
     return ""
   end
@@ -601,14 +634,23 @@ local function blind_line()
   local econ = economy_projection()
   local name = blind.name or "Unknown"
   local ante = G.GAME.round_resets and G.GAME.round_resets.ante or "?"
+  local win_ante = G.GAME.win_ante or 8
+  local ante_str = tostring(ante) .. "/" .. tostring(win_ante)
   local no_interest = G.GAME.modifiers and G.GAME.modifiers.no_interest and "Y" or "N"
-  return string.format("B|N:%s|A:%s|S:%d/%d|R:%d|H:%d|D:%d|$:%d|NI:%s|PY:B%d+H%d+D%d+I%d=T%d",
-    compact_text(name, 28), tostring(ante), current_score, target, remaining, hands, discards, money, no_interest,
+  local discard_cost = G.GAME.modifiers and G.GAME.modifiers.discard_cost
+  local scaling = G.GAME.modifiers and G.GAME.modifiers.scaling
+  local mod_parts = {}
+  if no_interest == "Y" then mod_parts[#mod_parts+1] = "no_interest" end
+  if discard_cost and discard_cost > 0 then mod_parts[#mod_parts+1] = "discard_costs_$"..tostring(discard_cost) end
+  if scaling and scaling ~= 1 then mod_parts[#mod_parts+1] = "ante_scaling_x"..tostring(scaling) end
+  local mod_str = #mod_parts > 0 and ("|MOD:"..table.concat(mod_parts, ",")) or ""
+  return string.format("B|N:%s|A:%s|S:%d/%d|R:%d|H:%d|D:%d|$:%d|PY:B%d+H%d+D%d+I%d=T%d",
+    compact_text(name, 28), ante_str, current_score, target, remaining, hands, discards, money,
     econ and econ.blind_reward or 0,
     econ and econ.hands_bonus or 0,
     econ and econ.discard_bonus or 0,
     econ and econ.interest or 0,
-    econ and econ.projected_total or 0)
+    econ and econ.projected_total or 0) .. mod_str
 end
 
 local function blind_debuff_line()
@@ -866,6 +908,7 @@ local function levels_section()
     ["Five of a Kind"] = 10,
     ["Flush House"] = 11,
     ["Flush Five"] = 12,
+    ["mix"] = 13, ["mixhouse"] = 14, ["straightmix"] = 15, ["mixed5"] = 16,
   }
 
   local rows = {}
@@ -1864,23 +1907,28 @@ local function estimate_score(hand_type_name, card_indices, cards)
       played_set[ci] = true
       local c = cards[ci]
       if c then
+        -- Red Seal: card triggers twice (double all per-card contributions)
+        local seal = c.seal
+        local has_red_seal = (seal == "Red")
+          or (type(seal) == "table" and (seal.key == "seal_red" or (seal.name and seal.name:lower():find("red"))))
+        local trigger_count = has_red_seal and 2 or 1
         -- Base rank chips
         if c.base and c.base.value then
           local r = VALUE_RANK[c.base.value]
-          if r then card_chips = card_chips + (r == 14 and 11 or math.min(r, 10)) end
+          if r then card_chips = card_chips + (r == 14 and 11 or math.min(r, 10)) * trigger_count end
         end
         -- Enhancement effects
         local ef = c.ability and c.ability.enhancement or ""
-        if ef == "m_bonus" then card_chips = card_chips + 30         end
-        if ef == "m_mult"  then card_mult  = card_mult  + 4          end
-        if ef == "m_glass" then card_xmult = card_xmult * 2          end  -- ×2 avg (ignores break chance)
-        if ef == "m_stone" then card_chips = card_chips + 50         end
-        if ef == "m_lucky" then card_mult  = card_mult  + 4          end  -- EV of 1/5×+20
+        if ef == "m_bonus" then card_chips = card_chips + 30 * trigger_count         end
+        if ef == "m_mult"  then card_mult  = card_mult  + 4  * trigger_count         end
+        if ef == "m_glass" then card_xmult = card_xmult * (2 ^ trigger_count)        end  -- ×2/×4 avg
+        if ef == "m_stone" then card_chips = card_chips + 50 * trigger_count         end
+        if ef == "m_lucky" then card_mult  = card_mult  + 4  * trigger_count         end  -- EV of 1/5×+20
         -- Card editions
         local ed = c.edition or {}
-        if ed.foil       then card_chips = card_chips + 50  end
-        if ed.holo       then card_mult  = card_mult  + 10  end
-        if ed.polychrome then card_xmult = card_xmult * 1.5 end
+        if ed.foil       then card_chips = card_chips + 50  * trigger_count  end
+        if ed.holo       then card_mult  = card_mult  + 10  * trigger_count  end
+        if ed.polychrome then card_xmult = card_xmult * (1.5 ^ trigger_count) end
       end
     end
   end
@@ -1970,9 +2018,12 @@ local function compute_outs(cards, sim1_score, target_remaining, discards_left)
   local rank_set = {}
   for _, c in ipairs(cards) do
     local id = c and c.base and c.base.id
-    if id then rank_set[id] = true end
+    if id then
+      rank_set[id] = true
+      if id == 14 then rank_set[1] = true end
+    end
   end
-  for low = 2, 10 do
+  for low = 1, 10 do
     local run = true
     for r = low, low+3 do if not rank_set[r] then run=false; break end end
     if run then
@@ -2124,6 +2175,49 @@ local function simulate_best_plays(cards, opts)
   end
 
   return out
+end
+
+-- Returns PLAY_PREV: hand_type~est_score for the currently highlighted cards.
+-- Lets Neuro see what scoring the current selection would produce before committing.
+local _HAND_PRIORITY = {
+  ["Flush Five"] = 1, ["Flush House"] = 2, ["Five of a Kind"] = 3,
+  ["Straight Flush"] = 4, ["Four of a Kind"] = 5, ["Full House"] = 6,
+  ["Flush"] = 7, ["Straight"] = 8, ["Three of a Kind"] = 9,
+  ["Two Pair"] = 10, ["Pair"] = 11, ["High Card"] = 12,
+  ["mixed5"] = 3, ["mixhouse"] = 6, ["straightmix"] = 8, ["mix"] = 7,
+}
+local function play_preview_section()
+  if not (G and G.hand and G.hand.highlighted and #G.hand.highlighted > 0) then return nil end
+  local hand_cards = G.hand.cards
+  if not hand_cards then return nil end
+
+  -- Resolve hand indices for highlighted cards
+  local idx_nums = {}
+  for _, card in ipairs(G.hand.highlighted) do
+    for i, hc in ipairs(hand_cards) do
+      if hc == card then idx_nums[#idx_nums + 1] = i; break end
+    end
+  end
+  if #idx_nums == 0 then return nil end
+
+  -- Run hand detection on the selected subset
+  local sel = {}
+  for _, i in ipairs(idx_nums) do sel[#sel + 1] = hand_cards[i] end
+  local vc, sc, vi, si, wc, wi = tally_hand(sel)
+  local combo_scoring = {}
+  detect_value_combos(vc, vi, {}, combo_scoring)
+  detect_flush_combos(sc, si, {}, combo_scoring, wc, wi)
+  detect_straight_combos(sel, {}, combo_scoring)
+
+  local best_type = "High Card"
+  for _, cs in ipairs(combo_scoring) do
+    local p = _HAND_PRIORITY[cs.type] or 99
+    if p < (_HAND_PRIORITY[best_type] or 99) then best_type = cs.type end
+  end
+
+  local est = estimate_score(best_type, idx_nums, hand_cards)
+  if not est then return nil end
+  return string.format("PLAY_PREV:%s~%d", compact_text(best_type, 20), est)
 end
 
 local function combos_section()
@@ -2511,6 +2605,9 @@ local function shop_section()
       end
     end
   end
+  if not has_items then
+    lines[#lines + 1] = "I:empty"
+  end
 
   return table.concat(lines, "\n")
 end
@@ -2565,7 +2662,7 @@ local function blind_select_section()
     local choices = G.GAME.round_resets.blind_choices
     local states = G.GAME.round_resets.blind_states or {}
     local tags = G.GAME.round_resets.blind_tags or {}
-    lines[#lines + 1] = "BO:t,k,n,s,tg,rw,tag,db"
+    lines[#lines + 1] = "BO:t,k,n,s,tg,rw,tag,tag_effect,db"
     for _, btype in ipairs({"Small", "Big", "Boss"}) do
       local key = choices[btype]
       if key and G.P_BLINDS and G.P_BLINDS[key] then
@@ -2581,10 +2678,23 @@ local function blind_select_section()
 
         local tag_key = tags[btype]
         local tag_name = "-"
+        local tag_effect = "-"
         if tag_key then
           local tag_def = G.P_TAGS and G.P_TAGS[tag_key]
-          if tag_def and tag_def.name then
-            tag_name = compact_text(tag_def.name, 24)
+          if tag_def then
+            tag_name = compact_text(tag_def.name or tag_key, 24)
+            -- Try to extract description from loc_txt
+            local desc = safe_description(tag_def.loc_txt, nil, 60)
+            if not desc or desc == "" then
+              -- Some tags store description in config.ref_table
+              local rt = tag_def.config and tag_def.config.ref_table
+              if rt and rt.loc_txt then
+                desc = safe_description(rt.loc_txt, nil, 60)
+              end
+            end
+            if desc and desc ~= "" then
+              tag_effect = compact_text(desc, 60)
+            end
           else
             tag_name = compact_text(tag_key, 24)
           end
@@ -2592,7 +2702,7 @@ local function blind_select_section()
 
         local target = calc_blind_target(key)
         local reward = blind_def.dollars or 0
-        lines[#lines + 1] = string.format("%s,%s,%s,%s,%s,$%d,%s,%s",
+        lines[#lines + 1] = string.format("%s,%s,%s,%s,%s,$%d,%s,%s,%s",
           btype,
           compact_text(key, 24),
           compact_text(blind_def.name or key, 30),
@@ -2600,6 +2710,7 @@ local function blind_select_section()
           target and tostring(target) or "?",
           reward,
           tag_name,
+          tag_effect,
           debuff_text)
       end
     end
@@ -2614,8 +2725,9 @@ local function pack_section(state_name)
     return nil
   end
   local pack_type = (state_name == "SMODS_BOOSTER_OPENED") and "BOOSTER" or state_name:gsub("_PACK", "")
+  local picks_left = tonumber(G and G.GAME and G.GAME.pack_choices or 0) or 0
   local lines = {}
-  lines[#lines + 1] = "PK:" .. pack_type
+  lines[#lines + 1] = "PK:" .. pack_type .. "|PICKS:" .. tostring(picks_left)
   local rows = {}
   for i, card in ipairs(bp.cards) do
     local name = compact_text(safe_name(card) or "Unknown", 28)
@@ -2665,18 +2777,33 @@ end
 local function deck_size_line()
   if not G or not G.deck or not G.deck.cards then return nil end
   local deck_name = ""
+  local deck_desc = ""
   if G.GAME and G.GAME.back then
     local b = G.GAME.back
-    local center = b.effect and b.effect.center
-    local name = (center and center.loc_txt and center.loc_txt.name and center.loc_txt.name ~= "" and center.loc_txt.name)
-      or (center and center.key and localize and (function()
-            local ok, loc = pcall(localize, {type='name_text', set='Back', key=center.key})
-            return ok and type(loc)=="string" and loc~="" and loc~="ERROR" and loc
-          end)())
-      or b.name or ""
-    if name ~= "" then deck_name = name .. "|" end
+    local bkey = b.name
+    local pc = bkey and G.P_CENTERS and G.P_CENTERS[bkey]
+    if pc then
+      local raw_name = (pc.loc_txt and pc.loc_txt.name) or pc.name or bkey or ""
+      if type(raw_name) == "string" and raw_name ~= "" then
+        if raw_name:find("_") and not raw_name:find(" ") then
+          raw_name = raw_name:gsub("^b_",""):gsub("_"," ")
+          raw_name = raw_name:gsub("(%a)([%w]*)", function(a,b2) return a:upper()..b2 end)
+        end
+        deck_name = raw_name
+      end
+      local ok_d, d = pcall(safe_description, pc.loc_txt, pc, "Back", bkey)
+      if ok_d and d and d ~= "" then
+        deck_desc = compact_text(d, 80)
+      end
+    elseif b.name then
+      deck_name = tostring(b.name)
+    end
   end
-  return "DK:" .. deck_name .. #G.deck.cards
+  local out = "DK"
+  if deck_name ~= "" then out = out .. "|N:" .. compact_text(deck_name, 24) end
+  out = out .. "|SZ:" .. tostring(#G.deck.cards)
+  if deck_desc ~= "" then out = out .. "|AB:" .. deck_desc end
+  return out
 end
 
 local function action_memory_section(state_name)
@@ -2773,11 +2900,13 @@ function ContextCompact.build(state_name, allowed_actions, opts)
   if state_name == "SELECTING_HAND" then
     sections[#sections + 1] = blind_line()
     sections[#sections + 1] = blind_debuff_line()
+    sections[#sections + 1] = deck_size_line()
     sections[#sections + 1] = hand_limits_section()
     sections[#sections + 1] = hand_section()
     if (not has_filters) or has_action(action_set, "set_hand_highlight") or has_action(action_set, "clear_hand_highlight")
       or has_action(action_set, "play_cards_from_highlighted") or has_action(action_set, "discard_cards_from_highlighted") then
       sections[#sections + 1] = highlighted_section()
+      sections[#sections + 1] = play_preview_section()
     end
     if (not has_filters) or has_action(action_set, "set_hand_highlight") or has_action(action_set, "play_cards_from_highlighted")
       or has_action(action_set, "discard_cards_from_highlighted") or has_action(action_set, "reorder_hand_cards")
@@ -2811,6 +2940,10 @@ function ContextCompact.build(state_name, allowed_actions, opts)
       or has_action(action_set, "sell_card") then
       sections[#sections + 1] = consumables_section()
     end
+    -- Hand needed when using tarots/spectrals that require card targeting
+    if (not has_filters) or has_action(action_set, "use_card") then
+      sections[#sections + 1] = hand_section()
+    end
 
   elseif state_name == "BLIND_SELECT" then
     sections[#sections + 1] = blind_select_section()
@@ -2832,6 +2965,19 @@ function ContextCompact.build(state_name, allowed_actions, opts)
     end
     if (not has_filters) or has_action(action_set, "consumables_info") or has_action(action_set, "use_card") then
       sections[#sections + 1] = consumables_section()
+    end
+    -- Tarot/spectral packs: show hand so she can give correct hand_indices for targeting
+    if state_name == "TAROT_PACK" or state_name == "SPECTRAL_PACK" then
+      sections[#sections + 1] = hand_section()
+    end
+    -- Planet pack: show hand levels so she knows which hand type to prioritise upgrading
+    if state_name == "PLANET_PACK" then
+      sections[#sections + 1] = levels_section()
+    end
+    -- Standard pack: show hand + deck composition so she can pick cards that fill gaps
+    if state_name == "STANDARD_PACK" then
+      sections[#sections + 1] = hand_section()
+      sections[#sections + 1] = deck_cards_section()
     end
 
   end
@@ -2860,6 +3006,7 @@ local JOKER_HAND_SYNERGY = {
   j_droll = "flush",   j_crafty = "flush",
   j_greedy = "Diamonds", j_lusty = "Hearts",
   j_wrathful = "Spades", j_gluttonous = "Clubs",
+  j_lucy = "flush",
 }
 
 local function joker_dr_synergies()
@@ -2889,19 +3036,34 @@ discard_heuristics_section = function()
   local rank_present = {}
 
   for _, card in ipairs(cards) do
-    local base = card.base or {}
-    local v = base.value or "?"
-    local s = base.suit or "?"
-    value_counts[v] = (value_counts[v] or 0) + 1
-    suit_counts[s] = (suit_counts[s] or 0) + 1
-    local r = VALUE_RANK[v]
-    if r then
-      rank_present[r] = true
-      if r == 14 then rank_present[1] = true end
+    if card.ability and card.ability.enhancement == "m_stone" then
+    else
+      local base = card.base or {}
+      local v = base.value or "?"
+      local s = base.suit or "?"
+      value_counts[v] = (value_counts[v] or 0) + 1
+      suit_counts[s] = (suit_counts[s] or 0) + 1
+      local r = VALUE_RANK[v]
+      if r then
+        rank_present[r] = true
+        if r == 14 then rank_present[1] = true end
+      end
     end
   end
 
   local jsyn = joker_dr_synergies()
+
+  local has_camila, has_milc, has_layna, has_highlighted, has_cavestream = false, false, false, false, false
+  if G.jokers and G.jokers.cards then
+    for _, jc in ipairs(G.jokers.cards) do
+      local jn = jc.ability and jc.ability.name or ""
+      if jn == "Cumilq"              then has_camila     = true end
+      if jn == "Milc"                then has_milc       = true end
+      if jn == "Layna"               then has_layna      = true end
+      if jn == "Highlighted Message" then has_highlighted = true end
+      if jn == "Cave Stream"         then has_cavestream = true end
+    end
+  end
 
   -- Detect ranks participating in 4+ card runs
   local in_run4 = {}
@@ -2927,6 +3089,7 @@ discard_heuristics_section = function()
     local v = base.value or "?"
     local s = base.suit or "?"
     local r = VALUE_RANK[v] or 0
+    local is_stone = (card.ability and card.ability.enhancement == "m_stone")
 
     local keep = 0
     local reasons = {}
@@ -2934,6 +3097,13 @@ discard_heuristics_section = function()
     if card.debuff then
       keep = keep - 10
       reasons[#reasons + 1] = "debuff"
+    end
+
+    if is_stone then
+      keep = keep + 4
+      reasons[#reasons + 1] = "stone(+50c_always)"
+      if has_cavestream then keep = keep + 5; reasons[#reasons + 1] = "cavestream(stone_retrig)" end
+      goto continue_heuristic
     end
 
     local vc = value_counts[v] or 0
@@ -3002,12 +3172,56 @@ discard_heuristics_section = function()
       end
     end
 
+    if has_camila and r == 6 then
+      keep = keep + 5; reasons[#reasons + 1] = "cumilq(6=x1.3m)" end
+    if has_milc and ((r == 11 and s == "Diamonds") or r == 2) then
+      keep = keep + 4; reasons[#reasons + 1] = "milc" end
+    if has_layna and r == 9 then
+      keep = keep + 6; reasons[#reasons + 1] = "layna(9=x3m_all)" end
+
+    ::continue_heuristic::
     local enh = short_enh(card)
+    local raw_ef = card.ability and card.ability.enhancement or ""
+    local raw_seal = card.seal
+    local seal_key = nil
+    if type(raw_seal) == "table" then
+      local raw = raw_seal.key and raw_seal.key:match("seal_(%a+)") or raw_seal.name or ""
+      seal_key = raw:sub(1,1):upper() .. raw:sub(2)
+      seal_key = seal_key:match("^(%a+)%s+[Ss]eal$") or seal_key
+    elseif raw_seal then
+      seal_key = tostring(raw_seal)
+    end
     local seal = short_seal(card)
     local ed = short_edition(card)
-    if enh ~= "" or seal ~= "" or ed ~= "" then
+    if enh ~= "" or ed ~= "" then
       keep = keep + 2
       reasons[#reasons + 1] = "mod"
+    end
+    if raw_ef == "m_steel" then
+      keep = keep + 6
+      reasons[#reasons + 1] = "steel(hold=x1.5m)"
+    elseif raw_ef == "m_glass" then
+      keep = keep + 3
+      reasons[#reasons + 1] = "glass(play=x2m)"
+    end
+    if raw_ef == "m_dono" and has_highlighted then
+      keep = keep + 5; reasons[#reasons + 1] = "highlighted(dono=x2m)" end
+    -- Seal-specific weights: Blue=hold, Red/Gold=play, Purple=discard to get tarot
+    if seal_key == "Blue" then
+      keep = keep + 8  -- hold in hand at round end → free planet
+      reasons[#reasons + 1] = "blue_seal(hold=planet)"
+    elseif seal_key == "Red" then
+      keep = keep + 5  -- retriggers on score = double value
+      reasons[#reasons + 1] = "red_seal(play=x2)"
+    elseif seal_key == "Gold" then
+      keep = keep + 4  -- +$3 when scored
+      reasons[#reasons + 1] = "gold_seal(play=$)"
+    elseif seal_key == "Purple" then
+      keep = keep - 3  -- discarding generates a free tarot
+      reasons[#reasons + 1] = "purple_seal(discard=tarot)"
+    elseif seal ~= "" then
+      keep = keep + 2
+      reasons[#reasons + 1] = "seal"
     end
 
     local discard_priority = 20 - keep
@@ -3024,7 +3238,12 @@ discard_heuristics_section = function()
     return a.idx < b.idx
   end)
 
-  local lines = { "DH:i,keep,disc,why" }
+  local dc = G.GAME and G.GAME.modifiers and G.GAME.modifiers.discard_cost
+  local dh_header = "DH:i,keep,disc,why"
+  if dc and dc > 0 then
+    dh_header = dh_header .. "|WARN:each_discard_costs_$" .. tostring(dc)
+  end
+  local lines = { dh_header }
   for _, row in ipairs(rows) do
     lines[#lines + 1] = string.format("%d,%d,%d,%s", row.idx, row.keep, row.discard, row.why)
   end

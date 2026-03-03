@@ -7,7 +7,7 @@
 Lua mod hooks into the game, Rust bridge relays messages over WebSocket,
 Neuro gets game state and responds with actions.
 
-[![Version](https://img.shields.io/badge/version-0.4.1-ff4d94?style=flat-square)](#changelog)
+[![Version](https://img.shields.io/badge/version-0.5.0-ff4d94?style=flat-square)](#changelog)
 [![License](https://img.shields.io/badge/license-MIT-80dfff?style=flat-square)](LICENSE)
 [![Balatro](https://img.shields.io/badge/Balatro-1.0.1-9b72e6?style=flat-square)](https://store.steampowered.com/app/2379780/Balatro/)
 [![Lua](https://img.shields.io/badge/Lua-5.1-ffd700?style=flat-square)](https://www.lua.org/)
@@ -212,6 +212,122 @@ neuro-bridge-rs/             Rust WebSocket <-> IPC relay
 ---
 
 ## Changelog
+
+### 0.5.0 -- 2026-03-03
+
+<details>
+<summary><strong>Dead code removal (~200 lines)</strong></summary>
+
+- `neuro-game.lua`: removed `NeuroJson` import, `NEURO_PANEL_MODE`, `PANEL_ROW_CAP` block, `persona_short`, `dbg_lines`/`debug_on` and all dead branches, `PINK_DEEP()`, `ENABLE_PALETTE_TEST_BUTTONS` block (50 lines of palette test rendering), `show_long_descriptions`/`show_shop_descriptions` guards
+- `dispatcher.lua`: removed no-op `record_action_result()`
+- `context_compact.lua`: removed `last_result_section()`, `payout_scope_section()`, `jokers_compact_inline()`, `ContextCompact.reset_tracking()`, `setup_decks_section()` and its dead `elseif` branch
+- `enforce.lua`: removed `get_transition_cooldown()`
+- `actions.lua`: removed `get_cheapest_shop_cost()` (superseded by inline `has_affordable()`)
+
+</details>
+
+<details>
+<summary><strong>Refactoring: monster functions decomposed</strong></summary>
+
+- `draw_neuro_indicator()` in neuro-game.lua — extracted `joker_fx()` to module level, `build_panel_rows()` separated from rendering
+- `combos_section()` in context_compact.lua — split into `tally_hand()`, `detect_value_combos()`, `detect_flush_combos()`, `detect_straight_combos()`, `estimate_score()`
+- `get_force_for_state()` in dispatcher.lua — converted to `FORCE_HANDLERS` dispatch table; extracted `count_unlocked_decks()` and `seed_info_query()` helpers
+- `safe_card()` in state.lua — converted to `ENHANCEMENT_LOOKUP` table
+
+</details>
+
+<details>
+<summary><strong>Deduplication: shared utilities extracted</strong></summary>
+
+- `safe_name()`, `flatten_description()`, `has_playbook_extra()` moved to utils.lua
+- Area+index validation extracted as `validate_area_card()` in dispatcher.lua, replacing 5 inline copies
+- Hiyori persona check extracted as `hiyori_persona_gate()` in dispatcher.lua, replacing 4 inline copies
+- Area resolution in staging.lua extracted as `resolve_payload_card()`, replacing 4 inline copies
+
+</details>
+
+<details>
+<summary><strong>Logic bug fixes</strong></summary>
+
+- **Ace chip value**: `math.min(r, 10)` → `(r == 14 and 11 or math.min(r, 10))` — Aces were scoring 10 chips instead of 11
+- **Resources block ordering**: moved after `s.blind = get_blind_data()` so `s.blind.target_score` is always accessible
+- **sell_card validation**: now checks both jokers AND consumables areas (previously could miss consumables)
+- **buy_from_shop validation**: now checks `shop_jokers`, `shop_vouchers`, AND `shop_booster` (previously missed boosters and vouchers)
+- **Reroll cost**: removed hardcoded `or 5` fallback — returns `false` if cost is unknown instead of silently lying
+- **Score estimation self-parse**: replaced regex-parsing of own formatted output with a structured `combo_scoring` table
+- **dispatcher.lua:981 crash**: nil guard added before `#G.hand.cards` comparison in debuffed-play rejection path — could crash if hand was cleared mid-evaluation
+
+</details>
+
+<details>
+<summary><strong>Performance: per-frame waste eliminated</strong></summary>
+
+- `pal()` was called 6× per frame — cached once as `_pal = pal()` at top of draw
+- `apply_palette()` ran every frame — gated behind dirty-check `if pk ~= _persona_colors_applied`
+- `resolve_mod_path()` was not cached — added `_cached_mod_path`/`_mod_path_resolved` cache
+- `bridge.lua` JSON encode ran every frame — throttled to 250ms interval, only writes on state change
+- `collect_joker_details()` deep-copy depth reduced from 6 to 4, type checks added before copy
+- `get_effective_state()` heavy fallback replaced: `State.build()` → lightweight `State.get_state_name()`
+
+</details>
+
+<details>
+<summary><strong>Error handling: silent swallowing fixed</strong></summary>
+
+- `Card:draw` hook pcall now logs errors via `neuro_log("GLOW ERROR:", _glow_err)` instead of silently discarding them
+- `staging.lua update()` pcall now prints `[neuro-staging] update error:` on failure
+- `enforce.lua now_time()` fallback changed from returning `0` to `os.clock()`
+
+</details>
+
+<details>
+<summary><strong>Actions system cleanup</strong></summary>
+
+- `generic_schema()` simplified to `{ type = "object" }` — previous complex schema was unused by callers
+- `get_all_actions(g_funcs)` unused `g_funcs` parameter removed
+- `STATE_ACTIONS` duplication eliminated — extracted shared `PACK_ACTIONS` table referenced by all 5 pack states
+- `is_action_valid()` substring matching replaced with explicit `HAND_ACTIONS` lookup set
+
+</details>
+
+<details>
+<summary><strong>Rust bridge improvements</strong></summary>
+
+- `Arc<Mutex<bool>>` replaced with `Arc<AtomicBool>` with `Ordering::Relaxed`
+- Exponential reconnect backoff added: 1s → 2s → 4s → … → 30s cap (previously no backoff — hammered on disconnect)
+- Broken 50-attempt file lock sleep loop removed, replaced with direct file write
+
+</details>
+
+<details>
+<summary><strong>Profanity filter</strong></summary>
+
+- False positives on common words fixed — single-word alphabetic terms now use `%f[%a]..%f[%A]` word-boundary anchors; multi-word terms keep substring matching
+- Patterns compiled once and cached in `_compiled_patterns` table instead of recompiling on every message
+
+</details>
+
+<details>
+<summary><strong>Seeded runs: unlocks and progression re-enabled</strong></summary>
+
+- Wrapped `unlock_card`, `inc_career_stat`, and `win_game` to bypass the `G.GAME.seeded` gate — seeded runs now earn item unlocks, career stats, win streaks, and all win-based progression the same as normal runs
+- Normal and challenge runs are unaffected — the wrappers pass through immediately when `G.GAME.seeded` is not set
+
+</details>
+
+<details>
+<summary><strong>Debug hygiene and security</strong></summary>
+
+- Debug disk-writes removed (`neuro_emote_debug.log`)
+- 14 `print()` calls gated behind `NEURO_DEBUG=1`
+- Seed clipboard print removed (was leaking run seeds to log)
+- 10 stale files deleted from the repo
+- Hardcoded user path removed from `.env`
+- 19 `G.FUNCS` nil guards added across dispatcher.lua
+- 7 action handlers got bounds checking on card indices
+- `xpcall` error guard added on action execution entry point
+
+</details>
 
 ### 0.4.1 -- 2026-03-03
 

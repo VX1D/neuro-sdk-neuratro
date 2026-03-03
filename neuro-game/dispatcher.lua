@@ -299,6 +299,9 @@ local function blind_strategy_hint()
     ["The Fish"]      = "FISH BLIND: Cards drawn face-down each hand. Plan with what you can see in hand.",
     ["The Serpent"]   = "SERPENT BLIND: 3 cards auto-drawn after each play or discard. You have no control over drawing.",
     ["The Pillar"]    = "PILLAR BLIND: Cards already played this ante score 0 chips. Prefer cards not yet played this ante.",
+    ["Meow Meow lol"] = "MEOW BLIND: All enhanced cards are debuffed. Do NOT play enhanced cards — they score 0. Play only base unenhanced cards.",
+    ["Chat Spam"]     = "CHATSPAM BLIND: Random cards were debuffed at round start (1-in-6 chance per card). Check for debuffed cards and discard them before playing.",
+    ["The Vertical Bar"] = "VERTICAL BAR BLIND: First hand played replaces your RIGHTMOST joker with xdx. Move your least valuable joker to the rightmost slot before playing.",
   }
   local hint = hints[name]
   if not hint then return "" end
@@ -975,7 +978,7 @@ local function handle_set_hand_highlight(data)
       end
 
       local can_retry = (discards_left > 0) or (hands_left > 1)
-      if can_retry and selected_debuffed == #selected_cards and hand_debuffed < #G.hand.cards then
+      if can_retry and selected_debuffed == #selected_cards and G.hand and G.hand.cards and hand_debuffed < #G.hand.cards then
         return nil, "Debuffed-only play rejected: selected cards are all debuffed by current blind. Prefer discard or choose non-debuffed cards."
       end
     end
@@ -1381,6 +1384,9 @@ local function handle_sell_card(data)
   local area, card, err = validate_area_card(data)
   if err then return nil, err end
   local card_name = safe_name(card) or "Unknown"
+  if card.ability and card.ability.eternal then
+    return nil, string.format("Cannot sell %s — it is Eternal. Eternal jokers can never be sold or destroyed.", card_name)
+  end
   local sell_value = card.sell_cost or 0
   return function()
     local fn = G.FUNCS and G.FUNCS.sell_card
@@ -2635,12 +2641,19 @@ function Dispatcher.handle_message(msg, bridge)
   else
     G.NEURO.reforce_count = 0
   end
+  -- Set last_action_at to now, but never lower a future-scheduled block
+  -- (e.g. pack pick handler sets last_action_at = now + 3.0 to hold off re-picks;
+  --  overwriting it with 'now' would break that cooldown and cause duplicate picks).
+  local new_lat
   if G.TIMERS and G.TIMERS.REAL then
-    G.NEURO.last_action_at = G.TIMERS.REAL
+    new_lat = G.TIMERS.REAL
   elseif love and love.timer then
-    G.NEURO.last_action_at = love.timer.getTime()
+    new_lat = love.timer.getTime()
   else
-    G.NEURO.last_action_at = os.clock()
+    new_lat = os.clock()
+  end
+  if not G.NEURO.last_action_at or new_lat > G.NEURO.last_action_at then
+    G.NEURO.last_action_at = new_lat
   end
 end
 
@@ -3249,12 +3262,34 @@ FORCE_HANDLERS["SHOP"] = function(rules)
     .. "EXIT: leave shop (toggle_shop) when nothing affordable AND reroll unsafe, or after buying S/A items and reroll won't improve. "
     .. "Vouchers are one-time offers — buy before rerolling. "
   )
-  -- #7: Joker slot full warning
+  -- #7: Joker slot full warning (Negative edition jokers bypass slot limit — don't block those)
   local joker_count = G.jokers and G.jokers.cards and #G.jokers.cards or 0
   local joker_limit = G.jokers and G.jokers.config and G.jokers.config.card_limit or 5
   local joker_slot_warn = ""
   if joker_count >= joker_limit then
-    joker_slot_warn = string.format("Joker slots FULL (%d/%d). Must sell a joker first to buy a new one, or skip jokers. ", joker_count, joker_limit)
+    -- Check if any joker in the shop has Negative edition (bypasses slot limit)
+    local has_neg_in_shop = false
+    for _, area in ipairs({ G.shop_jokers }) do
+      if area and area.cards then
+        for _, c in ipairs(area.cards) do
+          if c and c.edition and (c.edition.negative or (c.edition.key and c.edition.key == "e_negative")) then
+            has_neg_in_shop = true; break
+          end
+        end
+      end
+    end
+    if has_neg_in_shop then
+      joker_slot_warn = string.format("Joker slots FULL (%d/%d), BUT a Negative edition joker is available — it bypasses the limit and can still be bought. ", joker_count, joker_limit)
+    else
+      joker_slot_warn = string.format("Joker slots FULL (%d/%d). Must sell a joker first to buy a new one, or skip jokers. ", joker_count, joker_limit)
+    end
+  end
+  -- Consumable slot warning
+  local cons_count2 = G.consumeables and G.consumeables.cards and #G.consumeables.cards or 0
+  local cons_limit2 = G.consumeables and G.consumeables.config and G.consumeables.config.card_limit or 2
+  local cons_slot_warn = ""
+  if cons_count2 >= cons_limit2 then
+    cons_slot_warn = string.format("Consumable slots FULL (%d/%d). Cannot buy any tarot/planet/spectral from shop — use or sell a consumable first. ", cons_count2, cons_limit2)
   end
   -- #14: Joker order hint when Blueprint/Brainstorm present
   local joker_order_hint = ""
@@ -3286,11 +3321,12 @@ FORCE_HANDLERS["SHOP"] = function(rules)
     .. money_proj
     .. voucher_chains
     .. joker_slot_warn
+    .. cons_slot_warn
     .. joker_order_hint
     .. "Buy payload must use area exactly one of: shop_jokers, shop_vouchers, shop_booster and index from current items. "
     .. "Strong buy candidates now: " .. buy_hint .. ". "
     .. buy_example
-    .. string.format("Inventory consumables: Planet=%d Tarot=%d Spectral=%d. ", cons_planet, cons_tarot, cons_spectral)
+    .. string.format("Inventory consumables (%d/%d slots): Planet=%d Tarot=%d Spectral=%d. ", cons_count2, cons_limit2, cons_planet, cons_tarot, cons_spectral)
     .. string.format("Affordable now: jokers=%d packs=%d vouchers=%d. ", affordable_jokers, affordable_packs, affordable_vouchers)
     .. "Reroll cost: $" .. tostring(reroll_cost) .. ". "
     .. (can_reroll and "Reroll is currently affordable." or "Reroll is currently NOT affordable.") .. " "
@@ -3390,7 +3426,10 @@ FORCE_HANDLERS["BLIND_SELECT"] = function(rules)
     end
   end
 
-  local query = rules .. "State: BLIND_SELECT. "
+  local win_ante = G and G.GAME and G.GAME.win_ante or 8
+  local cur_ante = G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0
+  local ante_progress = string.format("Ante %d/%d (beat boss Ante %d = WIN). ", cur_ante, win_ante, win_ante)
+  local query = rules .. "State: BLIND_SELECT. " .. ante_progress
   if current_blind ~= "unknown" then
     query = query .. "Currently selectable: " .. current_blind .. ". "
     .. tag_hint

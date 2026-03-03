@@ -3,7 +3,7 @@
 --- MOD_ID: neuro-game
 --- MOD_AUTHOR: [x264.webrip]
 --- MOD_DESCRIPTION: Neuro SDK bridge + IPC for Balatro
---- MOD_VERSION: 0.1.0
+--- MOD_VERSION: 0.5.0
 
 if rawget(_G, "NEURO_SDK_MOD_LOADED") then
   return
@@ -492,41 +492,76 @@ local function draw_card_mini(card, x, y, h)
     end
   end
 
+  -- Enhanced playing cards: draw the base card face first, then the enhancement overlay on top
+  local drew_base_for_enhanced = false
+  if center.set == "Enhanced" and card.base and card.base.pos then
+    local base_atlas = G.ASSET_ATLAS["cards_1"]
+    if base_atlas and base_atlas.image then
+      local bpx = base_atlas.px or 71
+      local bpy = base_atlas.py or 95
+      local bsc = h / bpy
+      local bqk = "cards_1_" .. card.base.pos.x .. "_" .. card.base.pos.y
+      if not _quad_cache[bqk] then
+        local bok, bq = pcall(love.graphics.newQuad,
+          card.base.pos.x * bpx, card.base.pos.y * bpy,
+          bpx, bpy, base_atlas.image:getDimensions())
+        if bok then _quad_cache[bqk] = bq end
+      end
+      if _quad_cache[bqk] then
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(base_atlas.image, _quad_cache[bqk], x, y, 0, bsc, bsc)
+        drew_base_for_enhanced = true
+      end
+    end
+  end
+
   local atlas_key = atlas_override or center.atlas or center.set or "Joker"
   local atlas = G.ASSET_ATLAS[atlas_key]
   if not atlas or not atlas.image then
     atlas = G.ASSET_ATLAS[center.set or "Joker"]
-    if not atlas or not atlas.image then return 0 end
-  end
-
-  local px = atlas.px or 71
-  local py = atlas.py or 95
-  local scale = h / py
-  local w = px * scale
-
-  local qk = atlas_key .. "_" .. center.pos.x .. "_" .. center.pos.y
-  if not _quad_cache[qk] then
-    local ok, q = pcall(love.graphics.newQuad,
-      center.pos.x * px, center.pos.y * py,
-      px, py, atlas.image:getDimensions())
-    if not ok then return 0 end
-    _quad_cache[qk] = q
-  end
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(atlas.image, _quad_cache[qk], x, y, 0, scale, scale)
-
-  if center.soul_pos then
-    local sk = atlas_key .. "_soul_" .. center.soul_pos.x .. "_" .. center.soul_pos.y
-    if not _quad_cache[sk] then
-      local ok2, q2 = pcall(love.graphics.newQuad,
-        center.soul_pos.x * px, center.soul_pos.y * py,
-        px, py, atlas.image:getDimensions())
-      if ok2 then _quad_cache[sk] = q2 end
+    if not atlas or not atlas.image then
+      -- no overlay atlas found; if base was already drawn, proceed to effects with fallback w
+      if not drew_base_for_enhanced then return 0 end
     end
-    if _quad_cache[sk] then
-      love.graphics.setColor(1, 1, 1, 0.85)
-      love.graphics.draw(atlas.image, _quad_cache[sk], x, y, 0, scale, scale)
+  end
+
+  local w = 71 * (h / 95)   -- fallback dimensions (cards_1 ratio)
+  if atlas and atlas.image then
+    local px = atlas.px or 71
+    local py = atlas.py or 95
+    local scale = h / py
+    w = px * scale
+
+    local qk = atlas_key .. "_" .. center.pos.x .. "_" .. center.pos.y
+    if not _quad_cache[qk] then
+      local ok, q = pcall(love.graphics.newQuad,
+        center.pos.x * px, center.pos.y * py,
+        px, py, atlas.image:getDimensions())
+      if not ok then
+        if not drew_base_for_enhanced then return 0 end
+      else
+        _quad_cache[qk] = q
+      end
+    end
+
+    if _quad_cache[qk] then
+      love.graphics.setColor(1, 1, 1, drew_base_for_enhanced and 0.82 or 1)
+      love.graphics.draw(atlas.image, _quad_cache[qk], x, y, 0, scale, scale)
+      love.graphics.setColor(1, 1, 1, 1)
+
+      if center.soul_pos then
+        local sk = atlas_key .. "_soul_" .. center.soul_pos.x .. "_" .. center.soul_pos.y
+        if not _quad_cache[sk] then
+          local ok2, q2 = pcall(love.graphics.newQuad,
+            center.soul_pos.x * px, center.soul_pos.y * py,
+            px, py, atlas.image:getDimensions())
+          if ok2 then _quad_cache[sk] = q2 end
+        end
+        if _quad_cache[sk] then
+          love.graphics.setColor(1, 1, 1, 0.85)
+          love.graphics.draw(atlas.image, _quad_cache[sk], x, y, 0, scale, scale)
+        end
+      end
     end
   end
 
@@ -561,6 +596,30 @@ local function draw_card_mini(card, x, y, h)
       love.graphics.rectangle("line", x, y, w, h)
     end
     love.graphics.setColor(1, 1, 1, 1)
+  end
+
+  -- seal dot in bottom-right corner (Red / Blue / Gold / Purple)
+  local seal = card.seal
+  if seal then
+    local seal_colors = {
+      Red    = {0.95, 0.20, 0.20},
+      Blue   = {0.20, 0.55, 0.95},
+      Gold   = {0.95, 0.75, 0.10},
+      Purple = {0.70, 0.25, 0.90},
+    }
+    local sc = seal_colors[seal]
+    if sc then
+      local dot_r = math.max(3, h * 0.07)
+      local dot_x = x + w - dot_r - 2
+      local dot_y = y + h - dot_r - 2
+      love.graphics.setColor(0, 0, 0, 0.50)
+      love.graphics.circle("fill", dot_x + 1, dot_y + 1, dot_r)
+      love.graphics.setColor(sc[1], sc[2], sc[3], 0.92)
+      love.graphics.circle("fill", dot_x, dot_y, dot_r)
+      love.graphics.setColor(1, 1, 1, 0.40)
+      love.graphics.circle("fill", dot_x - dot_r * 0.3, dot_y - dot_r * 0.3, dot_r * 0.35)
+      love.graphics.setColor(1, 1, 1, 1)
+    end
   end
 
   return w
@@ -1008,53 +1067,6 @@ local function update_buy_showcase(now)
   end
 end
 
-local function auto_queue_pack_browse(now)
-  do return end  -- pack_browse popup disabled; winner animation handles the reveal
-  if not G then return end  -- luacheck: ignore
-  local sn = G.NEURO.state or ""
-  if not sn:find("_PACK") and sn ~= "SMODS_BOOSTER_OPENED" then
-    _pack_browse_queued_for = nil
-    return
-  end
-  if _pack_browse_queued_for == sn then return end
-  local _bp = G.pack_cards or G.booster_pack  -- SMODS uses G.pack_cards
-  if not (_bp and _bp.cards and #_bp.cards >= 1) then return end
-  _pack_browse_queued_for = sn
-
-  local options = {}
-  for i, c in ipairs(_bp.cards) do
-    local nm = card_display_name(c) or ("Card " .. tostring(i))
-    local ds = card_description(c)
-    if (not ds or ds == "") and c and c.config and c.config.center then
-      ds = Utils.safe_description(c.config.center.loc_txt, c)
-    end
-    if (not ds or ds == "") and c and c.ability then
-      ds = Utils.safe_description(c.ability.loc_txt, c)
-    end
-    options[#options + 1] = {
-      card = c,
-      name = tostring(nm),
-      desc = tostring(ds or "-"),
-    }
-  end
-
-  local picks = tonumber(G.GAME and G.GAME.pack_choices or 0) or 0
-  local q = G.NEURO.purchase_showcase_queue
-  if type(q) ~= "table" then q = {} end
-  q[#q + 1] = {
-    card = _bp.cards[1],
-    name = card_display_name(_bp.cards[1]) or "Pack",
-    desc = "-",
-    cost = 0,
-    area = "pack_browse",
-    at = now or (G.TIMERS and G.TIMERS.REAL) or os.clock(),
-    options = options,
-    selected_index = nil,
-    picks_left = picks,
-  }
-  while #q > 6 do table.remove(q, 1) end
-  G.NEURO.purchase_showcase_queue = q
-end
 
 local function card_set_label(c)
   local set = c and c.config and c.config.center and c.config.center.set
@@ -1236,7 +1248,10 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     end
   end
 
-  if sn == "SELECTING_HAND" and G.GAME and G.GAME.blind then
+  local _in_round = G.GAME and G.GAME.blind and G.GAME.blind.chips and
+    sn ~= "SHOP" and sn ~= "BLIND_SELECT" and sn ~= "MENU" and
+    sn ~= "SPLASH" and sn ~= "RUN_SETUP" and sn ~= "ROUND_EVAL"
+  if _in_round then
     sep()
     local target = G.GAME.blind.chips or 0
     local blind_mult = G.GAME.blind.mult or 1
@@ -1286,25 +1301,36 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     end
   end
 
+  local function pick_desc_color(text)
+    local t = (text or ""):lower()
+    if t:find("mult")                          then return RED    end
+    if t:find("chip")                          then return CYAN   end
+    if t:find("%$") or t:find("gold") or t:find("money") then return GOLD end
+    if t:find("hand") or t:find("discard")     then return WHITE  end
+    return ORANGE
+  end
+
   if sn == "SHOP" then
-    local function shdr(color, text)      shop_rows[#shop_rows+1] = {color, text, true, 0} end
-    local function ssub(color, text)      shop_rows[#shop_rows+1] = {color, text, false, 14} end
-    local function sdesc(color, text)     shop_rows[#shop_rows+1] = {color, text, false, 16, false, true, nil, true} end
-    local function ssep()                 shop_rows[#shop_rows+1] = {nil, nil, false, 0, true} end
+    local money = G.GAME and G.GAME.dollars or 0
+
+    local function shdr(color, text)        shop_rows[#shop_rows+1] = {color, text, true, 0} end
+    local function ssub(color, text)        shop_rows[#shop_rows+1] = {color, text, false, 14} end
+    local function sdesc(color, text)       shop_rows[#shop_rows+1] = {color, text, false, 16, false, true, nil, true} end
+    local function ssep()                   shop_rows[#shop_rows+1] = {nil, nil, false, 0, true} end
     local function scard(color, text, card) shop_rows[#shop_rows+1] = {color, text, false, 8, false, false, card} end
+
     local shop_areas = {
-      {area = G.shop_jokers, tag = "Jokers"},
+      {area = G.shop_jokers,   tag = "Jokers"},
       {area = G.shop_vouchers, tag = "Vouchers"},
-      {area = G.shop_booster, tag = "Packs"},
+      {area = G.shop_booster,  tag = "Packs"},
     }
     for _, sa in ipairs(shop_areas) do
       if sa.area and sa.area.cards and #sa.area.cards > 0 then
         ssep()
         shdr(pg, "Shop: " .. sa.tag)
-        for i, c in ipairs(sa.area.cards) do
+        for _, c in ipairs(sa.area.cards) do
           local n = card_display_name(c)
           local cost = c.cost or 0
-          local money = G.GAME and G.GAME.dollars or 0
           local afford = cost <= money
           local fx = ""
           local fx_from_desc = false
@@ -1321,13 +1347,13 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
             end
             if short_desc and short_desc ~= "" then fx = short_desc; fx_from_desc = true end
           end
-          if fx ~= "" then ssub(ORANGE, fx) end
+          if fx ~= "" then ssub(pick_desc_color(fx), fx) end
           if not fx_from_desc and not fx_is_static_joker then
             local desc = card_description(c)
             if (not desc or desc == "") and c and c.config and c.config.center then
               desc = Utils.safe_description(c.config.center.loc_txt, c)
             end
-            if desc then sdesc(DIM, desc) end
+            if desc then sdesc(pick_desc_color(desc), desc) end
           end
         end
       end
@@ -1365,6 +1391,11 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     for i, c in ipairs(_bp2.cards) do
       local n = card_display_name(c)
       if n == "?" and c.base then n = c.base.value .. " " .. (c.base.suit or "") end
+      local etag = card_edition_tag(c)
+      if etag ~= "" then
+        local ename = etag:match("%[(.-)%]") or ""
+        if ename ~= "" then n = ename .. " " .. n end
+      end
       local rc = rarity_color(c) or WHITE
       local desc = card_description(c)
       if (not desc or desc == "") and c and c.config and c.config.center then
@@ -1428,7 +1459,6 @@ local function draw_neuro_indicator()
     local p = _pal.PRIMARY
     local pg = _pal.GLOW
     local bg = _pal.BG
-    auto_queue_pack_browse(now)
     update_buy_showcase(now)
     local trunc
     local wrapped_lines
@@ -1464,8 +1494,9 @@ local function draw_neuro_indicator()
         title = "SHOP BUY"
         subtitle_tag = "joker"
       elseif area_tag == "shop_vouchers" then
-        title = "SHOP BUY"
+        title = "NEW VOUCHER"
         subtitle_tag = "voucher"
+        bh = 260
       elseif area_tag == "shop_booster" then
         title = "SHOP BUY"
         subtitle_tag = "pack"
@@ -1477,6 +1508,7 @@ local function draw_neuro_indicator()
       local subtitle = (shown_cost > 0)
         and string.format("%s  $%d", subtitle_tag, shown_cost)
         or tostring(subtitle_tag)
+      local baccent = (area_tag == "shop_vouchers") and _pal.D_GREEN or pg
 
       -- Slide in from the left (tied to alpha so it glides with the fade)
       local slide_x = math.floor(-(bw + bx + 10) * (1 - a) + 0.5)
@@ -1494,11 +1526,11 @@ local function draw_neuro_indicator()
       love.graphics.setColor(p[1], p[2], p[3], (0.65 + 0.25 * pulse) * a)
       love.graphics.setLineWidth(2)
       love.graphics.rectangle("line", bx, by, bw, bh, 10, 10)
-      love.graphics.setColor(pg[1], pg[2], pg[3], (0.12 + 0.06 * pulse) * a)
+      love.graphics.setColor(baccent[1], baccent[2], baccent[3], (0.12 + 0.06 * pulse) * a)
       love.graphics.setLineWidth(4)
       love.graphics.rectangle("line", bx - 2, by - 2, bw + 4, bh + 4, 12, 12)
 
-      love.graphics.setColor(p[1], p[2], p[3], (0.55 + 0.15 * pulse) * a)
+      love.graphics.setColor(baccent[1], baccent[2], baccent[3], (0.55 + 0.15 * pulse) * a)
       love.graphics.rectangle("fill", bx + 3, by + 3, bw - 6, 36, 7, 7)
 
       love.graphics.setColor(1, 1, 1, 0.97 * a)
@@ -1913,8 +1945,8 @@ local function draw_neuro_indicator()
     if total_h > max_h then total_h = max_h end
     if _panel_h_current <= 0 then _panel_h_current = total_h end
     local ph_diff = total_h - _panel_h_current
-    if math.abs(ph_diff) < 0.5 or ph_diff > 0 then
-      _panel_h_current = total_h          -- snap instantly on grow
+    if math.abs(ph_diff) < 0.5 then
+      _panel_h_current = total_h
     else
       _panel_h_current = _panel_h_current + ph_diff * math.min(1, PANEL_H_LERP_SPEED * dt)
     end
@@ -2226,6 +2258,10 @@ local function draw_neuro_indicator()
       _pack_appear_t = now
       _pack_picked = {}
       _pack_prev_cards = {}
+    elseif not is_pack_state and _pack_last_sn ~= nil then
+      -- just left pack state — kill residue immediately so it doesn't ghost over other panels
+      _pack_picked = {}
+      _pack_prev_cards = {}
     end
     _pack_last_sn = is_pack_state and sn or nil
 
@@ -2267,13 +2303,10 @@ local function draw_neuro_indicator()
       if elapsed > fade_dur then _pack_picked[k] = nil end
     end
 
-    if pack_has_cards or next(_pack_picked) then
-      local pk_w = 500
-      local pk_x = math.floor((sw - pk_w) / 2)
+    if is_pack_state and (pack_has_cards or next(_pack_picked)) then
       local pk_pad = 10
-      local pk_content_w = pk_w - pk_pad * 2
-      local slot_h = 90
       local slot_gap = 6
+      local slot_h = 190
       local small_f = panel_font_small or font
 
       local display_cards = {}
@@ -2304,8 +2337,12 @@ local function draw_neuro_indicator()
       table.sort(display_cards, function(a, b) return a.index < b.index end)
 
       local n_cards = #display_cards
+      local pk_w = math.min(sw - 40, math.max(500, n_cards * 155 + 20))
+      local pk_x = math.floor((sw - pk_w) / 2)
+      local pk_content_w = pk_w - pk_pad * 2
+      local slot_w = (n_cards > 0) and math.floor((pk_content_w - (n_cards - 1) * slot_gap) / n_cards) or pk_content_w
       local title_h2 = line_h + 6
-      local pk_total_h = title_h2 + n_cards * (slot_h + slot_gap) + 6
+      local pk_total_h = title_h2 + slot_h + 10
 
       love.graphics.setColor(bg[1], bg[2], bg[3], 0.95)
       love.graphics.rectangle("fill", pk_x, center_top_y, pk_w, pk_total_h, 10, 10)
@@ -2333,32 +2370,30 @@ local function draw_neuro_indicator()
       love.graphics.setColor(pk_title_color[1], pk_title_color[2], pk_title_color[3], 1.0)
       love.graphics.print(trunc(pack_rows.title or "Pack", pk_content_w - 10), pk_x + pk_pad + 4, center_top_y + 3)
 
-      -- card slots
-      local slot_y = center_top_y + title_h2 + 2
+      -- card slots (horizontal grid)
+      local slot_y = center_top_y + title_h2 + 4
       for ci, dc in ipairs(display_cards) do
         local ca = dc.alpha
-        -- stagger-in animation: each card slides in from the right with delay
+        -- stagger-in animation: each card slides up from the bottom with delay
         local stagger_delay = (ci - 1) * 0.08
         local appear_elapsed = now - _pack_appear_t - stagger_delay
-        local appear_frac = 1.0
-        local slide_x = 0
+        local slide_y = 0
         if appear_elapsed < 0.35 and dc.state ~= "picked" then
-          appear_frac = math.max(0, math.min(1, appear_elapsed / 0.35))
+          local appear_frac = math.max(0, math.min(1, appear_elapsed / 0.35))
           -- ease-out cubic
           local ef = 1 - (1 - appear_frac) * (1 - appear_frac) * (1 - appear_frac)
           ca = ca * ef
-          slide_x = math.floor((1 - ef) * 60)
+          slide_y = math.floor((1 - ef) * 40)
         end
 
-        local sx = pk_x + pk_pad + slide_x
-        local sw2 = pk_content_w - slide_x
+        local slot_x = pk_x + pk_pad + (ci - 1) * (slot_w + slot_gap)
         local is_gold = dc.state == "highlighted" or dc.state == "picked"
         local pulse2 = math.sin(now * 3.2)
         local pulse3 = math.sin(now * 4.5)
         local pulse4 = math.sin(now * 6.0)
 
         if dc.state == "picked" then
-          -- picked card: golden burst → scale up slightly → fade out
+          -- picked card: golden burst → fade out
           local pe = dc.pick_elapsed or 0
           local burst_frac = math.min(1, pe / 0.25)
 
@@ -2366,50 +2401,50 @@ local function draw_neuro_indicator()
           if burst_frac < 1 then
             local bf_a = (1 - burst_frac) * 0.60 * ca
             love.graphics.setColor(1, 0.93, 0.40, bf_a)
-            love.graphics.rectangle("fill", sx - 2, slot_y - 2, sw2 + 4, slot_h + 4, 8, 8)
+            love.graphics.rectangle("fill", slot_x - 2, slot_y + slide_y - 2, slot_w + 4, slot_h + 4, 8, 8)
           end
 
           -- golden fill (fading)
           love.graphics.setColor(1, 0.78, 0.10, 0.20 * ca)
-          love.graphics.rectangle("fill", sx, slot_y, sw2, slot_h, 6, 6)
+          love.graphics.rectangle("fill", slot_x, slot_y + slide_y, slot_w, slot_h, 6, 6)
 
           -- golden border
           love.graphics.setColor(1, 0.85, 0.20, (0.65 + 0.15 * pulse2) * ca)
           love.graphics.setLineWidth(2)
-          love.graphics.rectangle("line", sx, slot_y, sw2, slot_h, 6, 6)
+          love.graphics.rectangle("line", slot_x, slot_y + slide_y, slot_w, slot_h, 6, 6)
 
-          -- "PICKED!" label
+          -- "PICKED!" label: centered horizontally, at bottom of slot
           love.graphics.setColor(1, 0.88, 0.18, 0.90 * ca)
           local pick_label = "PICKED!"
           local plw = font:getWidth(pick_label)
-          love.graphics.print(pick_label, sx + sw2 - plw - 8, slot_y + (slot_h - text_h) / 2)
+          love.graphics.print(pick_label, slot_x + math.floor((slot_w - plw) / 2), slot_y + slide_y + slot_h - text_h - 4)
         elseif dc.state == "highlighted" then
           -- golden highlighted card: warm glow + pulsing border + sparkles
 
           -- outer glow
           love.graphics.setColor(1, 0.85, 0.20, (0.12 + 0.06 * pulse3) * ca)
           love.graphics.setLineWidth(8)
-          love.graphics.rectangle("line", sx - 6, slot_y - 6, sw2 + 12, slot_h + 12, 14, 14)
+          love.graphics.rectangle("line", slot_x - 6, slot_y + slide_y - 6, slot_w + 12, slot_h + 12, 14, 14)
 
           -- warm gold fill
           love.graphics.setColor(1, 0.78, 0.10, (0.18 + 0.06 * pulse2) * ca)
-          love.graphics.rectangle("fill", sx, slot_y, sw2, slot_h, 6, 6)
+          love.graphics.rectangle("fill", slot_x, slot_y + slide_y, slot_w, slot_h, 6, 6)
 
           -- mid gold border (bright pulse)
           love.graphics.setColor(1, 0.88, 0.18, (0.75 + 0.25 * pulse2) * ca)
           love.graphics.setLineWidth(3)
-          love.graphics.rectangle("line", sx - 1, slot_y - 1, sw2 + 2, slot_h + 2, 7, 7)
+          love.graphics.rectangle("line", slot_x - 1, slot_y + slide_y - 1, slot_w + 2, slot_h + 2, 7, 7)
 
           -- inner crisp highlight
           love.graphics.setColor(1, 1, 0.55, (0.30 + 0.20 * pulse4) * ca)
           love.graphics.setLineWidth(1)
-          love.graphics.rectangle("line", sx + 1, slot_y + 1, sw2 - 2, slot_h - 2, 5, 5)
+          love.graphics.rectangle("line", slot_x + 1, slot_y + slide_y + 1, slot_w - 2, slot_h - 2, 5, 5)
 
           -- sparkle dots orbiting the slot
           local n_sparkles = 4
-          local sparkle_r = math.max(sw2, slot_h) * 0.52
-          local cx2 = sx + sw2 / 2
-          local cy2 = slot_y + slot_h / 2
+          local sparkle_r = math.max(slot_w, slot_h) * 0.52
+          local cx2 = slot_x + slot_w / 2
+          local cy2 = slot_y + slide_y + slot_h / 2
           for si = 0, n_sparkles - 1 do
             local angle = now * 2.0 + si * (math.pi * 2 / n_sparkles)
             local sx2 = cx2 + math.cos(angle) * sparkle_r * 0.95
@@ -2421,70 +2456,70 @@ local function draw_neuro_indicator()
         else
           -- normal card slot background
           love.graphics.setColor(p[1], p[2], p[3], 0.10 * ca)
-          love.graphics.rectangle("fill", sx, slot_y, sw2, slot_h, 6, 6)
+          love.graphics.rectangle("fill", slot_x, slot_y + slide_y, slot_w, slot_h, 6, 6)
 
           -- subtle rarity border
           local rc = dc.rc
           love.graphics.setColor(rc[1], rc[2], rc[3], (0.25 + 0.08 * pulse) * ca)
           love.graphics.setLineWidth(1)
-          love.graphics.rectangle("line", sx, slot_y, sw2, slot_h, 6, 6)
+          love.graphics.rectangle("line", slot_x, slot_y + slide_y, slot_w, slot_h, 6, 6)
         end
 
-        -- card sprite
+        -- card sprite + name + desc (vertical stack within slot)
         if dc.card then
-          local sprite_h2 = slot_h - 8
-          local sprite_x2 = sx + 5
-          local sprite_y2 = slot_y + 4
-          local est_w2 = sprite_h2 * 0.75
+          local sprite_w2 = math.min(slot_w - 16, 90)
+          local sprite_h2 = math.floor(sprite_w2 / 0.747)
+          local sprite_x2 = slot_x + math.floor((slot_w - sprite_w2) / 2)
+          local sprite_y2 = slot_y + slide_y + 6
           local rc = dc.rc
 
           love.graphics.setColor(rc[1], rc[2], rc[3], (0.10 + 0.05 * pulse) * ca)
-          love.graphics.rectangle("fill", sprite_x2 - 3, sprite_y2 - 3, est_w2 + 6, sprite_h2 + 6, 4, 4)
+          love.graphics.rectangle("fill", sprite_x2 - 3, sprite_y2 - 3, sprite_w2 + 6, sprite_h2 + 6, 4, 4)
           love.graphics.setColor(0, 0, 0, 0.55 * ca)
-          love.graphics.rectangle("fill", sprite_x2 - 1, sprite_y2 - 1, est_w2 + 2, sprite_h2 + 2, 2, 2)
+          love.graphics.rectangle("fill", sprite_x2 - 1, sprite_y2 - 1, sprite_w2 + 2, sprite_h2 + 2, 2, 2)
           if is_gold then
             love.graphics.setColor(1, 0.85, 0.20, (0.55 + 0.20 * pulse2) * ca)
           else
             love.graphics.setColor(rc[1], rc[2], rc[3], (0.35 + 0.12 * pulse) * ca)
           end
           love.graphics.setLineWidth(1)
-          love.graphics.rectangle("line", sprite_x2 - 1, sprite_y2 - 1, est_w2 + 2, sprite_h2 + 2, 2, 2)
+          love.graphics.rectangle("line", sprite_x2 - 1, sprite_y2 - 1, sprite_w2 + 2, sprite_h2 + 2, 2, 2)
 
-          local mini_w = draw_card_mini(dc.card, sprite_x2, sprite_y2, sprite_h2)
-          local text_x = sprite_x2 + (mini_w > 0 and mini_w or est_w2) + 8
-          local text_w = sx + sw2 - text_x - 6
+          draw_card_mini(dc.card, sprite_x2, sprite_y2, sprite_h2)
 
-          -- card name
-          local name_y = slot_y + 4
+          -- name below sprite, centered horizontally in slot
+          local name_y = sprite_y2 + sprite_h2 + 4
           local rc2 = is_gold and {1, 0.92, 0.40} or dc.rc
+          local name_str = trunc(dc.name, slot_w - 8)
+          local name_x = slot_x + math.floor((slot_w - font:getWidth(name_str)) / 2)
           love.graphics.setColor(0, 0, 0, 0.35 * ca)
-          love.graphics.print(trunc(dc.name, text_w), text_x + 1, name_y + 1)
+          love.graphics.print(name_str, name_x + 1, name_y + 1)
           love.graphics.setColor(rc2[1], rc2[2], rc2[3], 0.97 * ca)
-          love.graphics.print(trunc(dc.name, text_w), text_x, name_y)
+          love.graphics.print(name_str, name_x, name_y)
 
-          -- card description (wrapped, up to 2 lines)
+          -- desc lines below name
           if dc.desc and dc.desc ~= "" then
             if panel_font_small then love.graphics.setFont(panel_font_small) end
-            local desc_lines = wrapped_lines(dc.desc, math.max(20, text_w), small_f)
+            local desc_lines = wrapped_lines(dc.desc, slot_w - 8, small_f)
             local dy = name_y + text_h + 2
-            for li = 1, math.min(#desc_lines, 3) do
-              draw_colored_desc(desc_lines[li], text_x, dy, ca, small_f)
+            for li = 1, math.min(#desc_lines, 2) do
+              draw_colored_desc(desc_lines[li], slot_x + 4, dy, ca, small_f)
               dy = dy + small_line_h
             end
             if panel_font_small then love.graphics.setFont(font) end
           end
         else
-          -- picked card with no card ref: just show name + PICKED
-          local text_x = sx + 8
-          local text_w = sw2 - 16
+          -- picked card with no card ref: centered name
           local rc2 = {1, 0.92, 0.40}
+          local name_str = trunc(dc.name, slot_w - 16)
+          local name_x = slot_x + math.floor((slot_w - font:getWidth(name_str)) / 2)
+          local name_y = slot_y + slide_y + math.floor((slot_h - text_h) / 2)
           love.graphics.setColor(0, 0, 0, 0.35 * ca)
-          love.graphics.print(trunc(dc.name, text_w - 70), text_x + 1, slot_y + (slot_h - text_h) / 2 + 1)
+          love.graphics.print(name_str, name_x + 1, name_y + 1)
           love.graphics.setColor(rc2[1], rc2[2], rc2[3], 0.97 * ca)
-          love.graphics.print(trunc(dc.name, text_w - 70), text_x, slot_y + (slot_h - text_h) / 2)
+          love.graphics.print(name_str, name_x, name_y)
         end
-
-        slot_y = slot_y + slot_h + slot_gap
+        -- no slot_y increment — horizontal layout
       end
 
       center_top_y = center_top_y + pk_total_h + 4
@@ -3147,6 +3182,39 @@ local function setup_neuro_bridge()
   G.NEURO:register_actions(filtered_actions)
 end
 
+local function hook_seeded_unlocks()
+  if unlock_card then
+    local _orig = unlock_card
+    unlock_card = function(card)
+      if not (G and G.GAME and G.GAME.seeded) then return _orig(card) end
+      G.GAME.seeded = nil
+      local r = _orig(card)
+      G.GAME.seeded = true
+      return r
+    end
+  end
+  if inc_career_stat then
+    local _orig = inc_career_stat
+    inc_career_stat = function(stat, mod)
+      if not (G and G.GAME and G.GAME.seeded) then return _orig(stat, mod) end
+      G.GAME.seeded = nil
+      local r = _orig(stat, mod)
+      G.GAME.seeded = true
+      return r
+    end
+  end
+  if win_game then
+    local _orig = win_game
+    win_game = function()
+      if not (G and G.GAME and G.GAME.seeded) then return _orig() end
+      G.GAME.seeded = nil
+      local r = _orig()
+      G.GAME.seeded = true
+      return r
+    end
+  end
+end
+
 local function hook_game_over_screen()
   if G.NEURO.game_over_hooked then return end
   if not create_UIBox_game_over then return end
@@ -3193,6 +3261,7 @@ love.load = function(...)
   local ok2, err2 = pcall(function()
     setup_text_input()
     setup_neuro_bridge()
+    hook_seeded_unlocks()
     hook_game_over_screen()
   end)
   if not ok2 then

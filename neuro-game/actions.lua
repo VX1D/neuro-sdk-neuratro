@@ -281,25 +281,6 @@ local function build_param_actions()
   }
 end
 
-local function get_cheapest_shop_cost()
-  local cheapest = nil
-  local function scan(area)
-    if not (area and area.cards) then return end
-    for _, card in ipairs(area.cards) do
-      local cost = card and card.cost
-      if type(cost) == "number" and cost >= 0 then
-        if not cheapest or cost < cheapest then
-          cheapest = cost
-        end
-      end
-    end
-  end
-
-  scan(G and G.shop_jokers)
-  scan(G and G.shop_vouchers)
-  scan(G and G.shop_booster)
-  return cheapest
-end
 
 local function get_spendable_dollars()
   if not (G and G.GAME) then return 0 end
@@ -498,6 +479,7 @@ local STATE_ACTIONS = {
     "deck_type",
     "scoring_explanation",
     "joker_strategy",
+    "set_joker_order",
     "blind_info",
     "hand_levels_info",
     "quick_status",
@@ -584,11 +566,6 @@ function Actions.get_action_defs(names)
     end
   end
   return defs
-end
-
-function Actions.get_actions_for_state(state_name)
-  local list = Actions.get_action_names_for_state(state_name)
-  return Actions.get_action_defs(list)
 end
 
 function Actions.get_action_names_for_state(state_name)
@@ -804,10 +781,6 @@ function Actions.get_static_actions()
   table.sort(res, function(a, b) return a.name < b.name end)
   _static_actions_cache = res
   return res
-end
-
-function Actions.get_all_actions()
-  return Actions.get_static_actions()
 end
 
 return Actions

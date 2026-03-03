@@ -6,24 +6,8 @@ local function safe_description(loc_txt, card, max_len)
   return Utils.safe_description(loc_txt, card, max_len)
 end
 
-function Context.send(message, important)
-  if sendDebugMessage then
-    sendDebugMessage("Context sent: " .. tostring(message))
-  end
-  if important then
-    if sendImportantMessage then
-      sendImportantMessage(message)
-    end
-  else
-    if sendContextMessage then
-      sendContextMessage(message)
-    end
-  end
-end
-
 function Context.get_poker_hand_info()
   if not G or not G.GAME or not G.GAME.hands then
-    Context.send("Game not available yet.")
     return {}
   end
 
@@ -44,8 +28,7 @@ end
 
 function Context.get_joker_info()
   if not G or not G.jokers or not G.jokers.cards or #G.jokers.cards == 0 then
-    Context.send("No jokers in inventory.")
-    return {}
+return {}
   end
 
   local jokers = {}
@@ -90,8 +73,7 @@ end
 
 function Context.get_card_modifiers()
   if not G or not G.GAME then
-    Context.send("Game not available yet.")
-    return {}
+return {}
   end
 
   local modifiers = {}
@@ -129,8 +111,7 @@ end
 
 function Context.get_deck_types()
   if not G or not G.P_CENTER_POOLS or not G.P_CENTER_POOLS.Back then
-    Context.send("Game not available yet.")
-    return {}
+return {}
   end
 
   local decks = {}
@@ -181,15 +162,13 @@ local function analyze_hand_potential(cards)
     max_same_suit = max_suit_count,
     has_pair = rank_counts[2] and rank_counts[2] > 0,
     has_three = rank_counts[3] and rank_counts[3] > 0,
-    has_four = rank_counts[4] and rank_counts[4] > 0,
-    unique_ranks = 0
+    has_four = rank_counts[4] and rank_counts[4] > 0
   }
 end
 
 function Context.get_scoring_explanation()
   if not G or not G.GAME then
-    Context.send("Game not available yet.")
-    return {}
+return {}
   end
 
   local explanation = {
@@ -287,8 +266,7 @@ end
 
 function Context.get_joker_strategy()
   if not G or not G.jokers then
-    Context.send("Jokers not available yet.")
-    return {}
+return {}
   end
 
   local strategy = {
@@ -437,8 +415,7 @@ end
 
 function Context.get_shop_context()
   if not G or not G.GAME then
-    Context.send("Game not available yet.")
-    return {}
+return {}
   end
 
   local context = {
@@ -530,8 +507,7 @@ end
 
 function Context.get_blind_info()
   if not G or not G.GAME or not G.GAME.blind then
-    Context.send("Game not available yet.")
-    return {}
+return {}
   end
 
   local blind = G.GAME.blind
@@ -604,8 +580,7 @@ end
 
 function Context.get_hand_levels_info()
   if not G or not G.GAME or not G.GAME.hands then
-    Context.send("Game not available yet.")
-    return {}
+return {}
   end
 
   local levels = {
@@ -973,76 +948,87 @@ function Context.get_neuratro_info()
 
   local neuratro_reference = {
     jokers = {
-      j_3heart = {name = "heartheartheart", desc = "X1 Mult, upgrades to X1.45 when playing Three of a Kind with all Hearts"},
-      j_gimbag = {name = "Gym Bag", desc = "+1 hand size, Aces in hand give +12 Mult and +12 Chips (doubled for Hearts)"},
-      j_plasma_globe = {name = "Plasma Globe", desc = "Gains +8 Chips per played hand, pays $2 per played hand"},
-      j_btmc = {name = "BTMC", desc = "+100 Chips, +4 Mult per card above hand limit"},
-      j_highlighted = {name = "Highlighted", desc = "Retriggers highlighted cards"},
-      j_anny = {name = "Anny", desc = "Gains +10 Mult when scoring 5+ cards"},
-      j_kyoto = {name = "Kyoto", desc = "+50 Chips, +15 Mult if played hand has a Spade"},
-      j_pipes = {name = "Pipes", desc = "+30 Chips, upgrades by +10 when scoring with Clubs"},
-      j_milc = {name = "MILC", desc = "X2 Mult if hand contains a Pair"},
-      j_teru = {name = "Teru", desc = "+20 Chips per Diamond card scored"},
-      j_schedule = {name = "Schedule", desc = "Gains +5 Mult when you skip a blind"},
-      j_lavalamp = {name = "Lava Lamp", desc = "+8 Mult, increases by +2 per ante"},
-      j_lucy = {name = "Lucy", desc = "Creates a random consumable when blind is selected"},
-      j_queenpb = {name = "Queen PB", desc = "Queens give X1.5 Mult"},
-      j_tutelsoup = {name = "Tutel Soup", desc = "Heals 1 discard when playing a hand"},
-      j_layna = {name = "Layna", desc = "+50 Chips, retriggers if scoring card is enhanced"},
-      j_forghat = {name = "Frog Hat", desc = "+15 Mult, creates a copy of scored face cards"},
-      j_tiredtutel = {name = "Tired Tutel", desc = "Sleeps for 3 hands then gives +100 Chips"},
-      j_hype = {name = "Hype", desc = "+20 Mult if scoring hand contains an Ace"},
-      j_recbin = {name = "Recycle Bin", desc = "Gains +5 Chips per discarded card"},
-      j_harpoon = {name = "Get Harpooned!", desc = "+30 Mult against boss blinds"},
-      j_cfrb = {name = "CFRB", desc = "+15 Chips per consumable slot filled"},
-      j_sispace = {name = "SISpace", desc = "+10 Mult per empty consumable slot"},
-      j_allin = {name = "I'm All In", desc = "Doubles money interest cap"},
-      j_camila = {name = "Camila", desc = "Hearts give +8 Mult when held in hand"},
-      j_jokr = {name = "JOKR", desc = "Copies effect of rightmost joker"},
-      j_xdx = {name = "xdx", desc = "Gains +5 Mult per round survived"},
-      j_bday1 = {name = "Birthday 1", desc = "Creates a tarot when blind is skipped"},
-      j_bday2 = {name = "Birthday 2", desc = "Creates a planet when blind is selected"},
-      j_sistream = {name = "Sistream", desc = "+25 Chips per Spectral card used"},
-      j_donowall = {name = "Donowall", desc = "Gains +10 Mult when you discard"},
-      j_stocks = {name = "Stocks", desc = "Money gained is doubled"},
-      j_techhard = {name = "Tech Hard", desc = "+40 Chips, -$1 per hand played"},
-      j_void = {name = "Void", desc = "Destroys leftmost joker, gains its effect"},
-      j_collab = {name = "Collab", desc = "+15 Mult per unique suit in scoring hand"},
-      j_cavestream = {name = "Cave Stream", desc = "+30 Chips if scoring hand contains 6+ cards"},
-      j_jorker = {name = "Jorker", desc = "Random joker effect each round"},
-      j_roulette = {name = "Roulette", desc = "50% chance to give X3 Mult, 50% to give X0.5"},
-      j_Vedds = {name = "Vedds", desc = "+20 Chips per Vedal card in deck"},
-      j_ddos = {name = "DDOS", desc = "+50 Mult, disables shop for this round"},
-      j_hiyori = {name = "Hiyori", desc = "Retriggers scored 7s"},
-      j_Glorp = {name = "Glorp", desc = "Creates a Glorpy when scoring"},
-      j_Emuz = {name = "Emuz", desc = "+25 Chips per Emuz card owned"},
-      j_anteater = {name = "Anteater", desc = "Gains +20 Chips when defeating a boss blind"},
-      j_drive = {name = "Drive", desc = "+35 Mult when scoring with exactly 4 cards"},
-      j_deliv = {name = "Delivery", desc = "Creates a food joker when defeating boss"},
-      j_fourtoes = {name = "Four Toes", desc = "4s are retriggered"},
-      j_abandonedarchive = {name = "Abandoned Archive", desc = "+100 Chips if deck has 40+ cards"},
-      j_minikocute = {name = "Miniko Cute", desc = "+15 Mult if scoring hand has 3 or fewer cards"},
-      j_neurodog = {name = "Neurodog", desc = "+50 Chips, +10 Mult, retriggers"},
-      j_ely = {name = "Ely", desc = "+30 Chips per face card held in hand"},
-      j_cerbr = {name = "Cerber", desc = "+25 Mult, creates a copy of destroyed cards"},
-      j_corpa = {name = "Corpa", desc = "Pays $5 when defeating a boss blind"},
-      j_emojiman = {name = "Emojiman", desc = "+20 Chips per unique rank scored"},
-      j_shoomimi = {name = "Shoomimi", desc = "Seals are retriggered"},
-      j_plush = {name = "Plush", desc = "+40 Chips, +$2 at end of round"},
-      j_vedalsdrink = {name = "Vedal's Drink", desc = "+15 Mult, pays $1 per scored card"},
-      j_filtersister = {name = "Filter Sister", desc = "Debuffed cards give +30 Chips"},
-      j_envy = {name = "Envious", desc = "+10 Mult per owned joker"},
-      j_argirl = {name = "Argirl", desc = "+25 Chips, upgrades when scoring with Spades"},
+      j_3heart         = {name = "heartheartheart",      desc = "Starts xMult at 1, gains +x0.45 per Three of a Kind scored with all Hearts"},
+      j_gimbag         = {name = "Gym Bag",              desc = "+1 hand size. Aces held give +12 Mult +12 Chips (doubled for Ace of Hearts)"},
+      j_roulette       = {name = "Neuro Roulette",       desc = "50/50: x4 OR x0.25 Mult each hand played"},
+      j_plush          = {name = "Neuro Fumo",           desc = "Gains +12 Mult per $30 spent on cards/packs/rerolls. Accumulates"},
+      j_forghat        = {name = "Frog Hat",             desc = "1-in-3: card to right of a played sealed card gains that same seal"},
+      j_lavalamp       = {name = "Lava Lamp",            desc = "Cycles xMult each hand: x1.5 -> x2 -> x2.5 -> x2 -> x1.5"},
+      j_breadge        = {name = "Neuro Bread",          desc = "Stone cards give +Mult instead of chips (+21 base, -3 per round)"},
+      j_harpoon        = {name = "Get Harpooned!",       desc = "x3 Mult. 1-in-3 chance each hand to lose ALL remaining discards"},
+      j_cfrb           = {name = "CFRB",                 desc = "King of Spades gives xMult (starts x1, +x0.5 per King of Clubs destroyed)"},
+      j_bday1          = {name = "Evil's First Birthday",desc = "+4 Mult. Gains +2 per face card destroyed. Self-destructs after 6 destroyed"},
+      j_bday2          = {name = "Evil's Second Birthday",desc = "x1.5 Mult. Gains +x0.5 per face card added to deck"},
+      j_pipes          = {name = "PIPES",                desc = "Steel cards give x2 Mult. Converts leftmost held card to steel each hand"},
+      j_deliv          = {name = "Abber Demon",          desc = "1-in-6: each scored card destroyed -> +x0.25 Mult permanently. Currently x1"},
+      j_mcneuros       = {name = "McNeuro's",            desc = "Loses $2 + creates 2 Tarots if played hand matches current pattern (cycles: 2x9 / 1x9 / 1x6 / 1x7 / 2x4+2x5)"},
+      j_plasma_globe   = {name = "Plasma Globe",         desc = "Gains +x0.75 Mult each Spectral card used. Starts x1"},
+      j_sispace        = {name = "Twins In Space",       desc = "+9 Chips per planet card used this run"},
+      j_sistream       = {name = "Twin Stream",          desc = "Retriggers all played Twin-enhanced (m_twin) cards once"},
+      j_tiredtutel     = {name = "Turtle At Work",       desc = "+5 Mult per discard used this blind. Resets to 0 each round"},
+      j_recbin         = {name = "Recycle Bin",          desc = "+7 Chips per card discarded this round. Resets to 0 each round"},
+      j_vedalsdrink    = {name = "Banana Rum",           desc = "Random +20 to +200 chips. King of Clubs in hand: tripled then self-destructs"},
+      j_Vedds          = {name = "Vedd's Store",         desc = "+35 Chips per Ace of Clubs in full deck"},
+      j_fourtoes       = {name = "Four Toes",            desc = "All Mix hand types (mix/mixhouse/straightmix/mixed5) can be formed with 4 cards"},
+      j_tutelsoup      = {name = "Tutel Soup",           desc = "Randomly gives +15 Mult OR +100 Chips OR $3 OR x1.5 Mult. Self-destructs in 4 rounds"},
+      j_abandonedarchive = {name = "Abandoned Archive 2",desc = "Gains +Mult equal to sell value of each joker sold. Accumulates"},
+      j_tutel_credit   = {name = "Vedal's Credit Card",  desc = "First purchase in each shop is fully refunded"},
+      j_hype           = {name = "Hype Train",           desc = "Earns $1/round (+$1 when Donation card scored). Self-destructs after 2 consecutive hands without Donation"},
+      j_techhard       = {name = "Technical Difficulties",desc = "First hand of round: x0.5 Mult. All other hands: x1.5 Mult"},
+      j_donowall       = {name = "Donowall",             desc = "+7 Mult per unscored card in played hand"},
+      j_stocks         = {name = "VedalAI Stocks",       desc = "Sell value changes each round: 55% chance -1 to -3, 45% chance +1 to +6"},
+      j_collab         = {name = "Collab",               desc = "x4 Mult if 3 face cards of 3 different suits in scoring hand"},
+      j_cavestream     = {name = "Cave Stream",          desc = "Retriggers stone cards. No stones in hand: converts leftmost played card to stone"},
+      j_ddos           = {name = "Live DDOS",            desc = "+150 Chips. 1-in-3 chance to debuff self after hand played"},
+      j_drive          = {name = "Long Drive",           desc = "x1 Mult initially, gains +1 xMult every 3 rounds"},
+      j_highlighted    = {name = "Highlighted Message",  desc = "Donation cards (m_dono) give x2 Mult instead of $2"},
+      j_ermermerm      = {name = "Erm",                  desc = "If High Card played: randomizes rank, suit, and enhancement of all scored cards"},
+      j_michaeljacksonani = {name = "Ani r u ok",        desc = "Kings of Diamonds have priority to be drawn to hand"},
+      j_camila         = {name = "Cumilq",               desc = "Each played 6 is retriggered once and gives x1.3 Mult"},
+      j_allin          = {name = "I'm All In",           desc = "Discard exactly 4 sixes -> creates a new 6 with random enhancement, seal, and edition"},
+      j_minikocute     = {name = "miniko cute",          desc = "If hand contains a 3, card to its left becomes a 3 before scoring"},
+      j_cerbr          = {name = "Yippee!",              desc = "Gains +5 Mult per retrigger on played cards. Resets end of round"},
+      j_milc           = {name = "Milc",                 desc = "Retriggers Jacks of Diamonds 1-2x if played Jacks < 2s held in hand"},
+      j_filipino_boy   = {name = "Filian",               desc = "Reduces blind requirement by 5% each hand played"},
+      j_frut           = {name = "Fruit Snacks Bag",     desc = "At blind select: lowers score req by 0.4% per 8 in deck"},
+      j_moooooooooods  = {name = "MOOODS!",              desc = "On last hand: if current score < half required, halves the required score"},
+      j_ely            = {name = "Ellie",                desc = "1-in-2 chance to spawn Neurodog when blind selected. x1 Mult +x1 per Neurodog owned"},
+      j_neurodog       = {name = "Neurodog",             desc = "+10 Mult +9 Chips. Spawned by Ellie, not in normal pool"},
+      j_void           = {name = "Alex Void",            desc = "Each Negative-edition joker gives x2 Mult"},
+      j_jorker         = {name = "J0ker",                desc = "+15 Chips per joker owned (including playbook)"},
+      j_shoomimi       = {name = "Shoomimi",             desc = "Cards with Shoomiminion seal give $5 when scored"},
+      j_layna          = {name = "Layna",                desc = "If scoring hand has a 9: all scored cards give x3 Mult then are destroyed"},
+      j_queenpb        = {name = "Queenpb",              desc = "x1 Mult (grows +x0.25/round). Plays LIFE or BOOM music"},
+      j_lucy           = {name = "Lucy",                 desc = "Gains +4 Mult each time a Flush is played. Accumulates"},
+      j_teru           = {name = "Teru",                 desc = "Gains +x0.03 Mult when face card is scored. Accumulates"},
+      j_kyoto          = {name = "KYOTO AT ALL COSTS",   desc = "1-in-20 chance for x100 Mult per hand"},
+      j_btmc           = {name = "BTMC",                 desc = "Osu! seal cards give xMult per consecutive hand with Osu seal. Resets streak if no Osu seal"},
+      j_Glorp          = {name = "Glorp",                desc = "At blind start adds 20 Glorpy Gleeb cards (Glorpsuit, m_glorp) to deck"},
+      j_envy           = {name = "Envious Joker",        desc = "+6 Mult per scored Glorpsuit (Gleeb) card"},
+      j_jokr           = {name = "joukr",                desc = "1-in-3 chance to get extra random playing card when opening Standard Pack"},
+      ["j_xdx|"]       = {name = "xdx",                 desc = "Random x0.1 to x6.0 Mult each hand"},
+      j_corpa          = {name = "Corpa",                desc = "Refunds $2 per $5 spent in shop when leaving. Spending resets each shop"},
+      j_schedule       = {name = "Schedule",             desc = "+1 to all probabilities while owned. 1-in-3 chance to create Wheel of Fortune at blind select"},
+      j_mod_purge      = {name = "Mod Purge",            desc = "Prevents death once: destroys self + 1 random non-eternal joker instead"},
+      j_nwooper        = {name = "Neurooper",            desc = "Does nothing alone. Required for Erm Fish to activate"},
+      j_Ermfish        = {name = "Erm Fish",             desc = "Mult^2 if you own Neurooper (extremely powerful scaling)"},
+      j_schizoedm      = {name = "SCHIZO",               desc = "Creates random Negative joker at round start. Destroys it at round end"},
+      j_argirl         = {name = "Study-Sama",           desc = "Retriggers a random scored card 1-10 times per hand"},
+      j_hiyori         = {name = "Hiyori",               desc = "xChips = 1+0.15 per heart in full deck. WARNING: all Heart cards debuffed"},
+      j_filtersister   = {name = "Nere",                 desc = "Gains +x0.25 Mult when a Filtered card is debuffed. Only pools with Filtered cards present"},
+      j_anteater       = {name = "Anteater",             desc = "1-in-2 chance each scored 2 or 3 is permanently destroyed"},
+      j_anny           = {name = "Anny",                 desc = "x0.2 Mult per unique card in deck (uniqueness = rank+suit+enhancement+edition+seal)"},
     },
     consumables = {
-      twins = {name = "The Twins", desc = "Enhance 2 selected cards to Twin Cards"},
-      donation = {name = "The Bit", desc = "Enhance 1 selected card to Donation Card"},
-      shomimi_set_seal = {name = "Mitosis", desc = "Add Shoomimi Seal to 1 selected card"},
+      twins            = {name = "The Twins",   desc = "Enhance 2 selected cards to Twin enhancement (+15c +2m)"},
+      donation         = {name = "The Bit",     desc = "Enhance 1 selected card to Donation enhancement ($2 when scored)"},
+      shomimi_set_seal = {name = "Mitosis",     desc = "Add Shoomiminion seal to 1 selected card (destroyed = spawns 2 copies)"},
+      rhythm           = {name = "Rhythm",      desc = "Add Osu! seal to up to 2 cards (+5 Mult per play, resets if discarded)"},
     },
     enhancements = {
-      m_twin = {name = "Twin", desc = "Retriggers this card"},
-      m_dono = {name = "Donation", desc = "Pays $3 when scored"},
-      m_bit = {name = "Bit", desc = "Gains +10 Chips per Bit card in deck"},
+      m_twin  = {name = "Twin",     desc = "+15 chips +2 mult when scored"},
+      m_dono  = {name = "Donation", desc = "$2 when scored; if Highlighted Message joker present, gives xMult instead"},
+      m_glorp = {name = "Glorpy",   desc = "Breaks at end of round (destroyed)"},
     }
   }
 
