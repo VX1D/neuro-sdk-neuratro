@@ -213,6 +213,22 @@ neuro-bridge-rs/             Rust WebSocket <-> IPC relay
 
 ## Changelog
 
+### 0.4.0 -- 2026-03-03
+
+<details>
+<summary><strong>Overlay polish + pack UI fix</strong></summary>
+
+- Edition tags (`[Foil]`, `[Holo]`, `[Poly]`, `[Neg]`) shown inline with card names in overlay panels with animated persona-coloured text
+- Joker mult display: static base mult shows shorthand only; accumulated/dynamic mult shows description instead (no misleading bare "+N Mult")
+- Deck names resolved from localization data instead of raw internal keys
+- Font wrap cache added — eliminates repeated `getWrap` calls during overlay rendering
+- Left shop panel now hides correctly during all `*_PACK` states, not just buffoon pack
+- Neuro palette darkened to near-black teal fills with hot-pink text (matches Evil Neuro's dark-fill approach)
+- Emote routing: `neuroexplode` on round eval, `neurocube` default; `boomevil` on Evil round eval, `evilgamba` on Evil in shop
+- TV-glitch login animation upgraded
+
+</details>
+
 ### 0.3.1 -- 2026-03-03
 
 <details>
