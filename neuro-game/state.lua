@@ -433,7 +433,7 @@ local function state_name()
     return "UNKNOWN"
   end
 
-  if (raw == "SPLASH" or raw == "MENU") and G.NEURO_IN_RUN_SETUP then
+  if (raw == "SPLASH" or raw == "MENU") and G.NEURO.in_run_setup then
     return "RUN_SETUP"
   end
 
@@ -597,10 +597,10 @@ function State.build()
     }
   end
 
-  if G.NEURO_ACTION_HISTORY then
+  if G.NEURO.action_history then
     s.last_action_results = {}
-    for i = 1, #G.NEURO_ACTION_HISTORY do
-      s.last_action_results[i] = G.NEURO_ACTION_HISTORY[i]
+    for i = 1, #G.NEURO.action_history do
+      s.last_action_results[i] = G.NEURO.action_history[i]
     end
   end
 

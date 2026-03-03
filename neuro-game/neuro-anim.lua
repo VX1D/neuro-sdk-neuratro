@@ -1,4 +1,12 @@
+-- neuro-anim.lua
+-- Cinematic animation sequences for Neuro's in-game actions.
+-- Hooked from dispatcher.lua and neuro-game.lua.
+
 local NeuroAnim = {}
+
+-- ─────────────────────────────────────────────────────────────
+-- Helpers
+-- ─────────────────────────────────────────────────────────────
 
 local function now()
   return (G and G.TIMERS and G.TIMERS.REAL) or os.clock()
@@ -58,6 +66,10 @@ local function float_text(text, opts)
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- PACK: hover before pick
+-- Called right after LLM decision, before E_MANAGER delay fires.
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.hover_pack_card(card, bp)
   if not card then return end
 
@@ -70,6 +82,7 @@ function NeuroAnim.hover_pack_card(card, bp)
     sound("card1", 0.85 + math.random() * 0.2, 0.55)
   end)
 
+  -- Fan other cards gently back
   after(0.15, function()
     if bp and bp.cards then
       for _, c in ipairs(bp.cards) do
@@ -78,6 +91,7 @@ function NeuroAnim.hover_pack_card(card, bp)
     end
   end)
 
+  -- Hover text
   after(0.25, function()
     if is_last then
       float_text("Last pick...", {
@@ -99,18 +113,24 @@ function NeuroAnim.hover_pack_card(card, bp)
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- PACK: actual pick fires (inside E_MANAGER delayed event)
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.pick_pack_card(card, bp)
   if not card then return end
 
   local total    = (bp and bp.cards and #bp.cards) or 0
   local is_last  = (total <= 1)
 
+  -- Strong juice + sound
   juice(card, is_last and 1.1 or 0.75, is_last and 0.55 or 0.38)
   sound("whoosh1", 0.8 + math.random() * 0.15, 0.85)
   card.highlighted = false
 
+  -- Victory text
   after(0.05, function()
     if is_last then
+      -- Boom sound burst
       sound("gold_seal",  1.15 + math.random() * 0.1, 1.0)
       after(0.08, function() sound("whoosh1",  1.3, 0.7) end)
       after(0.18, function() sound("gold_seal", 0.9, 0.6) end)
@@ -124,6 +144,7 @@ function NeuroAnim.pick_pack_card(card, bp)
         major  = bp or (G and (G.pack_cards or G.booster_pack or G.play)),
       })
 
+      -- Boom: staggered card punches
       after(0.0,  function() juice(card, 1.2, 0.65) end)
       after(0.12, function() juice(card, 0.7, 0.40) end)
       after(0.26, function() juice(card, 0.4, 0.22) end)
@@ -139,6 +160,9 @@ function NeuroAnim.pick_pack_card(card, bp)
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- HAND: pre-play card juice (staggered)
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.pre_play(highlighted)
   if not highlighted or #highlighted == 0 then return end
   for i, c in ipairs(highlighted) do
@@ -150,6 +174,9 @@ function NeuroAnim.pre_play(highlighted)
   end
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- HAND: pre-discard card juice (staggered, reddish feel via sound)
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.pre_discard(highlighted)
   if not highlighted or #highlighted == 0 then return end
   for i, c in ipairs(highlighted) do
@@ -161,6 +188,9 @@ function NeuroAnim.pre_discard(highlighted)
   sound("whoosh1", 1.1 + math.random() * 0.1, 0.35)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- SHOP ENTRY: stagger-juice all items
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.on_shop_enter()
   after(0.25, function()
     local delay = 0
@@ -177,6 +207,9 @@ function NeuroAnim.on_shop_enter()
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- SHOP BUY: juice the purchased card
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.on_buy(card)
   if not card then return end
   immediate(function()
@@ -185,6 +218,9 @@ function NeuroAnim.on_buy(card)
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- ROUND EVAL: blind cleared celebration
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.on_round_eval()
   after(0.4, function()
     sound("gold_seal", 0.9, 0.7)
@@ -197,6 +233,7 @@ function NeuroAnim.on_round_eval()
       major  = G and G.play,
     })
   end)
+  -- Juice jokers in celebration
   after(0.55, function()
     if G and G.jokers and G.jokers.cards then
       for i, c in ipairs(G.jokers.cards) do
@@ -207,6 +244,9 @@ function NeuroAnim.on_round_eval()
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- BLIND SELECT: juice the three blind cards on entry
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.on_blind_select()
   after(0.5, function()
     local delay = 0
@@ -223,6 +263,9 @@ function NeuroAnim.on_blind_select()
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- CAN CLEAR NOW: hint that she can win this hand
+-- ─────────────────────────────────────────────────────────────
 function NeuroAnim.on_can_clear(hand_type)
   after(0.1, function()
     local txt = hand_type and ("WIN: " .. hand_type) or "CAN WIN!"
@@ -234,6 +277,7 @@ function NeuroAnim.on_can_clear(hand_type)
       oy     = -2.0,
       major  = G and G.play,
     })
+    -- Juice all jokers
     if G and G.jokers and G.jokers.cards then
       for _, c in ipairs(G.jokers.cards) do
         juice(c, 0.3, 0.18)
@@ -242,6 +286,9 @@ function NeuroAnim.on_can_clear(hand_type)
   end)
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- STATE ENTRY DISPATCHER
+-- ─────────────────────────────────────────────────────────────
 local _last_anim_state = nil
 
 function NeuroAnim.on_state_enter(state_name)

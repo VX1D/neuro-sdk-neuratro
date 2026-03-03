@@ -7,7 +7,7 @@
 Lua mod hooks into the game, Rust bridge relays messages over WebSocket,
 Neuro gets game state and responds with actions.
 
-[![Version](https://img.shields.io/badge/version-0.2.0-ff4d94?style=flat-square)](#changelog)
+[![Version](https://img.shields.io/badge/version-0.3.0-ff4d94?style=flat-square)](#changelog)
 [![License](https://img.shields.io/badge/license-MIT-80dfff?style=flat-square)](LICENSE)
 [![Balatro](https://img.shields.io/badge/Balatro-1.0.1-9b72e6?style=flat-square)](https://store.steampowered.com/app/2379780/Balatro/)
 [![Lua](https://img.shields.io/badge/Lua-5.1-ffd700?style=flat-square)](https://www.lua.org/)
@@ -199,6 +199,11 @@ neuro-game/                  Lua mod, copy to %AppData%\Balatro\Mods\
   dotenv.lua                 .env file reader, used by all timing code
   .env                       All cooldown and timing values, edit to tune
   filtered.lua               Profanity filter
+  context.lua                Token-efficient context (verbose counterpart to context_compact.lua)
+  neuro-anim.lua             Emote animation controller
+  neuro_json.lua             Bundled JSON encoder/decoder
+  utils.lua                  Shared utility functions
+  test_deadlock.lua          In-game deadlock test suite (F8 / --test flag)
   assets/                    Emote spritesheets and persona art
 
 neuro-bridge-rs/             Rust WebSocket <-> IPC relay
@@ -207,6 +212,106 @@ neuro-bridge-rs/             Rust WebSocket <-> IPC relay
 ---
 
 ## Changelog
+
+### 0.3.0 -- 2026-03-03
+
+<details>
+<summary><strong>DESPERATE mode</strong></summary>
+
+- New `DESPERATE` mode when `hands_left <= 0` — AI is explicitly told the blind is already lost and to not play cards
+- AI can still use remaining discards to cycle cards for future rounds
+
+</details>
+
+<details>
+<summary><strong>Full consumable coverage</strong></summary>
+
+- All 22 base tarots now have specific targeting advice (which cards to pick and why)
+- All 16 base spectrals now emit hints — 9 card-selection spectrals get targeting advice, 7 direct-use spectrals were previously completely invisible to the AI
+- Destructive spectrals (Ankh, Hex, Ouija, Ectoplasm) include explicit warnings
+- Neuratro custom consumables covered: The Twins, The Bit, Mitosis, Rhythm
+- The Bit advice fixed: was incorrectly showing Twins advice; now correctly shows Donation enhancement ($2 when scored) targeting 1 card
+- The Twins/The Bit deck-specific branches split — previously shared advice despite having different target counts
+- Direct-use tarots (The Fool, Temperance, The Hermit, etc.) now emit proper hints
+
+</details>
+
+<details>
+<summary><strong>Blueprint/Brainstorm chain hint</strong></summary>
+
+- When Blueprint or Brainstorm is in the joker lineup, AI sees exactly which joker each one copies and its xMult value
+- AI knows to use `set_joker_order` when position-sensitive
+
+</details>
+
+<details>
+<summary><strong>SHOP money projection</strong></summary>
+
+- AI sees a projected end-of-round money total based on blind reward + interest if $0 is spent
+- Shows next-round interest rate and the per-$5-saved interest gain to help AI decide how much to spend vs save
+
+</details>
+
+<details>
+<summary><strong>Voucher chain awareness</strong></summary>
+
+- All 16 voucher upgrade pairs tracked (Overstock → Overstock Plus, Clearance Sale → Liquidation, etc.)
+- AI is alerted when a base voucher is in the shop (buy now to unlock upgrade next ante) or when it already owns the base and the upgrade is available
+
+</details>
+
+### 0.2.1 -- 2026-03-02
+
+<details>
+<summary><strong>Internal refactor: G.NEURO_* → G.NEURO.*</strong></summary>
+
+- All global state moved from flat `G.NEURO_FORCE_INFLIGHT`, `G.NEURO_STATE`, etc. to nested `G.NEURO.force_inflight`, `G.NEURO.state`, etc.
+- Cleaner namespace, single table holds all SDK state
+- Fixed crash when `NEURO_ENABLE` is not set — empty `G.NEURO` table no longer triggers the update loop
+
+</details>
+
+<details>
+<summary><strong>Profanity filter rewrite</strong></summary>
+
+- Exact single-word terms now use O(1) hash lookup instead of regex scan
+- Split compiled patterns into `exact_set`, `exact_norm`, and `regex_list`
+- Added normalized fallback: leetspeak-encoded slurs caught even when regex replacement doesn't fire
+- Removed dead code branch (word-boundary path was unreachable)
+
+</details>
+
+<details>
+<summary><strong>select_blind validation fix</strong></summary>
+
+- Relaxed overly strict `select_blind` guard that required `blind_choices` and a matching selectable key
+- Fixes cases where blind selection was blocked despite being the correct state
+
+</details>
+
+<details>
+<summary><strong>Test harness</strong></summary>
+
+- `--test` CLI flag runs `test_deadlock` module and exits with pass/fail code
+- F8 hotkey runs the same test suite in-game
+- `G.NEURO.test_actions` and `G.NEURO.test_dispatcher` exposed for test access
+
+</details>
+
+<details>
+<summary><strong>Joker synergy analysis</strong></summary>
+
+- `Context.get_joker_synergy_analysis()` exposed — detects synergy pairs across active jokers and returns a formatted analysis block
+
+</details>
+
+<details>
+<summary><strong>Staging debug API</strong></summary>
+
+- `Staging.get_debug_lines()` — returns current staging state as formatted lines for overlay display
+- `Staging.clear_overlay()` — programmatically clears the staging overlay text
+
+</details>
 
 ### 0.2.0 -- 2026-03-02
 

@@ -878,50 +878,67 @@ local function normalize_leetspeak(text)
   return t
 end
 
-local _compiled_patterns = nil
+local _compiled = nil
 
 local function compile_patterns()
-  if _compiled_patterns then return _compiled_patterns end
-  _compiled_patterns = {}
+  if _compiled then return _compiled end
+
+  local exact_set = {}
+  local exact_norm = {}
+  local regex_list = {}
+
   for i = 1, #FILTERED_TERMS do
     local entry = FILTERED_TERMS[i]
     local term = entry.term or ""
     local replace_with = entry.replacement or "***"
-    local pat
-    local norm_term
+
     if entry.type == "wildcard" then
       local prefix = term:gsub("%*$", "")
-      pat = "%f[%a]" .. case_insensitive_pattern(prefix) .. "%w*"
-      norm_term = normalize_leetspeak(prefix)
+      regex_list[#regex_list + 1] = {
+        pat = "%f[%a]" .. case_insensitive_pattern(prefix) .. "%w*",
+        replace_with = replace_with,
+        norm_term = normalize_leetspeak(prefix),
+      }
+    elseif term:match("^%a+$") then
+      exact_set[term:lower()] = replace_with
+      exact_norm[normalize_leetspeak(term)] = true
     else
-      local is_single_word = term:match("^%a+$")
-      if is_single_word then
-        pat = "%f[%a]" .. case_insensitive_pattern(term) .. "%f[%A]"
-      else
-        pat = case_insensitive_pattern(term)
-      end
-      norm_term = normalize_leetspeak(term)
+      local pat = case_insensitive_pattern(term)
+      regex_list[#regex_list + 1] = {
+        pat = pat,
+        replace_with = replace_with,
+        norm_term = normalize_leetspeak(term),
+      }
     end
-    _compiled_patterns[i] = {
-      pat = pat,
-      replace_with = replace_with,
-      norm_term = norm_term,
-    }
   end
-  return _compiled_patterns
+
+  _compiled = { exact = exact_set, exact_norm = exact_norm, regex = regex_list }
+  return _compiled
 end
 
 function Filtered.sanitize(text)
   if type(text) ~= "string" or text == "" then
     return text or ""
   end
-  local patterns = compile_patterns()
-  local out = text
+  local compiled = compile_patterns()
+  local exact = compiled.exact
+  local exact_norm = compiled.exact_norm
+  local regex = compiled.regex
+  local replaced_any = false
+
+  local out = text:gsub("%a+", function(word)
+    local rep = exact[word:lower()]
+    if rep then
+      replaced_any = true
+      return rep
+    end
+    return word
+  end)
+
   local normalized = normalize_leetspeak(text)
   local matched_normalized = false
-  local replaced_any = false
-  for i = 1, #patterns do
-    local cp = patterns[i]
+  for i = 1, #regex do
+    local cp = regex[i]
     local new_out, count = out:gsub(cp.pat, cp.replace_with)
     if count > 0 then
       out = new_out
@@ -931,6 +948,16 @@ function Filtered.sanitize(text)
       matched_normalized = true
     end
   end
+
+  if not matched_normalized and not replaced_any then
+    for word in normalized:gmatch("%a+") do
+      if exact_norm[word] then
+        matched_normalized = true
+        break
+      end
+    end
+  end
+
   if matched_normalized and not replaced_any then
     out = "***"
   end

@@ -705,6 +705,33 @@ local function detect_joker_synergies(jokers)
   return synergies
 end
 
+function Context.get_joker_synergy_analysis()
+  if not G or not G.jokers or not G.jokers.cards or #G.jokers.cards == 0 then
+    return {"No jokers available for analysis"}
+  end
+
+  local analysis = {"=== JOKER SYNERGY ANALYSIS ===", ""}
+  local jokers = {}
+
+  for _, card in ipairs(G.jokers.cards) do
+      table.insert(jokers, {
+      ability = card.ability or {},
+      name = safe_name(card) or "Unknown"
+    })
+  end
+
+  local synergies = detect_joker_synergies(jokers)
+  if #synergies > 0 then
+    for _, synergy in ipairs(synergies) do
+      table.insert(analysis, "• " .. synergy)
+    end
+  else
+    table.insert(analysis, "No obvious synergies detected")
+  end
+
+  return analysis
+end
+
 function Context.get_consumables_info()
   if not G or not G.consumeables then
     return {"Consumables area not available"}

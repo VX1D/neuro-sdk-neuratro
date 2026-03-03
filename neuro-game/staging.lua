@@ -106,8 +106,8 @@ local function cancel_staged(reason)
   end
 
   if G then
-    G.NEURO_ACTION_PHASE = "cancelled"
-    G.NEURO_ACTION_PHASE_AT = now()
+    G.NEURO.action_phase = "cancelled"
+    G.NEURO.action_phase_at = now()
   end
 
   staged = nil
@@ -284,7 +284,7 @@ end
 local function hover_card(card, juice_scale, juice_rot)
   if not card then return end
   card.highlighted = true
-  if G and G.NEURO_AI_HIGHLIGHTED then G.NEURO_AI_HIGHLIGHTED[card] = true end
+  if G and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
   card.hovering = false
   if card.juice_up and not card._neuro_juiced then
     card:juice_up(juice_scale or 0.25, juice_rot or 0.12)
@@ -335,8 +335,8 @@ function Staging.queue(msg, bridge)
       bridge:send_action_result(id, false, "Staging resolve failed: " .. tostring(cards))
     end
     if G then
-      G.NEURO_ACTION_PHASE = "failed"
-      G.NEURO_ACTION_PHASE_AT = now()
+      G.NEURO.action_phase = "failed"
+      G.NEURO.action_phase_at = now()
     end
     debug_mark("resolve failed", cards)
     return false
@@ -356,14 +356,14 @@ function Staging.queue(msg, bridge)
     juice_rot = j_rot or 0.3,
     phase = "HOVER",
     start = now(),
-    state_at_queue = G and G.NEURO_STATE or nil,
+    state_at_queue = G and G.NEURO.state or nil,
   }
   if id then
     pending_ids[id] = true
   end
   if G then
-    G.NEURO_ACTION_PHASE = "queued"
-    G.NEURO_ACTION_PHASE_AT = now()
+    G.NEURO.action_phase = "queued"
+    G.NEURO.action_phase_at = now()
   end
   debug_mark("queued " .. tostring(msg.data and msg.data.name or "?"), nil)
   overlay_text = label .. "..."
@@ -385,7 +385,7 @@ function Staging.update(dt)
       return
     end
 
-    if staged.state_at_queue and G and G.NEURO_STATE ~= staged.state_at_queue then
+    if staged.state_at_queue and G and G.NEURO.state ~= staged.state_at_queue then
       cancel_staged("Action cancelled: game state changed")
       return
     end
@@ -438,8 +438,8 @@ function Staging.update(dt)
       overlay_text = staged.label
       pcall(clear_hovers, staged.hover_cards)
       if G then
-        G.NEURO_ACTION_PHASE = "executing"
-        G.NEURO_ACTION_PHASE_AT = t
+        G.NEURO.action_phase = "executing"
+        G.NEURO.action_phase_at = t
       end
 
       local NeuroDispatcher = require("dispatcher")
@@ -453,8 +453,8 @@ function Staging.update(dt)
           pcall(staged.bridge.send_action_result, staged.bridge, id, false, "Staged action failed: " .. tostring(exec_err))
         end
         if G then
-          G.NEURO_ACTION_PHASE = "failed"
-          G.NEURO_ACTION_PHASE_AT = t
+          G.NEURO.action_phase = "failed"
+          G.NEURO.action_phase_at = t
         end
         debug_mark("execute failed", exec_err)
       else
@@ -494,6 +494,10 @@ function Staging.get_overlay_text()
   return overlay_text
 end
 
+function Staging.clear_overlay()
+  overlay_text = nil
+end
+
 function Staging.on_state_change()
   if staged then
     cancel_staged("Action cancelled: state transition")
@@ -504,10 +508,36 @@ function Staging.mark_settled(action_id, ok)
   if action_id == nil then return end
   pending_ids[tostring(action_id)] = nil
   if G then
-    G.NEURO_ACTION_PHASE = ok and "resolved" or "failed"
-    G.NEURO_ACTION_PHASE_AT = now()
+    G.NEURO.action_phase = ok and "resolved" or "failed"
+    G.NEURO.action_phase_at = now()
   end
   debug_mark(ok and "resolved" or "failed", ok and nil or "action result failed")
+end
+
+function Staging.get_debug_lines()
+  if not DEBUG_STAGING then return {} end
+
+  local out = {}
+  local t = now()
+  local sid = staged and msg_action_id(staged.msg) or "-"
+  local sname = staged and staged.msg and staged.msg.data and staged.msg.data.name or "-"
+  local sphase = staged and staged.phase or "idle"
+  local selapsed = staged and (t - (staged.start or t)) or 0
+  local post_left = math.max(0, post_until - t)
+  out[#out + 1] = string.format("stg id:%s action:%s phase:%s", tostring(sid), tostring(sname), tostring(sphase))
+  out[#out + 1] = string.format("elapsed:%.2fs post:%.2fs pending:%d", selapsed, post_left, pending_count())
+
+  if debug_state.last_event then
+    local age = t - (debug_state.last_event_at or t)
+    out[#out + 1] = string.format("event(%.1fs): %s", age, tostring(debug_state.last_event))
+  end
+
+  if debug_state.last_fault then
+    local age = t - (debug_state.last_fault_at or t)
+    out[#out + 1] = string.format("FAULT(%.1fs): %s", age, tostring(debug_state.last_fault))
+  end
+
+  return out
 end
 
 return Staging

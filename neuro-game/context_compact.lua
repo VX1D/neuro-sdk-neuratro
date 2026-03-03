@@ -1983,10 +1983,10 @@ local function compute_outs(cards, sim1_score, target_remaining, discards_left)
   end
 
   if #outs_parts == 0 then
-    G.NEURO_OUTS_EV = nil
+    G.NEURO.outs_ev = nil
     return nil
   end
-  G.NEURO_OUTS_EV = best_ev
+  G.NEURO.outs_ev = best_ev
   return "OUTS|" .. table.concat(outs_parts, "|")
 end
 
@@ -2173,7 +2173,7 @@ local function combos_section()
     for _, idx in ipairs(best.indices) do
       sim1_idx_strs[#sim1_idx_strs + 1] = tostring(idx)
     end
-    G.NEURO_SIM1_PLAY = { indices = sim1_idx_strs, hand_type = best.hand_type, score = best.score }
+    G.NEURO.sim1_play = { indices = sim1_idx_strs, hand_type = best.hand_type, score = best.score }
     sim_tokens = sim_tokens
       .. "|SIM1:" .. table.concat(best.indices, ",")
       .. "~" .. compact_text(best.hand_type, 16)
@@ -2209,7 +2209,7 @@ local function combos_section()
       can_clear_now = "Y"
     end
   else
-    G.NEURO_SIM1_PLAY = nil
+    G.NEURO.sim1_play = nil
   end
 
   -- Draw outs for near-flush / straight draws
@@ -2625,7 +2625,7 @@ local function pack_section(state_name)
       best_idx = row[1]
     end
   end
-  G.NEURO_PACK_BEST = best_idx and { index = best_idx, rank = (best_rank_score >= 4 and "S" or best_rank_score >= 3 and "A" or best_rank_score >= 2 and "B" or "C") } or nil
+  G.NEURO.pack_best = best_idx and { index = best_idx, rank = (best_rank_score >= 4 and "S" or best_rank_score >= 3 and "A" or best_rank_score >= 2 and "B" or "C") } or nil
   lines[#lines + 1] = maybe_dict_encode_rows("PC:i,n,t,r,f", rows, {
     { index = 2, prefix = "N" },
     { index = 3, prefix = "T" },
@@ -2674,7 +2674,7 @@ local function action_memory_section(state_name)
   if not G then return nil end
 
   local parts = {}
-  local recent = G.NEURO_RECENT_ACTIONS
+  local recent = G.NEURO.recent_actions
   if type(recent) == "table" and #recent > 0 then
     local from = math.max(1, #recent - 3)
     local tokens = {}
@@ -2696,7 +2696,7 @@ local function action_memory_section(state_name)
   end
 
   if state_name == "SHOP" then
-    local rr = tonumber(G.NEURO_SHOP_REROLL_COUNT or 0) or 0
+    local rr = tonumber(G.NEURO.shop_reroll_count or 0) or 0
     parts[#parts + 1] = "SR:" .. tostring(math.max(0, math.floor(rr)))
   end
 
@@ -3041,9 +3041,9 @@ discard_heuristics_section = function()
   if #top > 0 then
     lines[#lines + 1] = "DR:top_discard=" .. table.concat(top, ",") .. "|top_keep=" .. table.concat(top_keep, ",")
     -- Cache for dispatcher to read explicit DR indices
-    G.NEURO_DR_TOP = { discard = top, keep = top_keep }
+    G.NEURO.dr_top = { discard = top, keep = top_keep }
   else
-    G.NEURO_DR_TOP = nil
+    G.NEURO.dr_top = nil
   end
 
   return table.concat(lines, "\n")

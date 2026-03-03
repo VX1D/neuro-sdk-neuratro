@@ -672,7 +672,7 @@ function Actions.is_action_valid(action_name)
     if not (G and G.GAME and G.GAME.dollars ~= nil) then
       return false
     end
-    local reserved = tonumber(G.NEURO_RESERVED_DOLLARS or 0) or 0
+    local reserved = tonumber(G.NEURO.reserved_dollars or 0) or 0
     local money = get_spendable_dollars() - reserved
     local function has_affordable(area)
       if not (area and area.cards and #area.cards > 0) then return false end
@@ -750,14 +750,7 @@ function Actions.is_action_valid(action_name)
   end
 
   if action_name == "select_blind" then
-    if not G or not G.GAME or not G.GAME.round_resets then
-      return false
-    end
-    if not G.GAME.round_resets.blind_choices then
-      return false
-    end
-    local on_deck = get_selectable_blind_key()
-    if on_deck ~= "Small" and on_deck ~= "Big" and on_deck ~= "Boss" then
+    if not G or not G.GAME then
       return false
     end
   end

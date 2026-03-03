@@ -98,14 +98,14 @@ local function get_card(area, index)
 end
 
 local function is_forced_action(name)
-  if not (G and G.NEURO_FORCE_INFLIGHT and name) then
+  if not (G and G.NEURO.force_inflight and name) then
     return false
   end
-  local set = G.NEURO_FORCE_ACTION_SET
+  local set = G.NEURO.force_action_set
   if set then
     return not not set[name]
   end
-  local list = G.NEURO_FORCE_ACTIONS
+  local list = G.NEURO.force_actions
   if list then
     for i = 1, #list do
       if list[i] == name then
@@ -120,11 +120,11 @@ local function clear_force_inflight()
   if not G then
     return
   end
-  G.NEURO_FORCE_INFLIGHT = false
-  G.NEURO_FORCE_STATE = nil
-  G.NEURO_FORCE_ACTIONS = nil
-  G.NEURO_FORCE_ACTION_SET = nil
-  G.NEURO_FORCE_SENT_AT = nil
+  G.NEURO.force_inflight = false
+  G.NEURO.force_state = nil
+  G.NEURO.force_actions = nil
+  G.NEURO.force_action_set = nil
+  G.NEURO.force_sent_at = nil
 end
 
 local function push_recent_action(name)
@@ -132,29 +132,29 @@ local function push_recent_action(name)
     return
   end
 
-  local recent = G.NEURO_RECENT_ACTIONS
+  local recent = G.NEURO.recent_actions
   if type(recent) ~= "table" then recent = {} end
   recent[#recent + 1] = name
   while #recent > 10 do
     table.remove(recent, 1)
   end
-  G.NEURO_RECENT_ACTIONS = recent
+  G.NEURO.recent_actions = recent
 
-  local hist = G.NEURO_ACTION_HISTORY
+  local hist = G.NEURO.action_history
   if type(hist) ~= "table" then hist = {} end
   hist[#hist + 1] = name
   while #hist > 20 do
     table.remove(hist, 1)
   end
-  G.NEURO_ACTION_HISTORY = hist
+  G.NEURO.action_history = hist
 end
 
 local function recent_actions_summary(limit)
-  if not (G and type(G.NEURO_RECENT_ACTIONS) == "table" and #G.NEURO_RECENT_ACTIONS > 0) then
+  if not (G and type(G.NEURO.recent_actions) == "table" and #G.NEURO.recent_actions > 0) then
     return ""
   end
 
-  local list = G.NEURO_RECENT_ACTIONS
+  local list = G.NEURO.recent_actions
   local n = #list
   local keep = tonumber(limit) or 4
   keep = math.max(1, math.floor(keep))
@@ -182,15 +182,15 @@ local function once_per_state_entry_hint(tag, text)
   if not (G and text and text ~= "") then
     return ""
   end
-  local serial = tonumber(G.NEURO_STATE_ENTER_SERIAL or 0) or 0
-  local seen = G.NEURO_QUERY_HINT_SERIALS
+  local serial = tonumber(G.NEURO.state_enter_serial or 0) or 0
+  local seen = G.NEURO.query_hint_serials
   if type(seen) ~= "table" then seen = {} end
   local key = tostring(tag or "hint")
   if seen[key] == serial then
     return ""
   end
   seen[key] = serial
-  G.NEURO_QUERY_HINT_SERIALS = seen
+  G.NEURO.query_hint_serials = seen
   return text
 end
 
@@ -282,9 +282,158 @@ local function active_blind_debuff_summary()
   return "Active debuff: " .. table.concat(parts, "/") .. ". "
 end
 
+local function blind_strategy_hint()
+  if not (G and G.GAME and G.GAME.blind) then return "" end
+  local name = G.GAME.blind.name or ""
+  local hints = {
+    ["The Needle"]    = "MAX 1 CARD PER HAND. Play exactly 1 card. Ignore all multi-card combo advice.",
+    ["The Eye"]       = "NO REPEAT HAND TYPES. Every hand this round must be a different poker hand type. Plan across hands (Pair then Flush then Straight etc.).",
+    ["The Mouth"]     = "SINGLE HAND TYPE ONLY. The first hand type you played is the only legal type this round. Only play that type.",
+    ["The Water"]     = "EACH HAND COSTS 1 DISCARD. Every hand you play reduces your discards by 1. Treat discards as double-precious.",
+    ["Verdant Leaf"]  = "ALL CARDS DEBUFFED until you sell a joker. Use sell_card on a joker immediately — scoring is impossible until you do.",
+    ["Amber Acorn"]   = "JOKER ORDER SHUFFLED after each hand. Do not rely on position-sensitive jokers (Blueprint, Brainstorm).",
+    ["Crimson Heart"] = "RANDOM JOKER DISABLED each hand. Do not count on any single joker firing every play.",
+    ["The Ox"]        = "OX WARNING: Playing your most-played hand type this run resets your money to $0. Vary your hand types.",
+    ["The Mark"]      = "MARK BLIND: Face cards (J/Q/K) drawn face-down but visible in hand — no mechanical impact.",
+    ["The Fish"]      = "FISH BLIND: Cards drawn face-down each hand. Plan with what you can see in hand.",
+    ["The Serpent"]   = "SERPENT BLIND: 3 cards auto-drawn after each play or discard. You have no control over drawing.",
+    ["The Pillar"]    = "PILLAR BLIND: Cards already played this ante score 0 chips. Prefer cards not yet played this ante.",
+  }
+  local hint = hints[name]
+  if not hint then return "" end
+  return once_per_state_entry_hint("blind_strategy", "BOSS BLIND RULE — " .. hint .. " ")
+end
+
+local function tarot_target_advice(nm, deck_name)
+  if nm == "The Twins" and deck_name == "Twin deck" then
+    return "Target your 2 best Kings. "
+  elseif nm == "The Twins" and deck_name == "Euchre deck" then
+    return "Target your 2 best Jacks. "
+  elseif nm == "The Twins" and deck_name == "Checkered Deck" then
+    return "Target 2 high-value cards of same suit. "
+  elseif nm == "The Bit" and deck_name == "Twin deck" then
+    return "Target your best King. "
+  elseif nm == "The Bit" and deck_name == "Euchre deck" then
+    return "Target your best Jack. "
+  elseif nm == "The Bit" and deck_name == "Checkered Deck" then
+    return "Target your best high-value card. "
+  end
+  local t = {
+    ["The Twins"]       = "Target your 2 highest-value cards you play most often. Enhanced = +15chips +2mult. ",
+    ["The Bit"]         = "Target 1 card — Donation enhancement ($2 when scored). Best on frequently played cards. ",
+    ["The Empress"]     = "Target up to 2 cards — Mult enhancement (+4 mult). Best on Aces or face cards. ",
+    ["The Hierophant"]  = "Target up to 2 cards — Bonus enhancement (+30 chips). Best on high-chip cards played often. ",
+    ["The Lovers"]      = "Target 1 card — Wild enhancement (counts as any suit). Best on rank needed for straights/flushes. ",
+    ["The Chariot"]     = "Target 1 card — Steel enhancement (+0.5x mult while held). Best on a card you rarely play. ",
+    ["Justice"]         = "Target 1 card — Glass enhancement (x2 mult, 1-in-4 shatters). Best on Aces/high scorers. ",
+    ["Strength"]        = "Target up to 2 cards — increases rank by 1 (2→3, Q→K). Best on 2s or 3s. ",
+    ["The Hanged Man"]  = "Target up to 2 cards to DESTROY permanently. Best on weakest cards to shrink deck. ",
+    ["Death"]           = "Select 2 cards: LEFT = template to copy FROM, RIGHT = card to overwrite. ",
+    ["The Devil"]       = "Target 1 card — Gold enhancement (+3 money when scored). Best on frequently played cards. ",
+    ["The Tower"]       = "Target 1 card — Stone enhancement (+50 chips, no rank/suit). Best on unused-suit cards. ",
+    ["The Star"]        = "Target up to 3 cards — converts to Spades. Use if Spade joker synergy active. ",
+    ["The Moon"]        = "Target up to 3 cards — converts to Clubs. Use if Club joker synergy active. ",
+    ["The Sun"]         = "Target up to 3 cards — converts to Hearts. Use if Heart joker synergy active. ",
+    ["The World"]       = "Target up to 3 cards — converts to Diamonds. Use if Diamond joker synergy active. ",
+    ["The Magician"]    = "Target up to 2 cards — Lucky enhancement (chance for mult bonus). Best on low-rank cards played often. ",
+    ["Mitosis"]         = "Target 1 card — Shoomimi seal (when destroyed, spawns 2 copies). Best on a high-value card you play often to grow your deck. ",
+    ["Rhythm"]          = "Target up to 2 cards — Osu! seal (+5 Mult each time played, resets on discard). NEVER discard these cards. Best on cards you play every hand. ",
+    ["Familiar"]        = "Target 2 cards to DESTROY — adds 3 random enhanced face cards to deck. Best on your 2 weakest non-face cards. ",
+    ["Grim"]            = "Target 2 cards to DESTROY — adds 2 random Aces to deck. Best on your 2 weakest cards. ",
+    ["Incantation"]     = "Target 2 cards to DESTROY — adds 4 random numbered cards (2-10) to deck. Best on your 2 weakest face/high cards if you need more numbered cards. ",
+    ["Talisman"]        = "Target 1 card — adds Gold Seal (+$3 when hand containing it is played). Best on a card you play every hand. ",
+    ["Aura"]            = "Target 1 card — adds foil/holo/polychrome edition randomly. Best on your highest-scoring card. ",
+    ["Deja Vu"]         = "Target 1 card — adds Red Seal (plays card twice). Best on your highest chip/mult card. ",
+    ["Trance"]          = "Target 1 card — adds Blue Seal (creates a planet card when held in hand at end of round). Best on a card you rarely play. ",
+    ["Medium"]          = "Target 1 card — adds Purple Seal (creates a tarot card when discarded). Best on a card you discard often. ",
+    ["Cryptid"]         = "Target 1 card — creates 2 copies of it in your deck. Best on your strongest scoring card. ",
+  }
+  return t[nm] or ""
+end
+
+local function blueprint_chain_hint()
+  if not (G and G.jokers and G.jokers.cards) then return "" end
+  local cards = G.jokers.cards
+  local chain_parts = {}
+  for i, card in ipairs(cards) do
+    local nm = card and card.ability and card.ability.name or ""
+    if nm == "Blueprint" or nm == "Brainstorm" then
+      local target = cards[i + 1]
+      local target_nm = target and target.ability and target.ability.name or "none"
+      local xm = target and target.ability and target.ability.x_mult or 1
+      local suffix = (xm and xm > 1) and string.format("(xMult=%.1f)", xm) or ""
+      chain_parts[#chain_parts + 1] = string.format("%s[%d]→copies %s%s", nm, i, target_nm, suffix)
+    end
+  end
+  if #chain_parts == 0 then return "" end
+  return once_per_state_entry_hint("bp_chain",
+    "JOKER CHAIN: " .. table.concat(chain_parts, "; ") .. ". Position-sensitive — use set_joker_order if needed. ")
+end
+
+local function voucher_chain_hint()
+  if not (G and G.GAME) then return "" end
+  local owned = G.GAME.used_vouchers or {}
+  local chains = {
+    {base="v_overstock",       upgrade="v_overstock_plus",  base_name="Overstock",       up_name="Overstock Plus"},
+    {base="v_clearance_sale",  upgrade="v_liquidation",     base_name="Clearance Sale",  up_name="Liquidation"},
+    {base="v_hone",            upgrade="v_glow_up",         base_name="Hone",            up_name="Glow Up"},
+    {base="v_reroll_surplus",  upgrade="v_reroll_glut",     base_name="Reroll Surplus",  up_name="Reroll Glut"},
+    {base="v_crystal_ball",    upgrade="v_omen_globe",      base_name="Crystal Ball",    up_name="Omen Globe"},
+    {base="v_telescope",       upgrade="v_observatory",     base_name="Telescope",       up_name="Observatory"},
+    {base="v_grabber",         upgrade="v_nacho_tong",      base_name="Grabber",         up_name="Nacho Tong"},
+    {base="v_wasteful",        upgrade="v_recyclomancy",    base_name="Wasteful",        up_name="Recyclomancy"},
+    {base="v_tarot_merchant",  upgrade="v_tarot_tycoon",    base_name="Tarot Merchant",  up_name="Tarot Tycoon"},
+    {base="v_planet_merchant", upgrade="v_planet_tycoon",   base_name="Planet Merchant", up_name="Planet Tycoon"},
+    {base="v_seed_money",      upgrade="v_money_tree",      base_name="Seed Money",      up_name="Money Tree"},
+    {base="v_blank",           upgrade="v_antimatter",      base_name="Blank",           up_name="Antimatter"},
+    {base="v_magic_trick",     upgrade="v_illusion",        base_name="Magic Trick",     up_name="Illusion"},
+    {base="v_hieroglyph",      upgrade="v_petroglyph",      base_name="Hieroglyph",      up_name="Petroglyph"},
+    {base="v_directors_cut",   upgrade="v_retcon",          base_name="Director's Cut",  up_name="Retcon"},
+    {base="v_paint_brush",     upgrade="v_palette",         base_name="Paint Brush",     up_name="Palette"},
+  }
+  local shop_keys = {}
+  if G.shop_vouchers and G.shop_vouchers.cards then
+    for _, card in ipairs(G.shop_vouchers.cards) do
+      local center = card.config and card.config.center
+      local key = center and center.key or ""
+      if key ~= "" then shop_keys[key] = true end
+    end
+  end
+  local hints = {}
+  for _, pair in ipairs(chains) do
+    if shop_keys[pair.base] and not owned[pair.base] then
+      hints[#hints + 1] = string.format("Buy %s now → unlocks %s next ante", pair.base_name, pair.up_name)
+    elseif shop_keys[pair.upgrade] and owned[pair.base] then
+      hints[#hints + 1] = string.format("CHAIN UPGRADE: you own %s, buy %s", pair.base_name, pair.up_name)
+    end
+  end
+  if #hints == 0 then return "" end
+  return once_per_state_entry_hint("voucher_chain",
+    "VOUCHER CHAINS: " .. table.concat(hints, "; ") .. ". ")
+end
+
+local function shop_money_projection()
+  if not (G and G.GAME) then return "" end
+  local m = (G.GAME.dollars or 0) - (G.GAME.bankrupt_at or 0)
+  local no_int = G.GAME.modifiers and G.GAME.modifiers.no_interest
+  local amt = G.GAME.interest_amount or 1
+  local cap = G.GAME.interest_cap or 25
+  local blind_reward = (G.GAME.blind and G.GAME.blind.dollars) or 3
+  local function int_for(x)
+    if no_int then return 0 end
+    return amt * math.min(math.floor(x / 5), math.floor(cap / 5))
+  end
+  local cur_int = int_for(m)
+  local after_r1 = m + blind_reward + cur_int
+  local int_r2 = int_for(after_r1)
+  return once_per_state_entry_hint("money_proj", string.format(
+    "MONEY PROJECTION (if $0 spent): blind reward +$%d, interest +$%d → $%d after round. Next round interest: +$%d. Each $5 saved = +$%d/rd interest (cap $%d). ",
+    blind_reward, cur_int, after_r1, int_r2, amt, cap))
+end
+
 local function failed_action_warning()
-  if not (G and G.NEURO_LAST_FAILED_ACTION) then return "" end
-  return "Your last action (" .. G.NEURO_LAST_FAILED_ACTION .. ") FAILED. Do NOT repeat it — choose a different action. "
+  if not (G and G.NEURO.last_failed_action) then return "" end
+  return "Your last action (" .. G.NEURO.last_failed_action .. ") FAILED. Do NOT repeat it — choose a different action. "
 end
 
 local function send_result(bridge, id, ok, message, name)
@@ -319,9 +468,9 @@ local function send_result(bridge, id, ok, message, name)
   end
   if ok then
     push_recent_action(name)
-    if G then G.NEURO_LAST_FAILED_ACTION = nil end
+    if G then G.NEURO.last_failed_action = nil end
   elseif G and name then
-    G.NEURO_LAST_FAILED_ACTION = name
+    G.NEURO.last_failed_action = name
   end
   if is_forced_action(name) then
     if ok then
@@ -329,15 +478,15 @@ local function send_result(bridge, id, ok, message, name)
         local State = require("state")
         local cur = State.get_state_name()
         if cur == "SPLASH" or cur == "MENU" or cur == "RUN_SETUP" then
-          G.NEURO_IN_RUN_SETUP = true
+          G.NEURO.in_run_setup = true
         else
-          G.NEURO_IN_RUN_SETUP = nil
+          G.NEURO.in_run_setup = nil
         end
       end
     else
-      G.NEURO_LAST_FORCE_FINGERPRINT = nil
-      G.NEURO_FORCE_DIRTY = true
-      G.NEURO_FORCE_DIRTY_AT = (G and G.TIMERS and G.TIMERS.REAL) or os.clock()
+      G.NEURO.last_force_fingerprint = nil
+      G.NEURO.force_dirty = true
+      G.NEURO.force_dirty_at = (G and G.TIMERS and G.TIMERS.REAL) or os.clock()
     end
     clear_force_inflight()
   end
@@ -535,7 +684,7 @@ local function add_area_highlight(area, card)
   end
   area.highlighted = area.highlighted or {}
   card.highlighted = true
-  if G and G.NEURO_AI_HIGHLIGHTED then G.NEURO_AI_HIGHLIGHTED[card] = true end
+  if G and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
   table.insert(area.highlighted, card)
   return true
 end
@@ -961,7 +1110,7 @@ local function handle_use_card(data)
 
   local function queue_pick_showcase(tag, shown_cost, extra)
     if not G then return end
-    local q = G.NEURO_PURCHASE_SHOWCASE_QUEUE
+    local q = G.NEURO.purchase_showcase_queue
     if type(q) ~= "table" then q = {} end
 
     local desc = Utils.card_description(card)
@@ -984,7 +1133,7 @@ local function handle_use_card(data)
     while #q > 2 do
       table.remove(q, 1)
     end
-    G.NEURO_PURCHASE_SHOWCASE_QUEUE = q
+    G.NEURO.purchase_showcase_queue = q
   end
 
   local is_playing_card = card.base ~= nil and card.base.suit ~= nil
@@ -1019,7 +1168,7 @@ local function handle_use_card(data)
       -- Glow + highlight the chosen card so the AI overlay fires
       pcall(function()
         card.highlighted = true
-        if G and G.NEURO_AI_HIGHLIGHTED then G.NEURO_AI_HIGHLIGHTED[card] = true end
+        if G and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
       end)
       -- Hover animation immediately
       if NeuroAnim and NeuroAnim.hover_pack_card then
@@ -1030,7 +1179,7 @@ local function handle_use_card(data)
       local pack_pick_block = dotenv.num("NEURO_PACK_PICK_BLOCK", 3.0)
       local pack_pick_delay = dotenv.num("NEURO_PACK_PICK_DELAY", 2.2)
       local t = (G.TIMERS and G.TIMERS.REAL) or os.clock()
-      G.NEURO_LAST_ACTION_AT = t + pack_pick_block
+      G.NEURO.last_action_at = t + pack_pick_block
 
       if G.E_MANAGER and Event then
         local fn = G.FUNCS and G.FUNCS.use_card
@@ -1060,10 +1209,10 @@ local function handle_use_card(data)
         end
       end
 
-      G.NEURO_PACK_BEST = nil
+      G.NEURO.pack_best = nil
       -- Signal the winner index so the live pack_browse panel flips to winner mode immediately.
       if pack_snapshot and pack_snapshot.selected_index then
-        G.NEURO_PACK_WINNER_INDEX = pack_snapshot.selected_index
+        G.NEURO.pack_winner_index = pack_snapshot.selected_index
       end
       if pack_snapshot and pack_snapshot.options and #pack_snapshot.options >= 2 then
         queue_pick_showcase("booster_choice", 0, pack_snapshot)
@@ -1092,7 +1241,7 @@ local function handle_buy_from_shop(data)
   local card_name = safe_name(card) or "Unknown"
   local cost = card.cost or 0
   local dollars = G.GAME and G.GAME.dollars or 0
-  local reserved = tonumber(G.NEURO_RESERVED_DOLLARS or 0) or 0
+  local reserved = tonumber(G.NEURO.reserved_dollars or 0) or 0
   local available = (tonumber(dollars) or 0) - reserved
   if cost > available then
     if reserved > 0 then
@@ -1116,7 +1265,7 @@ local function handle_buy_from_shop(data)
 
   local function queue_purchase_showcase()
     if not G then return end
-    local q = G.NEURO_PURCHASE_SHOWCASE_QUEUE
+    local q = G.NEURO.purchase_showcase_queue
     if type(q) ~= "table" then q = {} end
 
     local desc = Utils.card_description(card)
@@ -1136,22 +1285,22 @@ local function handle_buy_from_shop(data)
     while #q > 2 do
       table.remove(q, 1)
     end
-    G.NEURO_PURCHASE_SHOWCASE_QUEUE = q
+    G.NEURO.purchase_showcase_queue = q
   end
 
   -- Reserve the cost now so concurrent purchases see reduced available budget
-  G.NEURO_RESERVED_DOLLARS = (tonumber(G.NEURO_RESERVED_DOLLARS or 0) or 0) + cost
+  G.NEURO.reserved_dollars = (tonumber(G.NEURO.reserved_dollars or 0) or 0) + cost
 
   return function()
     -- Glow + highlight the card so the AI overlay fires
     pcall(function()
       card.highlighted = true
-      if G and G.NEURO_AI_HIGHLIGHTED then G.NEURO_AI_HIGHLIGHTED[card] = true end
+      if G and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
     end)
     local shop_buy_block = dotenv.num("NEURO_SHOP_BUY_BLOCK", 2.2)
     local shop_buy_delay = dotenv.num("NEURO_SHOP_BUY_DELAY", 2.2)
     local t = (G and G.TIMERS and G.TIMERS.REAL) or os.clock()
-    G.NEURO_LAST_ACTION_AT = t + shop_buy_block
+    G.NEURO.last_action_at = t + shop_buy_block
     queue_purchase_showcase()  -- show panel immediately
     if G and G.E_MANAGER and Event then
       G.E_MANAGER:add_event(Event({
@@ -1162,7 +1311,7 @@ local function handle_buy_from_shop(data)
           pcall(function()
             card.highlighted = false
             -- NEURO_AI_HIGHLIGHTED auto-clears when highlighted=false; glow fades naturally
-            G.NEURO_RESERVED_DOLLARS = math.max(0, (tonumber(G.NEURO_RESERVED_DOLLARS or 0) or 0) - cost)
+            G.NEURO.reserved_dollars = math.max(0, (tonumber(G.NEURO.reserved_dollars or 0) or 0) - cost)
             local cur_dollars = G.GAME and G.GAME.dollars or 0
             if cost > cur_dollars then return end  -- money changed during highlight window, abort
             local fn = G.FUNCS and G.FUNCS.buy_from_shop
@@ -1173,7 +1322,7 @@ local function handle_buy_from_shop(data)
         end,
       }))
     else
-      G.NEURO_RESERVED_DOLLARS = math.max(0, (tonumber(G.NEURO_RESERVED_DOLLARS or 0) or 0) - cost)
+      G.NEURO.reserved_dollars = math.max(0, (tonumber(G.NEURO.reserved_dollars or 0) or 0) - cost)
       local cur_dollars = G.GAME and G.GAME.dollars or 0
       if cost <= cur_dollars then
         local fn = G.FUNCS and G.FUNCS.buy_from_shop
@@ -1422,7 +1571,7 @@ local function handle_change_selected_back(data)
         end
       end
     end)
-    G.NEURO_DECK_CHOSEN = true
+    G.NEURO.deck_chosen = true
     return "Deck changed to " .. target_name
   end
 end
@@ -1900,7 +2049,7 @@ local function handle_paste_seed(data)
     if G then
       G.run_setup_seed = true
       G.setup_seed = seed_val
-      G.NEURO_SEED_PASTED = seed_val
+      G.NEURO.seed_pasted = seed_val
       G.CLIPBOARD = seed_val
     end
     if love and love.system and love.system.setClipboardText then
@@ -1985,8 +2134,8 @@ local PARAM_VALIDATORS = {
     return function()
       if G then
         local display_name = persona == "evil" and "Evil Neuro" or "Neuro-sama"
-        G.NEURO_PERSONA = persona
-        G.NEURO_LOGIN_ANIM = {
+        G.NEURO.persona = persona
+        G.NEURO.login_anim = {
           start = (G.TIMERS and G.TIMERS.REAL) or love.timer.getTime(),
           name = display_name,
           palette_ready = false,
@@ -2107,7 +2256,7 @@ local PARAM_VALIDATORS = {
   end,
   setup_run = function(data)
     return function()
-      G.NEURO_DECK_CHOSEN = false  -- reset for fresh overlay session
+      G.NEURO.deck_chosen = false  -- reset for fresh overlay session
       local fn = G.FUNCS and G.FUNCS.setup_run
       if fn then
         -- Patch can_continue to false so Balatro always opens the 'New Run'
@@ -2168,7 +2317,7 @@ end
 local function handle_simple_action(name, data)
 
 local State = require("state")
-local current_state = State.get_state_name and State.get_state_name() or (G and G.NEURO_STATE) or "UNKNOWN"
+local current_state = State.get_state_name and State.get_state_name() or (G and G.NEURO.state) or "UNKNOWN"
 
 if name == "start_setup_run" then
   if not is_run_setup_overlay() then
@@ -2253,7 +2402,7 @@ end
       love.system.setClipboardText(seed_val)
     end
     G.CLIPBOARD = seed_val
-    G.NEURO_SEED_PASTED = seed_val
+    G.NEURO.seed_pasted = seed_val
   end
 
   local fn = G.FUNCS and G.FUNCS[name]
@@ -2323,8 +2472,8 @@ function Dispatcher.handle_message(msg, bridge)
   end
 
   if G then
-    G.NEURO_ACTION_PHASE = "validating"
-    G.NEURO_ACTION_PHASE_AT = (G.TIMERS and G.TIMERS.REAL) or (love and love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
+    G.NEURO.action_phase = "validating"
+    G.NEURO.action_phase_at = (G.TIMERS and G.TIMERS.REAL) or (love and love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
   end
 
   local ok_guard_call, ok_guard, guard_err = pcall(Enforce.pre_action, bridge, name)
@@ -2388,8 +2537,8 @@ function Dispatcher.handle_message(msg, bridge)
   send_result(bridge, id, true, nil, name)
 
   if G then
-    G.NEURO_ACTION_PHASE = "executing"
-    G.NEURO_ACTION_PHASE_AT = (G.TIMERS and G.TIMERS.REAL) or (love and love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
+    G.NEURO.action_phase = "executing"
+    G.NEURO.action_phase_at = (G.TIMERS and G.TIMERS.REAL) or (love and love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
   end
   local exec_ok, exec_result = xpcall(exec, function(err)
     return tostring(err)
@@ -2404,51 +2553,51 @@ function Dispatcher.handle_message(msg, bridge)
     bridge:send_context(exec_result, true)
   end
   Enforce.post_action(bridge, true)
-  G.NEURO_LAST_ACTION_NAME = name
+  G.NEURO.last_action_name = name
   if name == "exit_overlay_menu" then
-    G.NEURO_LAST_FORCE_FINGERPRINT = nil
+    G.NEURO.last_force_fingerprint = nil
   end
-  local current_state = G.NEURO_STATE or ""
+  local current_state = G.NEURO.state or ""
   if current_state == "SHOP" then
     if name == "reroll_shop" then
-      G.NEURO_SHOP_REROLL_COUNT = (G.NEURO_SHOP_REROLL_COUNT or 0) + 1
+      G.NEURO.shop_reroll_count = (G.NEURO.shop_reroll_count or 0) + 1
     elseif name == "toggle_shop" then
-      G.NEURO_SHOP_REROLL_COUNT = nil
+      G.NEURO.shop_reroll_count = nil
     end
   end
   if current_state == "BLIND_SELECT" and name == "blind_info" then
-    G.NEURO_BLIND_INFO_SEEN = true
+    G.NEURO.blind_info_seen = true
   elseif current_state ~= "BLIND_SELECT" then
-    G.NEURO_BLIND_INFO_SEEN = nil
-    G.NEURO_BLIND_INFO_SIG = nil
+    G.NEURO.blind_info_seen = nil
+    G.NEURO.blind_info_sig = nil
   end
-  G.NEURO_FORCE_DIRTY = true
+  G.NEURO.force_dirty = true
   if G.TIMERS and G.TIMERS.REAL then
-    G.NEURO_FORCE_DIRTY_AT = G.TIMERS.REAL
+    G.NEURO.force_dirty_at = G.TIMERS.REAL
   elseif love and love.timer then
-    G.NEURO_FORCE_DIRTY_AT = love.timer.getTime()
+    G.NEURO.force_dirty_at = love.timer.getTime()
   else
-    G.NEURO_FORCE_DIRTY_AT = os.clock()
+    G.NEURO.force_dirty_at = os.clock()
   end
   local setup_states = { MENU = true, RUN_SETUP = true, SPLASH = true }
   if setup_states[current_state] then
-    G.NEURO_REFORCE_COUNT = (G.NEURO_REFORCE_COUNT or 0) + 1
-    if G.NEURO_REFORCE_COUNT <= 5 then
-      G.NEURO_FORCE_INFLIGHT = false
-      G.NEURO_FORCE_STATE = nil
-      G.NEURO_FORCE_ACTIONS = nil
-      G.NEURO_FORCE_ACTION_SET = nil
-      G.NEURO_FORCE_SENT_AT = nil
+    G.NEURO.reforce_count = (G.NEURO.reforce_count or 0) + 1
+    if G.NEURO.reforce_count <= 5 then
+      G.NEURO.force_inflight = false
+      G.NEURO.force_state = nil
+      G.NEURO.force_actions = nil
+      G.NEURO.force_action_set = nil
+      G.NEURO.force_sent_at = nil
     end
   else
-    G.NEURO_REFORCE_COUNT = 0
+    G.NEURO.reforce_count = 0
   end
   if G.TIMERS and G.TIMERS.REAL then
-    G.NEURO_LAST_ACTION_AT = G.TIMERS.REAL
+    G.NEURO.last_action_at = G.TIMERS.REAL
   elseif love and love.timer then
-    G.NEURO_LAST_ACTION_AT = love.timer.getTime()
+    G.NEURO.last_action_at = love.timer.getTime()
   else
-    G.NEURO_LAST_ACTION_AT = os.clock()
+    G.NEURO.last_action_at = os.clock()
   end
 end
 
@@ -2563,17 +2712,17 @@ local function get_game_rules(state_name)
   if not RULE_QUERY_STATES[state_name] and not (state_name and state_name:find("_PACK$")) then
     return ""
   end
-  if G and G.NEURO_RULES_SENT then
+  if G and G.NEURO.rules_sent then
     return ""
   end
   if G then
-    G.NEURO_RULES_SENT = true
+    G.NEURO.rules_sent = true
   end
   return build_game_rules_text()
 end
 
 local function hiyori_persona_gate()
-  if G and G.NEURO_PERSONA == "hiyori" then
+  if G and G.NEURO.persona == "hiyori" then
     return {
       query = "Identity not selected. Use choose_persona with persona='neuro' for Neuro-sama or 'evil' for Evil Neuro.",
       actions = { "choose_persona" }
@@ -2618,7 +2767,7 @@ local function seed_info_query()
   local query = ""
   local seed = G and G.GAME and G.GAME.pseudorandom and G.GAME.pseudorandom.seed
   local seeded = G and G.GAME and G.GAME.seeded
-  local seed_pasted = G.NEURO_SEED_PASTED
+  local seed_pasted = G.NEURO.seed_pasted
   if seed then query = query .. string.format("Current seed: %s. ", seed) end
   if seeded then query = query .. "Seeded run: ON. " end
   return query, seeded, seed_pasted
@@ -2713,14 +2862,18 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
 
   local mode = "NORMAL"
   local hunt_cutoff = (target > 0) and math.max(160, math.floor(target * 0.55)) or 200
-  if hands_left <= 1 and disc > 0 and remaining > 0 then
+  if hands_left <= 0 then
+    mode = "DESPERATE"
+  elseif hands_left <= 1 and disc > 0 and remaining > 0 then
     mode = "CLUTCH"
   elseif disc > 0 and hands_left > 1 and remaining > hunt_cutoff then
     mode = "HUNT"
   end
 
   local mode_hint = "NORMAL: standard play. "
-  if mode == "CLUTCH" then
+  if mode == "DESPERATE" then
+    mode_hint = "DESPERATE: no hands left, blind is lost. Use remaining discards to cycle cards for future rounds, or take no action. Do NOT play cards. "
+  elseif mode == "CLUTCH" then
     mode_hint = "CLUTCH: last hand remaining, high stakes. "
   elseif mode == "HUNT" then
     mode_hint = "HUNT: large gap to target, hand may not be strong enough. "
@@ -2728,17 +2881,19 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
 
   local structure = hand_structure_summary()
   local debuff_summary = active_blind_debuff_summary()
+  local blind_hint = blind_strategy_hint()
+  local bp_chain = blueprint_chain_hint()
   local token_legend = once_per_state_entry_hint(
     "selecting_tokens",
     "Tokens: WIN=remaining/best/clear; SIM1/SIM2=lines(idx~hand~score); SIMD=discard bias(Y-WEAK/N-OK); Q=quality(WIN/GOOD/WEAK/POOR); DR=discard/keep anchors; BD=debuff; +DB=debuffed card. "
   )
   local recent = recent_actions_summary(4)
 
-  local dr = G and G.NEURO_DR_TOP
+  local dr = G and G.NEURO.dr_top
   local dr_discard_str = dr and #dr.discard > 0 and table.concat(dr.discard, ",") or nil
   local dr_keep_str = dr and #dr.keep > 0 and table.concat(dr.keep, ",") or nil
 
-  local sim1 = G and G.NEURO_SIM1_PLAY
+  local sim1 = G and G.NEURO.sim1_play
   local sim1_str = sim1 and #sim1.indices > 0 and table.concat(sim1.indices, ",") or nil
   local sim1_hand = sim1 and sim1.hand_type or nil
 
@@ -2769,18 +2924,7 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
       if mh then
         local highlighted_count = G.hand and G.hand.highlighted and #G.hand.highlighted or 0
         local min_h = c.ability.consumeable.min_highlighted or 1
-        local target_advice = ""
-        if nm == "The Twins" or nm == "The Bit" then
-          if deck_name == "Twin deck" then
-            target_advice = "Pick your 2 best Kings (your most common card). Twin-enhanced Kings give +15 chips +2 mult each, stacking with your King pairs/trips. "
-          elseif deck_name == "Euchre deck" then
-            target_advice = "Pick your 2 best Jacks (most common card in Euchre). "
-          elseif deck_name == "Checkered Deck" then
-            target_advice = "Pick 2 high-value cards of the same suit to strengthen your flush plays. "
-          else
-            target_advice = "Pick your 2 highest-value cards that you play most often. Enhanced cards give +15 chips +2 mult when scored. "
-          end
-        end
+        local target_advice = tarot_target_advice(nm, deck_name)
         consumable_hint = consumable_hint .. string.format(
           "CONSUMABLE slot %d: '%s' (select %d-%d hand cards). %sUSE NOW: use_card|{\"area\":\"consumeables\",\"index\":%d,\"hand_indices\":[i,j]} where i,j are 1-indexed hand card positions. ",
           i, nm, min_h, mh, target_advice, i
@@ -2791,6 +2935,31 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
           "Consumable slot %d: '%s' (planet card, levels up a hand type). Use: use_card|{\"area\":\"consumeables\",\"index\":%d}. ",
           i, nm, i
         )
+        has_usable_consumable = true
+      elseif nm == "The Fool" or nm == "Temperance" or nm == "The Hermit"
+          or nm == "The High Priestess" or nm == "The Emperor"
+          or nm == "The Wheel of Fortune" or nm == "Judgement"
+          or nm == "Wraith" or nm == "Sigil" or nm == "Ouija"
+          or nm == "Ectoplasm" or nm == "Immolate" or nm == "Ankh" or nm == "Hex" then
+        local direct_hints = {
+          ["The Fool"]             = "Copies the last tarot/planet used. No card selection needed. ",
+          ["Temperance"]           = "Gives money = total sell value of all jokers. No card selection needed. ",
+          ["The Hermit"]           = "Doubles your current money (up to $20). No card selection needed. ",
+          ["The High Priestess"]   = "Adds 2 random planet cards to hand. No card selection needed. ",
+          ["The Emperor"]          = "Adds 2 random tarot cards to hand. No card selection needed. ",
+          ["The Wheel of Fortune"] = "1-in-4 chance to add foil/holo/polychrome to random joker. No card selection needed. ",
+          ["Judgement"]            = "Creates a random joker. No card selection needed (requires free joker slot). ",
+          ["Wraith"]               = "Creates a random Rare joker but sets your money to $0. Only use if you can afford losing all cash. ",
+          ["Sigil"]                = "Converts ALL cards in hand to the same random suit. No card selection needed. ",
+          ["Ouija"]                = "Converts ALL cards in hand to the same random rank, permanently -1 hand size. High risk — only use if hand size is expendable. ",
+          ["Ectoplasm"]            = "Adds Negative edition to a random joker (no cost joker slot), permanently -1 hand size. Only use if hand size is expendable. ",
+          ["Immolate"]             = "Destroys 5 random cards in hand, gives +$20. Use to thin weak cards from deck while gaining money. ",
+          ["Ankh"]                 = "Copies one random joker and DESTROYS all other jokers. Extremely risky — only use if you have 1-2 jokers or one is clearly best. ",
+          ["Hex"]                  = "Adds Polychrome to a random joker (x1.5 mult), DESTROYS all other jokers. Extremely risky — only use if you have 1 joker. ",
+        }
+        consumable_hint = consumable_hint .. string.format(
+          "CONSUMABLE slot %d: '%s'. %sUSE: use_card|{\"area\":\"consumeables\",\"index\":%d}. ",
+          i, nm, direct_hints[nm] or "Use directly. ", i)
         has_usable_consumable = true
       end
     end
@@ -2824,6 +2993,8 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
   local query = rules .. "State: SELECTING_HAND. "
     .. "MODE: " .. mode .. ". "
     .. mode_hint
+    .. blind_hint
+    .. bp_chain
     .. "(Score/target/hands/discards in B+WIN lines.) "
     .. structure
     .. deck_strategy
@@ -2894,7 +3065,7 @@ FORCE_HANDLERS["SHOP"] = function(rules)
   local early_shop = ante > 0 and ante <= 2
   local shop_snap = shop_affordable_snapshot()
   local reroll_cost = G.GAME and G.GAME.current_round and G.GAME.current_round.reroll_cost or 5
-  local reroll_count = math.max(0, math.floor((G and G.NEURO_SHOP_REROLL_COUNT) or 0))
+  local reroll_count = math.max(0, math.floor((G and G.NEURO.shop_reroll_count) or 0))
   local can_reroll = (type(reroll_cost) == "number" and reroll_cost > 0 and money >= reroll_cost)
   local affordable_count = 0
   local affordable_jokers = 0
@@ -3061,6 +3232,8 @@ FORCE_HANDLERS["SHOP"] = function(rules)
     end
   end
   local deck_shop_hint = once_per_state_entry_hint("shop_deck", deck_strategy_info())
+  local money_proj = shop_money_projection()
+  local voucher_chains = voucher_chain_hint()
   local recent = recent_actions_summary(5)
 
   local query = rules .. "State: SHOP. "
@@ -3071,6 +3244,8 @@ FORCE_HANDLERS["SHOP"] = function(rules)
     .. shop_strategy
     .. shop_heuristics
     .. deck_shop_hint
+    .. money_proj
+    .. voucher_chains
     .. joker_slot_warn
     .. joker_order_hint
     .. "Buy payload must use area exactly one of: shop_jokers, shop_vouchers, shop_booster and index from current items. "
@@ -3106,13 +3281,13 @@ FORCE_HANDLERS["BLIND_SELECT"] = function(rules)
 
   local blind_sig = blind_select_signature()
   if G then
-    if G.NEURO_BLIND_INFO_SIG ~= blind_sig then
-      G.NEURO_BLIND_INFO_SIG = blind_sig
-      G.NEURO_BLIND_INFO_SEEN = false
+    if G.NEURO.blind_info_sig ~= blind_sig then
+      G.NEURO.blind_info_sig = blind_sig
+      G.NEURO.blind_info_seen = false
     end
   end
 
-  local info_seen = (G and G.NEURO_BLIND_INFO_SEEN) and true or false
+  local info_seen = (G and G.NEURO.blind_info_seen) and true or false
 
   local can_select = Actions.is_action_valid("select_blind")
   local can_skip = Actions.is_action_valid("skip_blind")
@@ -3217,7 +3392,7 @@ local function force_pack(rules, state_name)
   if picks_left <= 0 then
     actions[#actions + 1] = "skip_booster"
   end
-  local pack_best = G and G.NEURO_PACK_BEST
+  local pack_best = G and G.NEURO.pack_best
   local pick_hint = ""
   if pack_best then
     pick_hint = "Best card is index " .. pack_best.index .. " (rank " .. pack_best.rank .. "). Pick it. "
@@ -3303,7 +3478,7 @@ function Dispatcher.get_force_for_state(state_name)
   -- Must be checked before the generic exit_overlay_menu intercept.
   if is_run_setup_overlay() then
     local deck_list = list_unlocked_decks()
-    local must_pick = deck_list ~= "" and not G.NEURO_DECK_CHOSEN
+    local must_pick = deck_list ~= "" and not G.NEURO.deck_chosen
     local query = "Run setup screen is open. "
     if must_pick then
       query = query .. "Pick a deck — try something different for variety! Available: " .. deck_list .. ". Use change_selected_back with a key from this list. "

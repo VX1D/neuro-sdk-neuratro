@@ -23,6 +23,19 @@ local NeuroBridge = require "bridge"
 local NeuroActions = require "actions"
 local NeuroState = require "state"
 local NeuroDispatcher = require "dispatcher"
+
+G.NEURO = G.NEURO or {}
+G.NEURO.test_actions = NeuroActions
+G.NEURO.test_dispatcher = NeuroDispatcher
+
+local _neuro_autotest = false
+do
+  local cli = rawget(_G, "arg") or {}
+  for _, v in ipairs(cli) do
+    if v == "--test" then _neuro_autotest = true break end
+  end
+end
+
 local NeuroFilter = require "filtered"
 local ContextCompact = require "context_compact"
 local Staging = require "staging"
@@ -239,8 +252,8 @@ local STATE_ENTRY_COOLDOWN = {
 
 local function mark_force_dirty()
   if not G then return end
-  G.NEURO_FORCE_DIRTY = true
-  G.NEURO_FORCE_DIRTY_AT = neuro_now()
+  G.NEURO.force_dirty = true
+  G.NEURO.force_dirty_at = neuro_now()
 end
 
 local function neuro_can_act()
@@ -250,12 +263,12 @@ local function neuro_can_act()
     return false
   end
   -- Per-state entry cooldown (e.g. ROUND_EVAL viewer pause, SHOP item load)
-  local state_name = G.NEURO_STATE or ""
+  local state_name = G.NEURO.state or ""
   local entry_cd = STATE_ENTRY_COOLDOWN[state_name]
   if entry_cd and (now - neuro_state_changed_at) < entry_cd then
     return false
   end
-  if G.NEURO_LAST_ACTION_AT and (now - G.NEURO_LAST_ACTION_AT) < NEURO_ACTION_COOLDOWN then
+  if G.NEURO.last_action_at and (now - G.NEURO.last_action_at) < NEURO_ACTION_COOLDOWN then
     return false
   end
   return true
@@ -265,11 +278,11 @@ local function clear_force_state()
   if not G then
     return
   end
-  G.NEURO_FORCE_INFLIGHT = false
-  G.NEURO_FORCE_STATE = nil
-  G.NEURO_FORCE_ACTIONS = nil
-  G.NEURO_FORCE_ACTION_SET = nil
-  G.NEURO_FORCE_SENT_AT = nil
+  G.NEURO.force_inflight = false
+  G.NEURO.force_state = nil
+  G.NEURO.force_actions = nil
+  G.NEURO.force_action_set = nil
+  G.NEURO.force_sent_at = nil
 end
 
 local function build_force_fingerprint(state_name, force, context_payload)
@@ -427,7 +440,7 @@ local PALETTES = {
 }
 
 local function pal()
-  local p = (G and G.NEURO_PERSONA) or NEURO_PERSONA
+  local p = (G and G.NEURO.persona) or NEURO_PERSONA
   return PALETTES[p] or PALETTES.neuro
 end
 
@@ -685,7 +698,7 @@ local GAME_OVER_MESSAGES = {
 }
 
 local function get_game_over_messages()
-  local pk = (G and G.NEURO_PERSONA) or NEURO_PERSONA
+  local pk = (G and G.NEURO.persona) or NEURO_PERSONA
   if pk ~= "evil" and pk ~= "neuro" then
     pk = "neuro"
   end
@@ -695,7 +708,7 @@ end
 local _neuro_card_draw_hooked = false
 local _card_glow_fade = setmetatable({}, {__mode = "k"})
 if not G then G = {} end
-G.NEURO_AI_HIGHLIGHTED = G.NEURO_AI_HIGHLIGHTED or setmetatable({}, {__mode = "k"})
+G.NEURO.ai_highlighted = G.NEURO.ai_highlighted or setmetatable({}, {__mode = "k"})
 
 local ENABLE_AI_CARD_GLOW = true
 do
@@ -728,12 +741,12 @@ local function hook_card_draw()
     local now = (G.TIMERS and G.TIMERS.REAL) or 0
     local alpha = 0
 
-    local ai_hl = G.NEURO_AI_HIGHLIGHTED and G.NEURO_AI_HIGHLIGHTED[self]
+    local ai_hl = G.NEURO.ai_highlighted and G.NEURO.ai_highlighted[self]
     if ai_hl and self.highlighted then
       alpha = 1.0
       _card_glow_fade[self] = now + 0.6
     elseif ai_hl and not self.highlighted then
-      G.NEURO_AI_HIGHLIGHTED[self] = nil
+      G.NEURO.ai_highlighted[self] = nil
       local fade_until = _card_glow_fade[self]
       if fade_until and now < fade_until then
         alpha = math.min(1, (fade_until - now) / 0.6)
@@ -875,7 +888,7 @@ local function queue_card_showcase(tag, card, shown_cost, now)
     return
   end
 
-  local q = G.NEURO_PURCHASE_SHOWCASE_QUEUE
+  local q = G.NEURO.purchase_showcase_queue
   if type(q) ~= "table" then q = {} end
 
   for i = 1, #q do
@@ -902,16 +915,16 @@ local function queue_card_showcase(tag, card, shown_cost, now)
   while #q > 2 do
     table.remove(q, 1)
   end
-  G.NEURO_PURCHASE_SHOWCASE_QUEUE = q
+  G.NEURO.purchase_showcase_queue = q
 end
 
 local function pull_buy_showcase(now)
   if not G then return end
   if _buy_showcase then return end
-  local q = G.NEURO_PURCHASE_SHOWCASE_QUEUE
+  local q = G.NEURO.purchase_showcase_queue
   if type(q) ~= "table" or #q == 0 then return end
   local item = table.remove(q, 1)
-  G.NEURO_PURCHASE_SHOWCASE_QUEUE = q
+  G.NEURO.purchase_showcase_queue = q
   if type(item) ~= "table" then return end
   _buy_showcase = {
     card = item.card,
@@ -931,15 +944,15 @@ local function update_buy_showcase(now)
   if not _buy_showcase then return end
 
   -- Inject winner immediately when the pick action fires during pack_browse display.
-  -- dispatcher.lua sets G.NEURO_PACK_WINNER_INDEX when a pack card is chosen.
-  if _buy_showcase.area == "pack_browse" and G and G.NEURO_PACK_WINNER_INDEX then
-    local wi = tonumber(G.NEURO_PACK_WINNER_INDEX)
+  -- dispatcher.lua sets G.NEURO.pack_winner_index when a pack card is chosen.
+  if _buy_showcase.area == "pack_browse" and G and G.NEURO.pack_winner_index then
+    local wi = tonumber(G.NEURO.pack_winner_index)
     if wi and wi >= 1 then
       _buy_showcase.selected_index = wi
       _buy_showcase.area           = "booster_choice"  -- flip to winner mode immediately
-      G.NEURO_PACK_WINNER_INDEX    = nil
+      G.NEURO.pack_winner_index    = nil
       -- Dequeue any redundant booster_choice items that would double-play the animation
-      local q = G.NEURO_PURCHASE_SHOWCASE_QUEUE
+      local q = G.NEURO.purchase_showcase_queue
       if type(q) == "table" then
         for i = #q, 1, -1 do
           if type(q[i]) == "table" and q[i].area == "booster_choice" then
@@ -955,7 +968,7 @@ local function update_buy_showcase(now)
   local can_expire = winner_done
     or (not _buy_showcase.winner_at and elapsed >= BUY_SHOWCASE_DURATION)
   if can_expire then
-    if G then G.NEURO_PACK_WINNER_INDEX = nil end  -- ensure cleaned up on expiry too
+    if G then G.NEURO.pack_winner_index = nil end  -- ensure cleaned up on expiry too
     _buy_showcase = nil
     pull_buy_showcase(now)
   end
@@ -964,7 +977,7 @@ end
 local function auto_queue_pack_browse(now)
   do return end  -- pack_browse popup disabled; winner animation handles the reveal
   if not G then return end  -- luacheck: ignore
-  local sn = G.NEURO_STATE or ""
+  local sn = G.NEURO.state or ""
   if not sn:find("_PACK") and sn ~= "SMODS_BOOSTER_OPENED" then
     _pack_browse_queued_for = nil
     return
@@ -992,7 +1005,7 @@ local function auto_queue_pack_browse(now)
   end
 
   local picks = tonumber(G.GAME and G.GAME.pack_choices or 0) or 0
-  local q = G.NEURO_PURCHASE_SHOWCASE_QUEUE
+  local q = G.NEURO.purchase_showcase_queue
   if type(q) ~= "table" then q = {} end
   q[#q + 1] = {
     card = _bp.cards[1],
@@ -1006,7 +1019,7 @@ local function auto_queue_pack_browse(now)
     picks_left = picks,
   }
   while #q > 6 do table.remove(q, 1) end
-  G.NEURO_PURCHASE_SHOWCASE_QUEUE = q
+  G.NEURO.purchase_showcase_queue = q
 end
 
 local function update_joker_showcase(now)
@@ -1083,7 +1096,7 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     hdr(MONEY, string.format("$%d", money))
     row(CYAN, string.format("Ante %s  Round %s", tostring(ante), tostring(round)))
     local seed = G.GAME.pseudorandom and G.GAME.pseudorandom.seed
-    if not seed and G.NEURO_SEED_PASTED then seed = G.NEURO_SEED_PASTED end
+    if not seed and G.NEURO.seed_pasted then seed = G.NEURO.seed_pasted end
     if seed then
       row(DIM, "Seed: " .. tostring(seed))
     end
@@ -1289,13 +1302,13 @@ local function draw_neuro_indicator()
     trace("IND: G.NEURO block entered")
     local logo = get_neuro_logo()
     trace("IND: logo=" .. tostring(logo ~= nil))
-    local state_name = G.NEURO_FORCE_STATE or G.NEURO_STATE or ""
+    local state_name = G.NEURO.force_state or G.NEURO.state or ""
     trace("IND: state=" .. tostring(state_name))
     local _pal = pal()
     local persona_name = _pal.NAME
     trace("IND: persona=" .. tostring(persona_name))
     local state_label
-    if G.NEURO_FORCE_INFLIGHT or Staging.is_busy() then
+    if G.NEURO.force_inflight or Staging.is_busy() then
       state_label = STATE_LABELS[state_name] or "THINKING"
     else
       state_label = STATE_LABELS[state_name] or "IDLE"
@@ -1511,7 +1524,7 @@ local function draw_neuro_indicator()
     trace("IND: logo dims done, building panel_rows")
 
     local panel_rows = {}
-    local sn = G.NEURO_STATE or ""
+    local sn = G.NEURO.state or ""
 
     trunc = function(s, max_w, f)
       if not s then return "" end
@@ -1628,7 +1641,7 @@ local function draw_neuro_indicator()
       for _, r in ipairs(panel_rows) do data_h = data_h + row_h(r) end
     end
 
-    local pk = G.NEURO_PERSONA or NEURO_PERSONA
+    local pk = G.NEURO.persona or NEURO_PERSONA
     local quips = PANEL_QUIPS[pk] or PANEL_QUIPS.neuro
     local quip = quips[1]
     local quip_display = ""
@@ -2016,7 +2029,7 @@ local function draw_neuro_indicator()
     local any_highlighted = false
     if pack_has_cards then
       for _, cd in ipairs(pack_rows.cards) do
-        if G.NEURO_AI_HIGHLIGHTED and G.NEURO_AI_HIGHLIGHTED[cd.card] then
+        if G.NEURO.ai_highlighted and G.NEURO.ai_highlighted[cd.card] then
           any_highlighted = true
           break
         end
@@ -2043,7 +2056,7 @@ local function draw_neuro_indicator()
       local display_cards = {}
       if pack_has_cards then
         for _, cd in ipairs(pack_rows.cards) do
-          local is_hl = G.NEURO_AI_HIGHLIGHTED and G.NEURO_AI_HIGHLIGHTED[cd.card]
+          local is_hl = G.NEURO.ai_highlighted and G.NEURO.ai_highlighted[cd.card]
           display_cards[#display_cards + 1] = {
             card = cd.card, name = cd.name, desc = cd.desc,
             rc = cd.rc, index = cd.index,
@@ -2707,9 +2720,9 @@ local function draw_neuro_indicator()
 end
 
 local function draw_login_animation()
-  if not G or not G.NEURO_LOGIN_ANIM then trace("LOGIN: skip, no anim") return end
+  if not G or not G.NEURO.login_anim then trace("LOGIN: skip, no anim") return end
   trace("LOGIN: enter")
-  local anim = G.NEURO_LOGIN_ANIM
+  local anim = G.NEURO.login_anim
   local now = (G.TIMERS and G.TIMERS.REAL) or (love.timer and love.timer.getTime()) or 0
   local elapsed = now - anim.start
 
@@ -2721,7 +2734,7 @@ local function draw_login_animation()
   local TOTAL = BLACKOUT + BLACK_HOLD + REVEAL + TEXT_SHOW + FADE_OUT
 
   if elapsed > TOTAL then
-    G.NEURO_LOGIN_ANIM = nil
+    G.NEURO.login_anim = nil
     return
   end
 
@@ -2805,29 +2818,29 @@ local function draw_login_animation()
 end
 
 local function draw_neuro_cookie()
-  if not G or not G.NEURO_EGG or not G.NEURO_EGG.expires_at then
+  if not G or not G.NEURO.egg or not G.NEURO.egg.expires_at then
     trace("COOKIE: skip")
     return
   end
   trace("COOKIE: enter")
-  if G.TIMERS and G.TIMERS.REAL and G.TIMERS.REAL > G.NEURO_EGG.expires_at then
-    G.NEURO_EGG = nil
+  if G.TIMERS and G.TIMERS.REAL and G.TIMERS.REAL > G.NEURO.egg.expires_at then
+    G.NEURO.egg = nil
     return
   end
-  if G.NEURO_EGG.img == nil and G.NEURO_EGG.img_tried ~= true then
-    G.NEURO_EGG.img_tried = true
+  if G.NEURO.egg.img == nil and G.NEURO.egg.img_tried ~= true then
+    G.NEURO.egg.img_tried = true
     local ok, img = pcall(love.graphics.newImage, cookie_path())
     if ok then
-      G.NEURO_EGG.img = img
+      G.NEURO.egg.img = img
     else
-      G.NEURO_EGG.img = false
+      G.NEURO.egg.img = false
     end
   end
 
-  local text = G.NEURO_EGG.text or ""
+  local text = G.NEURO.egg.text or ""
   local y = (love.graphics.getHeight() * 0.5) - 20
-  if G.NEURO_EGG.img and G.NEURO_EGG.img ~= false then
-    local img = G.NEURO_EGG.img
+  if G.NEURO.egg.img and G.NEURO.egg.img ~= false then
+    local img = G.NEURO.egg.img
     local w, h = img:getWidth(), img:getHeight()
     local scale = math.min(love.graphics.getWidth() / (w * 6), love.graphics.getHeight() / (h * 6))
     local x = (love.graphics.getWidth() - w * scale) / 2
@@ -2845,49 +2858,49 @@ local function setup_text_input()
   if not (G and G.FUNCS and G.FUNCS.text_input_key) then
     return
   end
-  if G.NEURO_INPUT_HOOKED then
+  if G.NEURO.input_hooked then
     return
   end
-  G.NEURO_INPUT_HOOKED = true
-  G.NEURO_EGG_INPUT = ""
-  G.NEURO_INPUT_BUFFER = ""
+  G.NEURO.input_hooked = true
+  G.NEURO.egg_input = ""
+  G.NEURO.input_buffer = ""
 
   local original_text_input_key = G.FUNCS.text_input_key
   G.FUNCS.text_input_key = function(args)
     local key = args and args.key or ""
     if key == "return" then
-      local sanitized = NeuroFilter.sanitize(G.NEURO_INPUT_BUFFER)
-      if sanitized ~= G.NEURO_INPUT_BUFFER then
-        for i = 1, #G.NEURO_INPUT_BUFFER do
+      local sanitized = NeuroFilter.sanitize(G.NEURO.input_buffer)
+      if sanitized ~= G.NEURO.input_buffer then
+        for i = 1, #G.NEURO.input_buffer do
           original_text_input_key({ key = "backspace" })
         end
         for i = 1, #sanitized do
           original_text_input_key({ key = sanitized:sub(i, i) })
         end
       end
-      G.NEURO_INPUT_BUFFER = ""
+      G.NEURO.input_buffer = ""
     elseif key == "backspace" then
-      G.NEURO_INPUT_BUFFER = G.NEURO_INPUT_BUFFER:sub(1, math.max(0, #G.NEURO_INPUT_BUFFER - 1))
+      G.NEURO.input_buffer = G.NEURO.input_buffer:sub(1, math.max(0, #G.NEURO.input_buffer - 1))
     elseif key == "space" then
-      G.NEURO_INPUT_BUFFER = G.NEURO_INPUT_BUFFER .. " "
+      G.NEURO.input_buffer = G.NEURO.input_buffer .. " "
     elseif #key == 1 then
-      G.NEURO_INPUT_BUFFER = G.NEURO_INPUT_BUFFER .. key
+      G.NEURO.input_buffer = G.NEURO.input_buffer .. key
     end
     if key == "return" then
-      G.NEURO_EGG_INPUT = ""
+      G.NEURO.egg_input = ""
     elseif key == "backspace" then
-      G.NEURO_EGG_INPUT = G.NEURO_EGG_INPUT:sub(1, math.max(0, #G.NEURO_EGG_INPUT - 1))
+      G.NEURO.egg_input = G.NEURO.egg_input:sub(1, math.max(0, #G.NEURO.egg_input - 1))
     elseif #key == 1 then
-      G.NEURO_EGG_INPUT = G.NEURO_EGG_INPUT .. key
+      G.NEURO.egg_input = G.NEURO.egg_input .. key
     end
-    local normalized = G.NEURO_EGG_INPUT:lower():gsub("%s+", ""):gsub("%-", "")
+    local normalized = G.NEURO.egg_input:lower():gsub("%s+", ""):gsub("%-", "")
     if normalized == "neuro" or normalized == "neurosama" then
       local now = (G and G.TIMERS and G.TIMERS.REAL) or (love and love.timer and love.timer.getTime and love.timer.getTime()) or os.clock()
-      G.NEURO_EGG = {
+      G.NEURO.egg = {
         expires_at = now + 3,
         text = "Nuero is a cutest little cookie"
       }
-      G.NEURO_EGG_INPUT = ""
+      G.NEURO.egg_input = ""
     end
     return original_text_input_key(args)
   end
@@ -2939,21 +2952,21 @@ local function setup_neuro_bridge()
   end
   G.NEURO:register_actions(filtered_actions)
 
-  G.NEURO_STATE = nil
-  G.NEURO_FORCE_STATE = nil
-  G.NEURO_FORCE_INFLIGHT = false
-  G.NEURO_LAST_FORCE_FINGERPRINT = nil
+  G.NEURO.state = nil
+  G.NEURO.force_state = nil
+  G.NEURO.force_inflight = false
+  G.NEURO.last_force_fingerprint = nil
   if NEURO_PERSONA ~= "neuro" then
-    G.NEURO_PERSONA = NEURO_PERSONA
+    G.NEURO.persona = NEURO_PERSONA
   else
-    G.NEURO_PERSONA = "hiyori"
+    G.NEURO.persona = "hiyori"
   end
 end
 
 local function hook_game_over_screen()
-  if G.NEURO_GAME_OVER_HOOKED then return end
+  if G.NEURO.game_over_hooked then return end
   if not create_UIBox_game_over then return end
-  G.NEURO_GAME_OVER_HOOKED = true
+  G.NEURO.game_over_hooked = true
 
   local _orig_create_UIBox_game_over = create_UIBox_game_over
   create_UIBox_game_over = function()
@@ -3017,6 +3030,18 @@ love.update = function(dt)
     end
   end
 
+  if _neuro_autotest then
+    _neuro_autotest = false
+    local tok, result = pcall(function() return require("test_deadlock").run() end)
+    if not tok then
+      print("[test] Error: " .. tostring(result))
+      love.event.quit(1)
+    else
+      love.event.quit((result or 0) > 0 and 1 or 0)
+    end
+    return
+  end
+
   local update_success, update_err = pcall(function()
     if original_love_update then
       original_love_update(dt)
@@ -3057,47 +3082,47 @@ love.update = function(dt)
     bridge_attempted = true
   end
 
-  if G and G.NEURO and NeuroState then
+  if G and G.NEURO and G.NEURO.enabled and NeuroState then
     local neuro_success, neuro_err = pcall(function()
       G.NEURO:update(dt)
       Staging.update(dt)
 
       if G.FUNCS and NeuroState.get_state_name then
         local state_name = NeuroState.get_state_name()
-        local state_changed = state_name ~= G.NEURO_STATE
-        local prev_state = G.NEURO_STATE
+        local state_changed = state_name ~= G.NEURO.state
+        local prev_state = G.NEURO.state
         if state_changed then
           Staging.on_state_change()
-          G.NEURO_REFORCE_COUNT = 0
-          G.NEURO_STATE_ENTER_SERIAL = (G.NEURO_STATE_ENTER_SERIAL or 0) + 1
+          G.NEURO.reforce_count = 0
+          G.NEURO.state_enter_serial = (G.NEURO.state_enter_serial or 0) + 1
           neuro_state_changed_at = neuro_now()
           if state_name == "SHOP" and prev_state ~= "SHOP" then
-            G.NEURO_SHOP_REROLL_COUNT = 0
+            G.NEURO.shop_reroll_count = 0
           elseif prev_state == "SHOP" and state_name ~= "SHOP" then
-            G.NEURO_SHOP_REROLL_COUNT = nil
+            G.NEURO.shop_reroll_count = nil
           end
-          if G.NEURO_IN_RUN_SETUP and state_name ~= "SPLASH" and state_name ~= "MENU" and state_name ~= "RUN_SETUP" then
-            G.NEURO_IN_RUN_SETUP = nil
+          if G.NEURO.in_run_setup and state_name ~= "SPLASH" and state_name ~= "MENU" and state_name ~= "RUN_SETUP" then
+            G.NEURO.in_run_setup = nil
           end
           -- Clear stale cache globals that embed state-specific indices/hints
-          G.NEURO_LAST_FAILED_ACTION = nil
+          G.NEURO.last_failed_action = nil
           if prev_state == "SELECTING_HAND" then
-            G.NEURO_SIM1_PLAY = nil
-            G.NEURO_DR_TOP = nil
+            G.NEURO.sim1_play = nil
+            G.NEURO.dr_top = nil
           end
           local _PACK_STATES = {
             TAROT_PACK=true, PLANET_PACK=true, SPECTRAL_PACK=true,
             STANDARD_PACK=true, BUFFOON_PACK=true, SMODS_BOOSTER_OPENED=true,
           }
           if _PACK_STATES[prev_state] then
-            G.NEURO_PACK_BEST = nil
+            G.NEURO.pack_best = nil
           end
-          G.NEURO_STATE = state_name
-          G.NEURO_LAST_FORCE_FINGERPRINT = nil
+          G.NEURO.state = state_name
+          G.NEURO.last_force_fingerprint = nil
           if state_name == "SELECTING_HAND" and (prev_state == "SPLASH" or prev_state == "MENU" or prev_state == "RUN_SETUP") then
             ContextCompact.invalidate_cache()
-            G.NEURO_RULES_SENT = nil
-            G.NEURO_SEED_PASTED = nil
+            G.NEURO.rules_sent = nil
+            G.NEURO.seed_pasted = nil
           end
           if state_name == "SELECTING_HAND" and prev_state == "BLIND_SELECT" then
             ContextCompact.invalidate_cache()
@@ -3121,20 +3146,20 @@ love.update = function(dt)
 
         local now = neuro_now()
         update_joker_showcase(now)
-        if G.NEURO_FORCE_INFLIGHT and G.NEURO_FORCE_SENT_AT and
-          (now - G.NEURO_FORCE_SENT_AT) > FORCE_TIMEOUT_SECONDS then
-          G.NEURO_LAST_FORCE_FINGERPRINT = nil
+        if G.NEURO.force_inflight and G.NEURO.force_sent_at and
+          (now - G.NEURO.force_sent_at) > FORCE_TIMEOUT_SECONDS then
+          G.NEURO.last_force_fingerprint = nil
           clear_force_state()
           mark_force_dirty()
         end
-        if state_changed and G.NEURO_FORCE_INFLIGHT and G.NEURO_FORCE_STATE ~= state_name then
+        if state_changed and G.NEURO.force_inflight and G.NEURO.force_state ~= state_name then
           clear_force_state()
           mark_force_dirty()
         end
 
-        if G.NEURO_FORCE_DIRTY and G.NEURO_PERSONA then
-          if not G.NEURO_FORCE_INFLIGHT and not Staging.is_busy() and neuro_can_act() then
-            local dirty_at = G.NEURO_FORCE_DIRTY_AT or neuro_state_changed_at or 0
+        if G.NEURO.force_dirty and G.NEURO.persona then
+          if not G.NEURO.force_inflight and not Staging.is_busy() and neuro_can_act() then
+            local dirty_at = G.NEURO.force_dirty_at or neuro_state_changed_at or 0
             if neuro_last_force_attempt_at > dirty_at then
               dirty_at = neuro_last_force_attempt_at
             end
@@ -3145,8 +3170,8 @@ love.update = function(dt)
               local force = NeuroDispatcher.get_force_for_state(state_name)
               if force then
                 local wants_full_jokers = false
-                if G.NEURO_LAST_ACTION_NAME == "joker_info" or G.NEURO_LAST_ACTION_NAME == "joker_strategy" then
-                  local last_at = G.NEURO_LAST_ACTION_AT or 0
+                if G.NEURO.last_action_name == "joker_info" or G.NEURO.last_action_name == "joker_strategy" then
+                  local last_at = G.NEURO.last_action_at or 0
                   wants_full_jokers = (now - last_at) <= 2.5
                 end
 
@@ -3155,13 +3180,13 @@ love.update = function(dt)
                 force_phase = true,
               })
               local force_fingerprint = build_force_fingerprint(state_name, force, force_context)
-              if force_fingerprint ~= G.NEURO_LAST_FORCE_FINGERPRINT then
-                G.NEURO_FORCE_STATE = state_name
-                G.NEURO_FORCE_INFLIGHT = true
-                G.NEURO_FORCE_SENT_AT = now
-                G.NEURO_FORCE_ACTIONS = force.actions
-                G.NEURO_FORCE_ACTION_SET = build_action_set(force.actions)
-                G.NEURO_LAST_FORCE_FINGERPRINT = force_fingerprint
+              if force_fingerprint ~= G.NEURO.last_force_fingerprint then
+                G.NEURO.force_state = state_name
+                G.NEURO.force_inflight = true
+                G.NEURO.force_sent_at = now
+                G.NEURO.force_actions = force.actions
+                G.NEURO.force_action_set = build_action_set(force.actions)
+                G.NEURO.last_force_fingerprint = force_fingerprint
                 neuro_last_force_attempt_at = now
                 G.NEURO:force_actions(
                   force_context,
@@ -3169,7 +3194,7 @@ love.update = function(dt)
                   force.actions,
                   { priority = "medium", ephemeral_context = true }
                 )
-                G.NEURO_FORCE_DIRTY = false
+                G.NEURO.force_dirty = false
               else
                 -- fingerprint matched → context unchanged; keep dirty so we retry
                 -- once the shop actually updates (delayed buy event).
@@ -3266,7 +3291,7 @@ local function resolve_persona_key(raw)
 end
 
 local function active_palette_key()
-  local pk = resolve_persona_key((G and G.NEURO_PERSONA) or NEURO_PERSONA)
+  local pk = resolve_persona_key((G and G.NEURO.persona) or NEURO_PERSONA)
   local state_name = NeuroState and NeuroState.get_state_name and NeuroState.get_state_name() or "MENU"
   local menuish = (state_name == "SPLASH" or state_name == "MENU" or state_name == "RUN_SETUP")
 
@@ -3596,7 +3621,7 @@ love.draw = function(...)
       run_palette_selftest_once()
 
       local pk = active_palette_key()
-      local anim = G.NEURO_LOGIN_ANIM
+      local anim = G.NEURO.login_anim
       if anim and not anim.palette_ready then
         pk = resolve_persona_key(_persona_colors_applied or pk)
       end
@@ -3681,5 +3706,16 @@ love.mousepressed = function(x, y, button, istouch, presses)
     if original_love_mousepressed then
       pcall(original_love_mousepressed, x, y, button, istouch, presses)
     end
+  end
+end
+
+local original_love_keypressed = love.keypressed
+love.keypressed = function(key, scancode, isrepeat)
+  if key == "f8" then
+    local tok, terr = pcall(function() require("test_deadlock").run() end)
+    if not tok then print("[test] Error: " .. tostring(terr)) end
+  end
+  if original_love_keypressed then
+    return original_love_keypressed(key, scancode, isrepeat)
   end
 end

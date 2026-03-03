@@ -90,10 +90,10 @@ local function get_effective_state(state_name)
 end
 
 local function is_in_active_force(name, state_name)
-  if not (G and G.NEURO_FORCE_INFLIGHT and G.NEURO_FORCE_STATE == state_name) then
+  if not (G and G.NEURO.force_inflight and G.NEURO.force_state == state_name) then
     return false
   end
-  local set = G.NEURO_FORCE_ACTION_SET
+  local set = G.NEURO.force_action_set
   return set and set[name] or false
 end
 
@@ -113,14 +113,14 @@ local function is_allowed_in_state(name, state_name)
 end
 
 local function is_forced_action(name)
-  if not (G and G.NEURO_FORCE_INFLIGHT and name) then
+  if not (G and G.NEURO.force_inflight and name) then
     return false
   end
-  local set = G.NEURO_FORCE_ACTION_SET
+  local set = G.NEURO.force_action_set
   if set then
     return not not set[name]
   end
-  local list = G.NEURO_FORCE_ACTIONS
+  local list = G.NEURO.force_actions
   if list then
     for i = 1, #list do
       if list[i] == name then
