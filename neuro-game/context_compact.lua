@@ -514,10 +514,19 @@ local function run_section()
   if not (G and G.GAME) then return nil end
   local game = G.GAME
   local deck_name = "-"
-  if game.back and game.back.name then
-    deck_name = game.back.name
-  elseif game.selected_back and game.selected_back.name then
-    deck_name = game.selected_back.name
+  local _bobj = game.back or game.selected_back
+  if _bobj then
+    local bkey = _bobj.name
+    if bkey and G.P_CENTERS and G.P_CENTERS[bkey] then
+      local pc = G.P_CENTERS[bkey]
+      deck_name = (pc.loc_txt and pc.loc_txt.name) or pc.name or bkey
+    else
+      deck_name = bkey or "-"
+    end
+    if type(deck_name) == "string" and deck_name:find("_") and not deck_name:find(" ") then
+      deck_name = deck_name:gsub("^b_", ""):gsub("_", " ")
+      deck_name = deck_name:gsub("(%a)([%w]*)", function(a,b) return a:upper()..b end)
+    end
   end
   local stake = game.stake or 1
   local seeded = game.seeded and "Y" or "N"

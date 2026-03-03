@@ -404,11 +404,11 @@ local PALETTES = {
     D_ORANGE   = { 0.45, 0.38, 0.25 },
   },
   neuro = {
-    PRIMARY    = { 0.275, 0.847, 0.812 },
-    DEEP       = { 0.118, 0.129, 0.157 },
-    GLOW       = { 0.400, 0.929, 0.894 },
-    BG         = { 0.118, 0.129, 0.157 },
-    ACCENT     = { 0.878, 0.271, 0.341, 1 },
+    PRIMARY    = { 0.120, 0.500, 0.480 },   -- deep dark teal (fills/borders: rich, not neon)
+    DEEP       = { 0.040, 0.090, 0.085 },
+    GLOW       = { 1.000, 0.420, 0.540 },   -- hot pink: panel text/borders/glow
+    BG         = { 0.045, 0.095, 0.090 },   -- near-black teal background
+    ACCENT     = { 0.878, 0.271, 0.341, 1 }, -- raspberry: game-over RED slot
     NAME       = "NEURO-SAMA",
     NAME_SHORT = "NEURO",
     D_MONEY    = { 0.949, 0.859, 0.682 },
@@ -450,6 +450,10 @@ local function DARK_BG()   return pal().BG end
 
 local _panel_font = nil
 local _panel_font_small = nil
+local _wrap_cache = {}
+local _wrap_cache_size = 0
+local _menu_enter_t = nil      -- when we first hit MENU state (past SPLASH)
+local _auto_login_fired = false
 
 local function get_panel_fonts()
   if not _panel_font then
@@ -462,6 +466,68 @@ local function get_panel_fonts()
     _panel_font_small = ok2 and f2 or _panel_font
   end
   return _panel_font, _panel_font_small
+end
+
+local function card_edition_tag(c)
+  local ed = c and c.edition
+  if not ed then return "" end
+  if ed.negative    then return " [Neg]"  end
+  if ed.polychrome  then return " [Poly]" end
+  if ed.holo        then return " [Holo]" end
+  if ed.foil        then return " [Foil]" end
+  return ""
+end
+
+local function draw_animated_edition(tag, x, y, alpha, f, t, persona)
+  if not tag or tag == "" then return end
+  local r, g, b
+  if tag:find("Poly") then
+    local hue = (t * 1.3) % 1.0
+    if persona == "evil" then
+      r = math.abs(math.sin(hue * 6.283 + 0.00)) * 0.75 + 0.20
+      g = math.abs(math.sin(hue * 6.283 + 2.09)) * 0.25 + 0.02
+      b = math.abs(math.sin(hue * 6.283 + 4.19)) * 0.45 + 0.04
+    else
+      r = math.abs(math.sin(hue * 6.283 + 0.00)) * 0.60 + 0.35
+      g = math.abs(math.sin(hue * 6.283 + 2.09)) * 0.55 + 0.30
+      b = math.abs(math.sin(hue * 6.283 + 4.19)) * 0.55 + 0.35
+    end
+  elseif tag:find("Holo") then
+    local s = 0.5 + 0.5 * math.sin(t * 4.2)
+    if persona == "evil" then
+      r = 0.82 + s * 0.18; g = 0.06 + s * 0.06; b = 0.08 + s * 0.10
+    else
+      r = 0.90 - s * 0.55; g = 0.55 + s * 0.42; b = 0.80 - s * 0.35
+    end
+  elseif tag:find("Foil") then
+    local s = 0.5 + 0.5 * math.sin(t * 2.6)
+    if persona == "evil" then
+      r = 0.70 + s * 0.22; g = 0.62 + s * 0.06; b = 0.60 + s * 0.06
+    else
+      r = 0.68 + s * 0.08; g = 0.78 + s * 0.14; b = 0.80 + s * 0.16
+    end
+  elseif tag:find("Neg") then
+    local s = 0.5 + 0.5 * math.sin(t * 3.1)
+    if persona == "evil" then
+      r = 0.65 + s * 0.30; g = 0.02; b = 0.04 + s * 0.06
+    else
+      r = 0.04 + s * 0.06; g = 0.55 + s * 0.38; b = 0.52 + s * 0.36
+    end
+  else
+    return
+  end
+  local prev = love.graphics.getFont()
+  if f and f ~= prev then love.graphics.setFont(f) end
+  love.graphics.setColor(0, 0, 0, 0.40 * alpha)
+  love.graphics.print(tag, x + 1, y + 1)
+  love.graphics.setColor(r, g, b, 0.97 * alpha)
+  love.graphics.print(tag, x, y)
+  if tag:find("Poly") or tag:find("Holo") then
+    love.graphics.setColor(r * 0.6, g * 0.6, b * 0.6, 0.18 * alpha)
+    love.graphics.print(tag, x - 1, y)
+    love.graphics.print(tag, x + 1, y)
+  end
+  if f and f ~= prev then love.graphics.setFont(prev) end
 end
 
 local function card_display_name(c)
@@ -523,6 +589,39 @@ local function draw_card_mini(card, x, y, h)
       love.graphics.setColor(1, 1, 1, 0.85)
       love.graphics.draw(atlas.image, _quad_cache[sk], x, y, 0, scale, scale)
     end
+  end
+
+  -- edition overlay
+  local ed = card.edition
+  if ed then
+    local t = (G.TIMERS and G.TIMERS.REAL) or 0
+    if ed.negative then
+      love.graphics.setColor(0, 0, 0, 0.55)
+      love.graphics.rectangle("fill", x, y, w, h)
+      love.graphics.setColor(1, 1, 1, 0.40)
+      love.graphics.setLineWidth(2)
+      love.graphics.rectangle("line", x, y, w, h)
+      love.graphics.setLineWidth(1)
+    elseif ed.polychrome then
+      local r = 0.55 + 0.45 * math.sin(t * 2.5)
+      local g = 0.55 + 0.45 * math.sin(t * 2.5 + 2.094)
+      local b = 0.55 + 0.45 * math.sin(t * 2.5 + 4.189)
+      love.graphics.setColor(r, g, b, 0.50)
+      love.graphics.rectangle("fill", x, y, w, h)
+    elseif ed.holo then
+      love.graphics.setColor(0.25, 0.50, 1.0, 0.38)
+      love.graphics.rectangle("fill", x, y, w, h)
+      love.graphics.setColor(0.55, 0.80, 1.0, 0.20 + 0.10 * math.sin(t * 3.0))
+      love.graphics.setLineWidth(1)
+      love.graphics.rectangle("line", x, y, w, h)
+    elseif ed.foil then
+      love.graphics.setColor(0.78, 0.84, 0.92, 0.38)
+      love.graphics.rectangle("fill", x, y, w, h)
+      love.graphics.setColor(0.92, 0.96, 1.0, 0.20 + 0.08 * math.sin(t * 2.0))
+      love.graphics.setLineWidth(1)
+      love.graphics.rectangle("line", x, y, w, h)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
   end
 
   return w
@@ -635,21 +734,15 @@ local function get_panel_emote(name)
 end
 
 local function pick_footer_emote(persona_key, state_name, now)
-  if state_name == "ROUND_EVAL" then
-    return "neuroexplode"
-  end
+  if persona_key == "hiyori" then return "hiyori" end
 
-  if persona_key == "hiyori" then
-    return "hiyori"
-  end
-
-  local tick = math.floor((now or 0) / 4)
   if persona_key == "evil" then
-    if tick % 5 == 0 then return "boomevil" end
-    return "evilgamba"
+    if state_name == "ROUND_EVAL" then return "boomevil" end
+    if state_name == "SHOP" then return "evilgamba" end
+    return "boomevil"
   end
 
-  if tick % 4 == 0 then return "boomevil" end
+  if state_name == "ROUND_EVAL" then return "neuroexplode" end
   return "neurocube"
 end
 
@@ -862,12 +955,14 @@ local FOOTER_EMOTE_EVERY = 3
 local JOKER_SHOWCASE_DURATION = 4.8
 local JOKER_SHOWCASE_FADE_IN = 0.30
 local JOKER_SHOWCASE_FADE_OUT = 0.55
-local BUY_SHOWCASE_DURATION = 3.0
+local BUY_SHOWCASE_DURATION = 5.5
 local BUY_SHOWCASE_FADE_IN = 0.30
 local BUY_SHOWCASE_FADE_OUT = 0.7
 local _known_joker_refs = nil
+local _known_cons_refs  = nil
 local _joker_showcase = nil
 local _joker_showcase_q = {}
+local _pack_gained_q = {}  -- cards gained during pack state, shown after pack closes
 local _card_first_seen = {}
 -- desc_cycle state machine
 local _desc_slot      = 0      -- 0-based joker index currently spotlighted
@@ -1022,51 +1117,126 @@ local function auto_queue_pack_browse(now)
   G.NEURO.purchase_showcase_queue = q
 end
 
-local function update_joker_showcase(now)
-  if not (G and G.jokers and G.jokers.cards) then
-    _known_joker_refs = nil
-    return
-  end
+local function card_set_label(c)
+  local set = c and c.config and c.config.center and c.config.center.set
+  if set == "Joker"    then return "NEW JOKER"
+  elseif set == "Planet"   then return "NEW PLANET"
+  elseif set == "Tarot"    then return "NEW TAROT"
+  elseif set == "Spectral" then return "NEW SPECTRAL"
+  elseif set == "Voucher"  then return "VOUCHER"
+  else return "NEW CARD" end
+end
 
-  local current = {}
-  for _, c in ipairs(G.jokers.cards) do
-    current[c] = true
-  end
+local function is_in_pack_state()
+  if not G then return false end
+  local sn = (G.NEURO and (G.NEURO.force_state or G.NEURO.state)) or ""
+  return sn:find("_PACK") ~= nil or sn == "SMODS_BOOSTER_OPENED"
+end
 
-  if not _known_joker_refs then
-    _known_joker_refs = current
-    return
+local function push_showcase(c, label, now)
+  local item = {card = c, label = label or card_set_label(c)}
+  if is_in_pack_state() then
+    _pack_gained_q[#_pack_gained_q + 1] = item  -- defer until pack closes
+  else
+    _joker_showcase_q[#_joker_showcase_q + 1] = item
   end
+end
 
-  local in_pack = _buy_showcase and (_buy_showcase.area == "pack_browse" or _buy_showcase.area == "booster_choice")
-  for _, c in ipairs(G.jokers.cards) do
-    if not _known_joker_refs[c] and not in_pack then
-      _joker_showcase_q[#_joker_showcase_q + 1] = c
-      queue_card_showcase("joker_gain", c, 0, now)
-    end
-  end
-  _known_joker_refs = current
-
+local function pull_showcase(now)
   if not _joker_showcase and #_joker_showcase_q > 0 then
-    _joker_showcase = {card = table.remove(_joker_showcase_q, 1), started = now or 0}
+    local item = table.remove(_joker_showcase_q, 1)
+    _joker_showcase = {card = item.card, label = item.label, started = now or 0}
   end
+end
+
+local function update_joker_showcase(now)
+  if not G then _known_joker_refs = nil; _known_cons_refs = nil; return end
+
+  -- jokers
+  if G.jokers and G.jokers.cards then
+    local cur = {}
+    for _, c in ipairs(G.jokers.cards) do cur[c] = true end
+    if _known_joker_refs then
+      for _, c in ipairs(G.jokers.cards) do
+        if not _known_joker_refs[c] then push_showcase(c, "NEW JOKER", now) end
+      end
+    end
+    _known_joker_refs = cur
+  else
+    _known_joker_refs = nil
+  end
+
+  -- consumables (planets, tarots, spectrals)
+  if G.consumeables and G.consumeables.cards then
+    local cur = {}
+    for _, c in ipairs(G.consumeables.cards) do cur[c] = true end
+    if _known_cons_refs then
+      for _, c in ipairs(G.consumeables.cards) do
+        if not _known_cons_refs[c] then push_showcase(c, nil, now) end
+      end
+    end
+    _known_cons_refs = cur
+  else
+    _known_cons_refs = nil
+  end
+
+  -- flush cards deferred during pack state once pack is closed
+  if not is_in_pack_state() and #_pack_gained_q > 0 then
+    for _, item in ipairs(_pack_gained_q) do
+      _joker_showcase_q[#_joker_showcase_q + 1] = item
+    end
+    _pack_gained_q = {}
+  end
+
+  pull_showcase(now)
+end
+
+local function joker_template_ability(c)
+  local center = c and c.config and c.config.center or {}
+  local key = center.key
+  if not (key and G and G.P_CENTERS and G.P_CENTERS[key]) then return {} end
+  return G.P_CENTERS[key].ability or {}
 end
 
 local function joker_fx(c)
   local ab = c and c.ability or {}
-  if ab.x_mult and ab.x_mult > 1 then return "x" .. ab.x_mult end
-  if ab.h_mult and ab.h_mult > 0 then return "+" .. ab.h_mult .. " Mult" end
-  if ab.h_mod and ab.h_mod > 0 then return "+" .. ab.h_mod .. " Chips" end
-  if ab.t_mult and ab.t_mult > 0 then return "+" .. ab.t_mult .. " Mult" end
-  if ab.t_chips and ab.t_chips > 0 then return "+" .. ab.t_chips .. " Chips" end
-  if ab.d_mult and ab.d_mult > 0 then return "+" .. ab.d_mult .. " Mult" end
-  if ab.extra then
-    if type(ab.extra) == "number" and ab.extra > 0 then return "+" .. ab.extra end
-    if type(ab.extra) == "table" then
-      if ab.extra.x_mult and ab.extra.x_mult > 1 then return "x" .. ab.extra.x_mult end
-      if ab.extra.mult and ab.extra.mult > 0 then return "+" .. ab.extra.mult .. " Mult" end
-      if ab.extra.chips and ab.extra.chips > 0 then return "+" .. ab.extra.chips .. " Chips" end
-      if ab.extra.money and ab.extra.money > 0 then return "+$" .. ab.extra.money end
+  local tb = joker_template_ability(c)
+  if ab.x_mult and ab.x_mult > 1 then
+    if ab.x_mult == (tb.x_mult or ab.x_mult) then return "x" .. ab.x_mult end
+  end
+  if ab.h_mult and ab.h_mult > 0 then
+    local base = tb.h_mult or 0
+    if ab.h_mult == base then return "+" .. ab.h_mult .. " Mult" end
+  end
+  if ab.h_mod and ab.h_mod > 0 then
+    local base = tb.h_mod or 0
+    if ab.h_mod == base then return "+" .. ab.h_mod .. " Chips" end
+  end
+  if ab.t_mult and ab.t_mult > 0 then
+    local base = tb.t_mult or 0
+    if ab.t_mult == base then return "+" .. ab.t_mult .. " Mult" end
+  end
+  if ab.t_chips and ab.t_chips > 0 then
+    local base = tb.t_chips or 0
+    if ab.t_chips == base then return "+" .. ab.t_chips .. " Chips" end
+  end
+  if ab.d_mult and ab.d_mult > 0 then
+    local base = tb.d_mult or 0
+    if ab.d_mult == base then return "+" .. ab.d_mult .. " Mult" end
+  end
+  if ab.extra and type(ab.extra) == "table" then
+    local te = type(tb.extra) == "table" and tb.extra or {}
+    if ab.extra.x_mult and ab.extra.x_mult > 1 and ab.extra.x_mult == (te.x_mult or ab.extra.x_mult) then
+      return "x" .. ab.extra.x_mult
+    end
+    if ab.extra.mult and ab.extra.mult > 0 and ab.extra.mult == (te.mult or ab.extra.mult) then
+      return "+" .. ab.extra.mult .. " Mult"
+    end
+    if ab.extra.chips and ab.extra.chips > 0 and ab.extra.chips == (te.chips or ab.extra.chips) then
+      return "+" .. ab.extra.chips .. " Chips"
+    end
+    if ab.extra.money and ab.extra.money > 0 and ab.extra.money == (te.money or ab.extra.money) then
+      return "+$" .. ab.extra.money
     end
   end
   return ""
@@ -1100,9 +1270,26 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     if seed then
       row(DIM, "Seed: " .. tostring(seed))
     end
-    local deck_name = G.GAME.selected_back and G.GAME.selected_back.name
-      or (G.GAME.back and G.GAME.back.name)
-    if deck_name then
+    local _back_obj = G.GAME.selected_back or G.GAME.back
+    local deck_name = nil
+    if _back_obj then
+      local bkey = _back_obj.name
+      if bkey and G.P_CENTERS and G.P_CENTERS[bkey] then
+        local pc = G.P_CENTERS[bkey]
+        if pc.loc_txt and type(pc.loc_txt.name) == "string" and pc.loc_txt.name ~= "" then
+          deck_name = pc.loc_txt.name
+        elseif type(pc.name) == "string" and pc.name ~= "" then
+          deck_name = pc.name
+        end
+      end
+      if not deck_name then
+        deck_name = _back_obj.name or _back_obj.loc_name
+      end
+      if type(deck_name) == "string" and deck_name:find("_") and not deck_name:find(" ") then
+        deck_name = Utils.humanize_identifier(deck_name)
+      end
+    end
+    if deck_name and deck_name ~= "" then
       row(DIM, "Deck: " .. tostring(deck_name))
     end
   end
@@ -1138,34 +1325,7 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     local jlimit = (G.jokers and G.jokers.config and G.jokers.config.card_limit)
       or (G.GAME and G.GAME.joker_limit) or 5
     hdr(GOLD, string.format("Jokers  %d/%d", #G.jokers.cards, jlimit))
-    local compact_jokers = #G.jokers.cards >= 4
-    for _, c in ipairs(G.jokers.cards) do
-      local n = card_display_name(c)
-      local sell = c.sell_cost or 0
-      local rc = rarity_color(c) or WHITE
-      if compact_jokers then
-        card_row(rc, n .. (sell > 0 and ("  $" .. sell) or ""), c)
-      else
-        local fx = joker_fx(c)
-        if fx ~= "" then
-          card_row(rc, n, c)
-          sub(ORANGE, fx .. (sell > 0 and ("  sell $" .. sell) or ""))
-        else
-          card_row(rc, n .. (sell > 0 and ("  ($" .. sell .. ")") or ""), c)
-        end
-        local desc = card_description(c)
-        if (not desc or desc == "") and c and c.config and c.config.center then
-          desc = Utils.safe_description(c.config.center.loc_txt, c)
-        end
-        if (not desc or desc == "") and c and c.ability then
-          desc = Utils.safe_description(c.ability.loc_txt, c)
-        end
-        if desc then
-          desc_row(DIM, desc)
-        end
-      end
-    end
-    if compact_jokers then desc_cycle(G.jokers.cards) end
+    desc_cycle(G.jokers.cards)
   end
 
   if G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0 then
@@ -1205,22 +1365,27 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
           local money = G.GAME and G.GAME.dollars or 0
           local afford = cost <= money
           local fx = ""
-          if sa.tag == "Jokers" then fx = joker_fx(c) end
+          local fx_from_desc = false
+          local fx_is_static_joker = false
+          if sa.tag == "Jokers" then
+            local jfx = joker_fx(c)
+            if jfx ~= "" then fx = jfx; fx_is_static_joker = true end
+          end
           scard(afford and GREEN or DIM, string.format("$%d  %s", cost, n), c)
           if fx == "" then
             local short_desc = card_description(c)
             if (not short_desc or short_desc == "") and c and c.config and c.config.center then
               short_desc = Utils.safe_description(c.config.center.loc_txt, c, 140)
             end
-            if short_desc and short_desc ~= "" then fx = short_desc end
+            if short_desc and short_desc ~= "" then fx = short_desc; fx_from_desc = true end
           end
           if fx ~= "" then ssub(ORANGE, fx) end
-          local desc = card_description(c)
-          if (not desc or desc == "") and c and c.config and c.config.center then
-            desc = Utils.safe_description(c.config.center.loc_txt, c)
-          end
-          if desc then
-            sdesc(DIM, desc)
+          if not fx_from_desc and not fx_is_static_joker then
+            local desc = card_description(c)
+            if (not desc or desc == "") and c and c.config and c.config.center then
+              desc = Utils.safe_description(c.config.center.loc_txt, c)
+            end
+            if desc then sdesc(DIM, desc) end
           end
         end
       end
@@ -1343,7 +1508,7 @@ local function draw_neuro_indicator()
       end
       if a <= 0 then return end
 
-      local bx, by, bw, bh = 10, math.floor(sh * 0.28), 360, 200
+      local bx, by, bw, bh = 10, 20, 420, 230
       local title = "SHOP BUY"
       local subtitle_tag = area_tag
       if area_tag == "booster_pick" then
@@ -1352,7 +1517,7 @@ local function draw_neuro_indicator()
       elseif area_tag == "joker_gain" then
         title = "NEW JOKER"
         subtitle_tag = "gained"
-        bh = 220
+        bh = 260
       elseif area_tag == "shop_jokers" then
         title = "SHOP BUY"
         subtitle_tag = "joker"
@@ -1391,7 +1556,7 @@ local function draw_neuro_indicator()
       love.graphics.setLineWidth(4)
       love.graphics.rectangle("line", bx - 2, by - 2, bw + 4, bh + 4, 12, 12)
 
-      love.graphics.setColor(pg[1], pg[2], pg[3], (0.55 + 0.15 * pulse) * a)
+      love.graphics.setColor(p[1], p[2], p[3], (0.55 + 0.15 * pulse) * a)
       love.graphics.rectangle("fill", bx + 3, by + 3, bw - 6, 36, 7, 7)
 
       love.graphics.setColor(1, 1, 1, 0.97 * a)
@@ -1453,10 +1618,13 @@ local function draw_neuro_indicator()
       local tw = bw - (tx - bx) - 12
       local is_joker_area = (area_tag == "joker_gain" or area_tag == "shop_jokers")
 
-      -- name
       local name_line = trunc(_buy_showcase.name or "Purchase", tw)
       love.graphics.setColor(1, 1, 1, 0.98 * a)
       love.graphics.print(name_line, tx, sprite_y + 2)
+      local bs_ed = card and card_edition_tag(card) or ""
+      if bs_ed ~= "" then
+        draw_animated_edition(bs_ed, tx + font:getWidth(name_line), sprite_y + 2, a, font, now, pk)
+      end
       local ty = sprite_y + 20
 
       -- joker fx (all joker areas, not just joker_gain)
@@ -1493,6 +1661,13 @@ local function draw_neuro_indicator()
         ty = ty + small_h + 1
       end
       if panel_font_small then love.graphics.setFont(font) end
+
+      -- countdown timer bar (shrinks right as panel ages)
+      local timer_frac = math.max(0, 1.0 - elapsed / BUY_SHOWCASE_DURATION)
+      love.graphics.setColor(p[1], p[2], p[3], 0.20 * a)
+      love.graphics.rectangle("fill", bx + 6, by + bh - 9, bw - 12, 5, 2, 2)
+      love.graphics.setColor(pg[1], pg[2], pg[3], (0.80 + 0.15 * pulse) * a)
+      love.graphics.rectangle("fill", bx + 6, by + bh - 9, math.max(4, (bw - 12) * timer_frac), 5, 2, 2)
 
       -- PURCHASED! flash during fade-out
       local in_fade_out = (not _buy_showcase.winner_at)
@@ -1549,6 +1724,14 @@ local function draw_neuro_indicator()
         out[1] = tostring(text)
         return out
       end
+      local fid = (f == panel_font_small) and "s" or "n"
+      local ck = fid .. tostring(max_w) .. "\0" .. tostring(text)
+      local cached = _wrap_cache[ck]
+      if cached then return cached end
+      if _wrap_cache_size >= 400 then
+        _wrap_cache = {}
+        _wrap_cache_size = 0
+      end
       local ok, _, lines = pcall(function()
         local width, wrapped = f:getWrap(tostring(text), max_w)
         return width, wrapped
@@ -1560,6 +1743,8 @@ local function draw_neuro_indicator()
       else
         out[1] = tostring(text)
       end
+      _wrap_cache[ck] = out
+      _wrap_cache_size = _wrap_cache_size + 1
       return out
     end
 
@@ -1602,7 +1787,8 @@ local function draw_neuro_indicator()
       else
         _right_panel_slide_frac = _right_panel_slide_frac + rp_diff * math.min(1, 8.0 * dt)
       end
-      local lp_target = booster_active and 1 or 0
+      local pack_state_active = state_name:find("_PACK") ~= nil or state_name == "SMODS_BOOSTER_OPENED"
+      local lp_target = (booster_active or pack_state_active) and 1 or 0
       local lp_diff = lp_target - _left_panel_slide_frac
       if math.abs(lp_diff) < 0.005 then
         _left_panel_slide_frac = lp_target
@@ -1618,10 +1804,80 @@ local function draw_neuro_indicator()
     local sep_h = 8
     local content_w = p_w - p_pad_x * 2
 
+    -- per-type showcase palette: returns sp (fill/border), sg (glow/label)
+    local function showcase_type_colors(label, card)
+      local set = card and card.config and card.config.center and card.config.center.set or ""
+      local key = card and card.config and card.config.center and card.config.center.key or ""
+      local slo = set:lower(); local klo = key:lower()
+      local is_evil = (pk == "evil")
+
+      local sp, sg
+      -- Neuratro custom cards
+      if slo:find("neuro") or klo:find("neuro") or klo:find("j_n_") then
+        sp = {0.50, 0.08, 0.15}; sg = {0.95, 0.35, 0.55}
+      elseif label == "NEW PLANET" or slo == "planet" then
+        sp = {0.10, 0.20, 0.55}; sg = {0.40, 0.68, 1.00}
+      elseif label == "NEW TAROT" or slo == "tarot" then
+        sp = {0.32, 0.06, 0.48}; sg = {0.78, 0.38, 1.00}
+      elseif label == "NEW SPECTRAL" or slo == "spectral" then
+        sp = {0.06, 0.20, 0.32}; sg = {0.45, 0.82, 1.00}
+      elseif label == "VOUCHER" or slo == "voucher" then
+        sp = {0.32, 0.22, 0.02}; sg = {1.00, 0.82, 0.18}
+      else
+        sp = p; sg = pg  -- palette default (joker or unknown)
+      end
+
+      if is_evil then
+        -- Evil persona: darken fills toward blood-red, replace glow with crimson
+        sp = {sp[1] * 0.5 + 0.30, sp[2] * 0.2, sp[3] * 0.2}
+        sg = {1.00, 0.18, 0.22}  -- Evil crimson glow for all types
+      end
+
+      return sp, sg
+    end
+
+    -- word-level colored description printer
+    local function draw_colored_desc(text, x, y, alpha, f)
+      local cx = x
+      local i = 1
+      while i <= #text do
+        local j = i
+        while j <= #text and text:sub(j,j) == " " do j = j + 1 end
+        if j > i then cx = cx + f:getWidth(string.rep(" ", j - i)); i = j end
+        j = i
+        while j <= #text and text:sub(j,j) ~= " " do j = j + 1 end
+        if j > i then
+          local word = text:sub(i, j - 1)
+          local wu = word:upper()
+          local r, g, b
+          if wu:find("MULT") then
+            r,g,b = _pal.D_RED[1],_pal.D_RED[2],_pal.D_RED[3]
+          elseif wu:find("CHIP") then
+            r,g,b = _pal.D_CYAN[1],_pal.D_CYAN[2],_pal.D_CYAN[3]
+          elseif word:match("^%$") then
+            r,g,b = _pal.D_MONEY[1],_pal.D_MONEY[2],_pal.D_MONEY[3]
+          elseif word:match("^[Xx]%d") then
+            r,g,b = _pal.D_RED[1],_pal.D_RED[2],_pal.D_RED[3]
+          elseif word:match("^%+%d") then
+            r,g,b = _pal.D_GREEN[1],_pal.D_GREEN[2],_pal.D_GREEN[3]
+          else
+            r,g,b = _pal.D_ORANGE[1],_pal.D_ORANGE[2],_pal.D_ORANGE[3]
+          end
+          love.graphics.setColor(0, 0, 0, 0.20 * alpha)
+          love.graphics.print(word, cx + 1, y + 1)
+          love.graphics.setColor(r, g, b, 0.88 * alpha)
+          love.graphics.print(word, cx, y)
+          cx = cx + f:getWidth(word)
+          i = j
+        elseif i == j then i = i + 1 end
+      end
+    end
+
     local title_h = 42
     local action_row_h = action_text and (text_h + 10) or 0
     local function row_h(r)
       if r[5] then return sep_h
+      elseif r[12] then return 88 + small_line_h + 8
       elseif r[10] then return card_line_h + small_line_h * 3 + 18
       elseif r[6] then
         if r[8] then
@@ -1650,6 +1906,7 @@ local function draw_neuro_indicator()
 
     local showcase_card = nil
     local showcase_name = nil
+    local showcase_label = nil
     local showcase_fx = nil
     local showcase_desc = nil
     local showcase_alpha = 0
@@ -1671,13 +1928,19 @@ local function draw_neuro_indicator()
       if elapsed >= eff_duration then
         _joker_showcase = nil
         if #_joker_showcase_q > 0 then
-          _joker_showcase = {card = table.remove(_joker_showcase_q, 1), started = now}
+          local _nxt = table.remove(_joker_showcase_q, 1)
+          _joker_showcase = {card = _nxt.card, label = _nxt.label, started = now}
         end
       else
-        showcase_card = _joker_showcase.card
-        showcase_name = card_display_name(showcase_card)
-        showcase_fx = joker_fx(showcase_card)
-        showcase_desc = card_description(showcase_card)
+        showcase_card  = _joker_showcase.card
+        showcase_label = _joker_showcase.label or card_set_label(showcase_card)
+        showcase_name  = card_display_name(showcase_card)
+        showcase_fx    = joker_fx(showcase_card)
+        showcase_desc  = card_description(showcase_card)
+        if (not showcase_desc or showcase_desc == "") and showcase_card and showcase_card.config and showcase_card.config.center then
+          local ok, d = pcall(Utils.safe_description, showcase_card.config.center.loc_txt, showcase_card)
+          if ok and type(d) == "string" then showcase_desc = d end
+        end
         showcase_alpha = 1
         if elapsed < JOKER_SHOWCASE_FADE_IN then
           showcase_alpha = math.max(0, math.min(1, elapsed / JOKER_SHOWCASE_FADE_IN))
@@ -1713,7 +1976,7 @@ local function draw_neuro_indicator()
 
 
     if #shop_rows > 0 then
-      local lp_w = 300
+      local lp_w = 380
       local lp_x = 8
       local lp_y = p_y
       local lp_pad_x = 10
@@ -1736,7 +1999,7 @@ local function draw_neuro_indicator()
       for _, r in ipairs(shop_rows) do lp_data_h = lp_data_h + lp_row_h(r) end
       local lp_title_h = 42
       local lp_total_h = lp_title_h + lp_data_h
-      local lp_max_h = math.min(sh - lp_y - 10, math.floor(sh * 0.58))
+      local lp_max_h = math.min(sh - lp_y - 10, math.floor(sh * 0.72))
       if lp_total_h > lp_max_h then lp_total_h = lp_max_h end
 
       if _left_panel_slide_frac > 0 then
@@ -1759,11 +2022,11 @@ local function draw_neuro_indicator()
       love.graphics.setLineWidth(2)
       love.graphics.rectangle("line", lp_x, lp_y, lp_w, lp_total_h, 10, 10)
 
-      love.graphics.setColor(pg[1], pg[2], pg[3], 0.18 + 0.06 * pulse)
+      love.graphics.setColor(p[1], p[2], p[3], 0.18 + 0.06 * pulse)
       love.graphics.rectangle("fill", lp_x + 2, lp_y + 2, lp_w - 4, lp_title_h - 2, 8, 8)
       love.graphics.setColor(p[1], p[2], p[3], 0.08)
       love.graphics.rectangle("fill", lp_x + 2, lp_y + lp_title_h * 0.6, lp_w - 4, lp_title_h * 0.4, 0, 0)
-      love.graphics.setColor(pg[1], pg[2], pg[3], 0.80 + 0.15 * pulse)
+      love.graphics.setColor(p[1], p[2], p[3], 0.80 + 0.15 * pulse)
       love.graphics.rectangle("fill", lp_x + 6, lp_y + 7, 3, lp_title_h - 14, 2, 2)
 
       love.graphics.setColor(0, 0, 0, 0.30)
@@ -1846,10 +2109,17 @@ local function draw_neuro_indicator()
           love.graphics.rectangle("line", sprite_x - 1, sprite_y - 1, est_w + 2, sprite_h + 2, 2, 2)
           local mini_w = draw_card_mini(card_obj, sprite_x, sprite_y, sprite_h)
           local text_off = (mini_w > 0 and mini_w or est_w) + 7
+          local lp_txt = trunc(txt, lp_content_w - indent - text_off)
+          local lp_txt_x = lp_x + lp_pad_x + indent + text_off
+          local lp_txt_y = lcy + (card_line_h - text_h) / 2
           love.graphics.setColor(0, 0, 0, 0.30)
-          love.graphics.print(trunc(txt, lp_content_w - indent - text_off), lp_x + lp_pad_x + indent + text_off + 1, lcy + (card_line_h - text_h) / 2 + 1)
+          love.graphics.print(lp_txt, lp_txt_x + 1, lp_txt_y + 1)
           love.graphics.setColor(col[1], col[2], col[3], 0.97)
-          love.graphics.print(trunc(txt, lp_content_w - indent - text_off), lp_x + lp_pad_x + indent + text_off, lcy + (card_line_h - text_h) / 2)
+          love.graphics.print(lp_txt, lp_txt_x, lp_txt_y)
+          local lp_ed_tag = card_edition_tag(card_obj)
+          if lp_ed_tag ~= "" then
+            draw_animated_edition(lp_ed_tag, lp_txt_x + font:getWidth(lp_txt), lp_txt_y, 1.0, font, now, pk)
+          end
           lcy = lcy + card_line_h
         elseif r[3] then
           local col = r[1]
@@ -1914,16 +2184,17 @@ local function draw_neuro_indicator()
 
     local center_top_y = 8
     if showcase_card and showcase_alpha > 0 then
-      local sc_w = 400
+      local sc_w = 500
       local sc_x = math.floor((sw - sc_w) / 2)
       local a = showcase_alpha
       local sx = sc_x
       local small_f = panel_font_small or font
       local sfh = small_f:getHeight()
       local fh = font:getHeight()
+      local sc_p, sc_pg = showcase_type_colors(showcase_label, showcase_card)
 
-      local mini_h = 62
-      local text_x = sx + 6 + math.floor(mini_h * 0.75) + 14
+      local mini_h = 110
+      local text_x = sx + 8 + math.floor(mini_h * 0.75) + 14
       local tw2 = sc_w - (text_x - sx) - 8
 
       local fx_lines = {}
@@ -1934,44 +2205,53 @@ local function draw_neuro_indicator()
       if showcase_desc and showcase_desc ~= "" then
         desc_lines = wrapped_lines(showcase_desc, tw2, small_f)
       end
-      local max_desc = 4
+      local max_desc = 6
       local n_fx = math.min(#fx_lines, 2)
       local n_desc = math.min(#desc_lines, max_desc)
-      local text_h = fh + 2 + fh + 4
-      if n_fx > 0 then text_h = text_h + n_fx * (sfh + 1) + 2 end
-      if n_desc > 0 then text_h = text_h + n_desc * (sfh + 1) + 2 end
-      local sh2 = math.max(mini_h + 8, text_h + 8)
+      local text_h2 = fh + 2 + fh + 4
+      if n_fx > 0 then text_h2 = text_h2 + n_fx * (sfh + 1) + 2 end
+      if n_desc > 0 then text_h2 = text_h2 + n_desc * (sfh + 1) + 2 end
+      local sh2 = math.max(mini_h + 8, text_h2 + 8)
       local sy = center_top_y + showcase_slide
 
       love.graphics.setColor(bg[1], bg[2], bg[3], 0.94 * a)
       love.graphics.rectangle("fill", sx - 2, sy - 2, sc_w + 4, sh2 + 4, 8, 8)
-      love.graphics.setColor(p[1], p[2], p[3], 0.16 * a)
+      love.graphics.setColor(sc_p[1], sc_p[2], sc_p[3], 0.16 * a)
       love.graphics.rectangle("fill", sx, sy, sc_w, sh2, 6, 6)
-      love.graphics.setColor(pg[1], pg[2], pg[3], (0.55 + 0.25 * pulse) * a)
+      love.graphics.setColor(sc_pg[1], sc_pg[2], sc_pg[3], (0.55 + 0.25 * pulse) * a)
       love.graphics.setLineWidth(2)
       love.graphics.rectangle("line", sx, sy, sc_w, sh2, 6, 6)
+      -- outer glow line in type colour
+      love.graphics.setColor(sc_pg[1], sc_pg[2], sc_pg[3], (0.10 + 0.06 * pulse) * a)
+      love.graphics.setLineWidth(5)
+      love.graphics.rectangle("line", sx - 3, sy - 3, sc_w + 6, sh2 + 6, 9, 9)
+      love.graphics.setLineWidth(1)
 
       local mini_x = sx + 6
       local mini_y = sy + math.floor((sh2 - mini_h) / 2)
-      love.graphics.setColor(pg[1], pg[2], pg[3], (0.15 + 0.10 * pulse) * a)
+      love.graphics.setColor(sc_p[1], sc_p[2], sc_p[3], (0.20 + 0.12 * pulse) * a)
       love.graphics.circle("fill", mini_x + mini_h * 0.38, mini_y + mini_h * 0.5, mini_h * 0.45)
       draw_card_mini(showcase_card, mini_x, mini_y, mini_h)
 
       local yy = sy + 3
-      love.graphics.setColor(pg[1], pg[2], pg[3], (0.85 + 0.10 * pulse) * a)
-      love.graphics.print("NEW JOKER", text_x, yy)
+      love.graphics.setColor(sc_pg[1], sc_pg[2], sc_pg[3], (0.90 + 0.10 * pulse) * a)
+      love.graphics.print(showcase_label or "NEW CARD", text_x, yy)
       yy = yy + fh + 2
 
-      local nline = trunc(showcase_name or "Joker", tw2)
+      local nline = trunc(showcase_name or "Card", tw2)
       love.graphics.setColor(0, 0, 0, 0.35 * a)
       love.graphics.print(nline, text_x + 1, yy + 1)
       love.graphics.setColor(1, 1, 1, 0.98 * a)
       love.graphics.print(nline, text_x, yy)
+      local sc_ed = card_edition_tag(showcase_card)
+      if sc_ed ~= "" then
+        draw_animated_edition(sc_ed, text_x + font:getWidth(nline), yy, a, font, now, pk)
+      end
       yy = yy + fh + 4
 
       if n_fx > 0 then
         if panel_font_small then love.graphics.setFont(panel_font_small) end
-        love.graphics.setColor(pg[1], pg[2], pg[3], 0.92 * a)
+        love.graphics.setColor(sc_pg[1], sc_pg[2], sc_pg[3], 0.92 * a)
         for i = 1, n_fx do
           love.graphics.print(fx_lines[i], text_x, yy)
           yy = yy + sfh + 1
@@ -1983,10 +2263,7 @@ local function draw_neuro_indicator()
       if n_desc > 0 then
         if panel_font_small then love.graphics.setFont(panel_font_small) end
         for i = 1, n_desc do
-          love.graphics.setColor(0, 0, 0, 0.40 * a)
-          love.graphics.print(desc_lines[i], text_x + 1, yy + 1)
-          love.graphics.setColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.94 * a)
-          love.graphics.print(desc_lines[i], text_x, yy)
+          draw_colored_desc(desc_lines[i], text_x, yy, a, small_f)
           yy = yy + sfh + 1
         end
         if panel_font_small then love.graphics.setFont(font) end
@@ -2045,12 +2322,12 @@ local function draw_neuro_indicator()
     end
 
     if pack_has_cards or next(_pack_picked) then
-      local pk_w = 440
+      local pk_w = 500
       local pk_x = math.floor((sw - pk_w) / 2)
       local pk_pad = 10
       local pk_content_w = pk_w - pk_pad * 2
-      local slot_h = 58
-      local slot_gap = 4
+      local slot_h = 90
+      local slot_gap = 6
       local small_f = panel_font_small or font
 
       local display_cards = {}
@@ -2244,11 +2521,8 @@ local function draw_neuro_indicator()
             if panel_font_small then love.graphics.setFont(panel_font_small) end
             local desc_lines = wrapped_lines(dc.desc, math.max(20, text_w), small_f)
             local dy = name_y + text_h + 2
-            for li = 1, math.min(#desc_lines, 2) do
-              love.graphics.setColor(0, 0, 0, 0.20 * ca)
-              love.graphics.print(desc_lines[li], text_x + 1, dy + 1)
-              love.graphics.setColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.88 * ca)
-              love.graphics.print(desc_lines[li], text_x, dy)
+            for li = 1, math.min(#desc_lines, 3) do
+              draw_colored_desc(desc_lines[li], text_x, dy, ca, small_f)
               dy = dy + small_line_h
             end
             if panel_font_small then love.graphics.setFont(font) end
@@ -2291,12 +2565,12 @@ local function draw_neuro_indicator()
     love.graphics.setLineWidth(2)
     love.graphics.rectangle("line", p_x, p_y, p_w, total_h, 10, 10)
 
-    love.graphics.setColor(pg[1], pg[2], pg[3], 0.18 + 0.06 * pulse)
+    love.graphics.setColor(p[1], p[2], p[3], 0.18 + 0.06 * pulse)
     love.graphics.rectangle("fill", p_x + 2, p_y + 2, p_w - 4, title_h - 2, 8, 8)
     love.graphics.setColor(p[1], p[2], p[3], 0.08)
     love.graphics.rectangle("fill", p_x + 2, p_y + title_h * 0.6, p_w - 4, title_h * 0.4, 0, 0)
 
-    love.graphics.setColor(pg[1], pg[2], pg[3], 0.80 + 0.15 * pulse)
+    love.graphics.setColor(p[1], p[2], p[3], 0.80 + 0.15 * pulse)
     love.graphics.rectangle("fill", p_x + 6, p_y + 7, 3, title_h - 14, 2, 2)
     love.graphics.setColor(p[1], p[2], p[3], 0.40 + 0.20 * pulse)
     love.graphics.rectangle("fill", p_x + 6, p_y + 7, 1, title_h - 14, 1, 1)
@@ -2304,7 +2578,7 @@ local function draw_neuro_indicator()
     local tx = p_x + 15
     local ty = p_y + 5
     if logo then
-      love.graphics.setColor(pg[1], pg[2], pg[3], 0.25 + 0.15 * pulse)
+      love.graphics.setColor(p[1], p[2], p[3], 0.25 + 0.15 * pulse)
       love.graphics.circle("fill", tx + logo_w / 2, ty + logo_h / 2 + 2, logo_w * 0.55)
       love.graphics.setColor(1, 1, 1, 0.92 + 0.08 * pulse)
       love.graphics.draw(logo, tx, ty + 2, 0, logo_scale, logo_scale)
@@ -2336,7 +2610,7 @@ local function draw_neuro_indicator()
     if action_text then
       love.graphics.setColor(p[1], p[2], p[3], 0.12 + 0.06 * pulse)
       love.graphics.rectangle("fill", p_x + 3, cy + 1, p_w - 6, action_row_h - 3, 5, 5)
-      love.graphics.setColor(pg[1], pg[2], pg[3], 0.10 + 0.08 * pulse)
+      love.graphics.setColor(p[1], p[2], p[3], 0.10 + 0.08 * pulse)
       love.graphics.rectangle("fill", p_x + 3, cy + 1, 4, action_row_h - 3, 2, 0)
 
       local act_pulse = math.abs(math.sin(now * 3.8))
@@ -2445,20 +2719,59 @@ local function draw_neuro_indicator()
 
           local mini_w = draw_card_mini(card_obj, sprite_x, sprite_y, sprite_h)
           local text_off = (mini_w > 0 and mini_w or est_w) + 7
+          local txt_trunc = trunc(txt, content_w - indent - text_off)
+          local txt_x = p_x + p_pad_x + indent + text_off
+          local txt_y = cy + (card_line_h - text_h) / 2
 
           love.graphics.setColor(0, 0, 0, 0.30 * cur_card_a)
-          love.graphics.print(
-            trunc(txt, content_w - indent - text_off),
-            p_x + p_pad_x + indent + text_off + 1,
-            cy + (card_line_h - text_h) / 2 + 1
-          )
+          love.graphics.print(txt_trunc, txt_x + 1, txt_y + 1)
           love.graphics.setColor(col[1], col[2], col[3], 0.97 * cur_card_a)
-          love.graphics.print(
-            trunc(txt, content_w - indent - text_off),
-            p_x + p_pad_x + indent + text_off,
-            cy + (card_line_h - text_h) / 2
-          )
+          love.graphics.print(txt_trunc, txt_x, txt_y)
+          local ed_tag = card_edition_tag(card_obj)
+          if ed_tag ~= "" then
+            draw_animated_edition(ed_tag, txt_x + font:getWidth(txt_trunc), txt_y, cur_card_a, font, now, pk)
+          end
           cy = cy + card_line_h
+
+        elseif r[12] then
+          local jokers = r[12]
+          local n = #jokers
+          if n > 0 then
+            local sprite_h = math.min(88, math.floor(content_w / n / 0.72 * 0.92))
+            local sprite_w_est = math.floor(sprite_h * 0.72)
+            local slot_w = content_w / n
+            for ji, jc in ipairs(jokers) do
+              local slot_x = p_x + p_pad_x + (ji - 1) * slot_w
+              local sprite_x = math.floor(slot_x + (slot_w - sprite_w_est) / 2)
+              local sprite_y = cy + 2
+              local rc = rarity_color(jc) or {1, 1, 1}
+              love.graphics.setColor(rc[1], rc[2], rc[3], (0.14 + 0.06 * pulse) * cur_card_a)
+              love.graphics.rectangle("fill", sprite_x - 3, sprite_y - 3, sprite_w_est + 6, sprite_h + 6, 4, 4)
+              love.graphics.setColor(0, 0, 0, 0.55 * cur_card_a)
+              love.graphics.rectangle("fill", sprite_x - 1, sprite_y - 1, sprite_w_est + 2, sprite_h + 2, 2, 2)
+              love.graphics.setColor(rc[1], rc[2], rc[3], (0.50 + 0.18 * pulse) * cur_card_a)
+              love.graphics.setLineWidth(1)
+              love.graphics.rectangle("line", sprite_x - 1, sprite_y - 1, sprite_w_est + 2, sprite_h + 2, 2, 2)
+              draw_card_mini(jc, sprite_x, sprite_y, sprite_h)
+              local jname = card_display_name(jc) or "?"
+              local sf = panel_font_small or font
+              if panel_font_small then love.graphics.setFont(panel_font_small) end
+              local jname_t = trunc(jname, slot_w - 4)
+              local nw = sf:getWidth(jname_t)
+              local nx = math.floor(slot_x + (slot_w - math.min(nw, slot_w)) / 2)
+              local jny = cy + sprite_h + 6
+              love.graphics.setColor(0, 0, 0, 0.30 * cur_card_a)
+              love.graphics.print(jname_t, nx + 1, jny + 1)
+              love.graphics.setColor(rc[1], rc[2], rc[3], 0.95 * cur_card_a)
+              love.graphics.print(jname_t, nx, jny)
+              local jed = card_edition_tag(jc)
+              if jed ~= "" then
+                draw_animated_edition(jed, nx + nw, jny, cur_card_a, sf, now, pk)
+              end
+              if panel_font_small then love.graphics.setFont(font) end
+            end
+          end
+          cy = cy + 88 + small_line_h + 8
 
         elseif r[10] then
           local jokers = r[10]
@@ -2472,27 +2785,33 @@ local function draw_neuro_indicator()
             -- guard slot bounds (joker sold mid-cycle)
             if _desc_slot >= n then _desc_slot = 0; _desc_phase_t = 0.0 end
 
-            _desc_phase_t = _desc_phase_t + dt
-
             local fade_a, show_progress
-            if _desc_phase_t < D_FADE then
-              fade_a = _desc_phase_t / D_FADE
-              show_progress = 0.0
-            elseif _desc_phase_t < D_FADE + D_SHOW then
-              fade_a = 1.0
-              show_progress = (_desc_phase_t - D_FADE) / D_SHOW
-            else
-              local t = _desc_phase_t - D_FADE - D_SHOW
-              fade_a = math.max(0.0, 1.0 - t / D_FADE)
+            if n == 1 then
+              -- single joker: always fully visible, no cycling
+              _desc_slot = 0
+              fade_a = cur_card_a
               show_progress = 1.0
-              if _desc_phase_t >= D_TOTAL then
-                _desc_slot = (_desc_slot + 1) % n
-                _desc_phase_t = 0.0
-                fade_a = 0.0
+            else
+              _desc_phase_t = _desc_phase_t + dt
+              if _desc_phase_t < D_FADE then
+                fade_a = _desc_phase_t / D_FADE
                 show_progress = 0.0
+              elseif _desc_phase_t < D_FADE + D_SHOW then
+                fade_a = 1.0
+                show_progress = (_desc_phase_t - D_FADE) / D_SHOW
+              else
+                local t = _desc_phase_t - D_FADE - D_SHOW
+                fade_a = math.max(0.0, 1.0 - t / D_FADE)
+                show_progress = 1.0
+                if _desc_phase_t >= D_TOTAL then
+                  _desc_slot = (_desc_slot + 1) % n
+                  _desc_phase_t = 0.0
+                  fade_a = 0.0
+                  show_progress = 0.0
+                end
               end
+              fade_a = fade_a * cur_card_a
             end
-            fade_a = fade_a * cur_card_a
 
             -- ---- cache text content (invalidated when joker count changes) ----
             if _desc_cache_n ~= n then _desc_cache = {}; _desc_cache_n = n end
@@ -2563,17 +2882,16 @@ local function draw_neuro_indicator()
 
               if #lns > 0 then
                 local desc_y = cy + card_line_h
+                local sf = panel_font_small or font
                 for li = 1, math.min(#lns, 3) do
-                  love.graphics.setColor(0, 0, 0, 0.20 * fade_a)
-                  love.graphics.print(lns[li], p_x + p_pad_x + text_off + 1, desc_y + 1)
-                  love.graphics.setColor(ORANGE[1], ORANGE[2], ORANGE[3], 0.88 * fade_a)
-                  love.graphics.print(lns[li], p_x + p_pad_x + text_off, desc_y)
+                  draw_colored_desc(lns[li], p_x + p_pad_x + text_off, desc_y, fade_a, sf)
                   desc_y = desc_y + small_line_h
                 end
               end
               if panel_font_small then love.graphics.setFont(font) end
 
-              -- progress bar (ALWAYS fully opaque — tracks SHOW phase, not fade)
+              -- progress bar + dots (only when cycling multiple jokers)
+              if n == 1 then goto desc_cycle_done end
               local bar_y = cy + card_line_h + small_line_h * 3 + 3
               local bar_x = p_x + p_pad_x
               love.graphics.setColor(p[1], p[2], p[3], 0.18)
@@ -2596,6 +2914,7 @@ local function draw_neuro_indicator()
                   love.graphics.circle("fill", dx, dot_y, 2)
                 end
               end
+              ::desc_cycle_done::
             end
           end
           cy = cy + card_line_h + small_line_h * 2 + 18
@@ -2726,61 +3045,240 @@ local function draw_login_animation()
   local now = (G.TIMERS and G.TIMERS.REAL) or (love.timer and love.timer.getTime()) or 0
   local elapsed = now - anim.start
 
-  local BLACKOUT    = 0.35
-  local BLACK_HOLD  = 0.40
-  local REVEAL      = 0.8
-  local TEXT_SHOW   = 1.8
-  local FADE_OUT    = 0.4
-  local TOTAL = BLACKOUT + BLACK_HOLD + REVEAL + TEXT_SHOW + FADE_OUT
+  local PRE       = 0.08
+  local CHAOS     = 0.65
+  local HOLD      = 0.28
+  local REVEAL    = 0.60
+  local TEXT_SHOW = 1.80
+  local FADE_OUT  = 0.40
+  local TOTAL = PRE + CHAOS + HOLD + REVEAL + TEXT_SHOW + FADE_OUT
 
-  if elapsed > TOTAL then
-    G.NEURO.login_anim = nil
-    return
-  end
+  if elapsed > TOTAL then G.NEURO.login_anim = nil; return end
 
-  if not anim.palette_ready and elapsed >= BLACKOUT then
+  if not anim.palette_ready and elapsed >= PRE + CHAOS * 0.35 then
     anim.palette_ready = true
   end
 
   local sw = love.graphics.getWidth()
   local sh = love.graphics.getHeight()
 
-  local black_alpha
-  if elapsed < BLACKOUT then
-    black_alpha = elapsed / BLACKOUT
-  elseif elapsed < BLACKOUT + BLACK_HOLD then
-    black_alpha = 1.0
-  elseif elapsed < BLACKOUT + BLACK_HOLD + REVEAL then
-    black_alpha = 1.0 - (elapsed - BLACKOUT - BLACK_HOLD) / REVEAL
-  else
-    black_alpha = 0
+  local function gh(a, b)
+    local x = math.sin(a * 127.1 + b * 311.7 + 3.14159) * 43758.5453
+    return x - math.floor(x)
   end
-  black_alpha = math.max(0, math.min(1, black_alpha))
+  local function gh2(a, b)
+    local x = math.sin(a * 269.5 + b * 183.3 + 1.61803) * 57832.4391
+    return x - math.floor(x)
+  end
 
-  love.graphics.setColor(0, 0, 0, black_alpha)
+  local gi
+  if elapsed < PRE then
+    gi = (elapsed / PRE) * 0.28
+  elseif elapsed < PRE + CHAOS then
+    local t = (elapsed - PRE) / CHAOS
+    if t < 0.08 then
+      gi = 0.28 + (t / 0.08) * 0.72
+    else
+      gi = 1.0
+    end
+  elseif elapsed < PRE + CHAOS + HOLD then
+    gi = (1.0 - (elapsed - PRE - CHAOS) / HOLD) * 0.22
+  else
+    gi = 0
+  end
+  gi = math.max(0, math.min(1, gi))
+
+  local ba
+  if elapsed < PRE then
+    ba = (elapsed / PRE) * 0.45
+  elseif elapsed < PRE + CHAOS then
+    ba = 0.45 + ((elapsed - PRE) / CHAOS) * 0.55
+  elseif elapsed < PRE + CHAOS + HOLD then
+    ba = 1.0
+  elseif elapsed < PRE + CHAOS + HOLD + REVEAL then
+    ba = 1.0 - (elapsed - PRE - CHAOS - HOLD) / REVEAL
+  else
+    ba = 0
+  end
+  ba = math.max(0, math.min(1, ba))
+
+  love.graphics.setColor(0, 0, 0, ba)
   love.graphics.rectangle("fill", 0, 0, sw, sh)
 
-  local text_start = BLACKOUT + BLACK_HOLD
-  if elapsed >= text_start then
-    local text_elapsed = elapsed - text_start
-    local full_text = "Hello " .. anim.name .. "!"
-    local TYPE_DUR = 0.8
-    local type_progress = math.min(1, text_elapsed / TYPE_DUR)
-    local char_count = math.floor(type_progress * #full_text)
-    local display_text = full_text:sub(1, char_count)
+  if gi > 0.005 then
+    local f20  = math.floor(now * 20)
+    local f30  = math.floor(now * 30)
+    local f50  = math.floor(now * 50)
+    local f80  = math.floor(now * 80)
+    local f12  = math.floor(now * 12)
+    local f16  = math.floor(now * 16)
+    local f22  = math.floor(now * 22)
 
+    local step = gi > 0.80 and 2 or (gi > 0.50 and 3 or 5)
+    love.graphics.setColor(0, 0, 0, 0.35 * gi)
+    for sy = 0, sh - 1, step do
+      love.graphics.rectangle("fill", 0, sy, sw, 1)
+    end
+
+    love.graphics.setColor(0.04, 0.04, 0.06, 0.18 * gi)
+    for sx = 0, sw - 1, step do
+      love.graphics.rectangle("fill", sx, 0, 1, sh)
+    end
+
+    local col_n = math.floor(gi * gi * 40)
+    for i = 1, col_n do
+      local cx = math.floor(gh(i,       f50) * sw)
+      local cw = math.floor(gh(i + 0.1, f50) * 18) + 1
+      local ch = math.floor(gh(i + 0.2, f50) * sh * 0.88) + 8
+      local cy = math.floor(gh(i + 0.3, f50) * math.max(1, sh - ch))
+      local r4 = gh(i + 0.4, f50)
+      local g4 = gh(i + 0.5, f50)
+      local b4 = gh(i + 0.6, f50)
+      love.graphics.setColor(r4, g4, b4, gi * 0.65)
+      love.graphics.rectangle("fill", cx, cy, cw, ch)
+    end
+
+    local row_n = math.floor(gi * gi * 45)
+    for i = 1, row_n do
+      local ry  = math.floor(gh(i,       f20) * sh)
+      local rw  = math.floor(gh(i + 0.1, f20) * sw * 0.95) + 40
+      local rx  = math.floor(gh(i + 0.2, f20) * math.max(1, sw - rw))
+      local rh  = math.max(1, math.floor(gh(i + 0.3, f20) * 12) + 1)
+      local br  = 0.35 + gh(i + 0.5, f20) * 0.60
+      local hue = gh(i + 0.7, f20)
+      love.graphics.setColor(
+        math.min(1, br * (0.65 + hue * 0.35)),
+        math.min(1, br * (0.65 + gh(i + 0.8, f20) * 0.35)),
+        math.min(1, br * (0.85 + gh(i + 0.9, f20) * 0.15)),
+        gi * 0.96)
+      love.graphics.rectangle("fill", rx, ry, rw, rh)
+    end
+
+    if gi > 0.25 then
+      local mosh_n = math.floor((gi - 0.25) / 0.75 * 28)
+      for i = 1, mosh_n do
+        local mx  = math.floor(gh2(i * 2,     f80) * sw)
+        local my  = math.floor(gh2(i * 2 + 1, f80) * sh)
+        local mw  = math.floor(gh2(i * 2 + 2, f80) * 200) + 12
+        local mhh = math.floor(gh2(i * 2 + 3, f80) * 70)  + 5
+        local hm  = gh2(i, f80)
+        love.graphics.setColor(
+          math.abs(math.sin(hm * 6.28318 + 0.000)),
+          math.abs(math.sin(hm * 6.28318 + 2.094)),
+          math.abs(math.sin(hm * 6.28318 + 4.189)),
+          gi * 0.78)
+        love.graphics.rectangle("fill", mx, my, mw, mhh)
+      end
+    end
+
+    local nn = math.floor(gi * 140)
+    for i = 1, nn do
+      local nx = math.floor(gh(i,       f30 + 1111) * sw)
+      local ny = math.floor(gh(i + 0.2, f30 + 1111) * sh)
+      local nw = math.floor(gh(i + 0.4, f30 + 1111) * 28) + 1
+      local nh = math.floor(gh(i + 0.6, f30 + 1111) * 8)  + 1
+      local gr = 0.10 + gh(i + 0.8, f30 + 1111) * 0.88
+      love.graphics.setColor(gr, gr * 0.95, gr, gi * 0.65)
+      love.graphics.rectangle("fill", nx, ny, nw, nh)
+    end
+
+    local fringe = math.floor(gi * gi * 110)
+    if fringe > 0 then
+      love.graphics.setColor(1.0, 0.0, 0.06, gi * 0.42)
+      love.graphics.rectangle("fill", 0, 0, fringe, sh)
+      love.graphics.setColor(0.04, 0.12, 1.0, gi * 0.42)
+      love.graphics.rectangle("fill", sw - fringe, 0, fringe, sh)
+      love.graphics.setColor(0.0, 1.0, 0.08, gi * 0.18)
+      love.graphics.rectangle("fill", math.floor(fringe / 2), 0, math.max(1, math.floor(fringe / 3)), sh)
+    end
+
+    if gi > 0.40 then
+      for bi = 1, 3 do
+        local band_y = math.floor(gh(bi * 3, f12) * sh)
+        local band_h = math.floor(gi * 80) + 10
+        local sep    = math.floor(gi * 22) + bi * 4
+        love.graphics.setColor(1.0, 0.02, 0.02, gi * 0.16)
+        love.graphics.rectangle("fill", 0, band_y - sep, sw, band_h)
+        love.graphics.setColor(0.02, 0.02, 1.0, gi * 0.16)
+        love.graphics.rectangle("fill", 0, band_y + sep, sw, band_h)
+        love.graphics.setColor(0.02, 1.0, 0.40, gi * 0.07)
+        love.graphics.rectangle("fill", 0, band_y,        sw, math.floor(band_h / 3))
+      end
+    end
+
+    local speeds = { 38, 73, 119, 211 }
+    local alphas = { 0.22, 0.15, 0.09, 0.05 }
+    for ti = 1, 4 do
+      local ty2 = math.floor((now * speeds[ti]) % sh)
+      love.graphics.setColor(1, 1, 1, gi * alphas[ti])
+      love.graphics.rectangle("fill", 0, ty2, sw, 2 + ti)
+      love.graphics.setColor(0, 0, 0, gi * alphas[ti] * 0.60)
+      love.graphics.rectangle("fill", 0, (ty2 + 7) % sh, sw, ti + 1)
+    end
+
+    if gi > 0.45 then
+      local drop_n = math.floor((gi - 0.45) / 0.55 * 16)
+      for i = 1, drop_n do
+        local dx = math.floor(gh2(i * 5,     f80 + 555) * sw)
+        local dw = math.floor(gh2(i * 5 + 1, f80 + 555) * 10) + 1
+        local dr = gh2(i, f80 + 555)
+        love.graphics.setColor(math.min(1, dr * 2), 1, dr * 0.80, gi * 0.60)
+        love.graphics.rectangle("fill", dx, 0, dw, sh)
+      end
+    end
+
+    if gi > 0.60 then
+      local flicker = gh(9, f16)
+      if flicker > 0.48 then
+        local fi = (flicker - 0.48) / 0.52
+        love.graphics.setColor(1, 0.85, 1, fi * fi * 0.38 * gi)
+        love.graphics.rectangle("fill", 0, 0, sw, sh)
+      end
+    end
+
+    if gi > 0.80 then
+      local sv = gh(1, f22)
+      if sv > 0.68 then
+        love.graphics.setColor(1, 1, 1, 0.60 * gi)
+        love.graphics.rectangle("fill", 0, 0, sw, sh)
+      end
+    end
+
+    if gi > 0.93 then
+      local sv2 = gh2(3, math.floor(now * 28))
+      if sv2 > 0.82 then
+        love.graphics.setColor(1, 1, 1, 0.92)
+        love.graphics.rectangle("fill", 0, 0, sw, sh)
+      end
+    end
+
+    if gi > 0.70 then
+      local seg_n = math.floor((gi - 0.70) / 0.30 * 6)
+      for i = 1, seg_n do
+        local sx2 = math.floor(gh(i * 11, f50 + 777) * sw)
+        local sw2 = math.floor(sw / seg_n)
+        local off = math.floor((gh(i, f50 + 777) - 0.5) * gi * 30)
+        love.graphics.setColor(1, 1, 1, 0.08 * gi)
+        love.graphics.rectangle("fill", sx2, off, sw2, sh)
+      end
+    end
+  end
+
+  local text_start = PRE + CHAOS + HOLD
+  if elapsed >= text_start then
+    local te = elapsed - text_start
+    local full_text = "Hello " .. anim.name .. "!"
+    local TYPE_DUR = 0.68
+    local char_count = math.floor(math.min(1, te / TYPE_DUR) * #full_text)
+    local display_text = full_text:sub(1, char_count)
     if char_count < #full_text then
       display_text = display_text .. (math.floor(now * 4) % 2 == 0 and "_" or " ")
     end
 
-    local text_alpha = 1.0
-    if text_elapsed < 0.3 then
-      text_alpha = text_elapsed / 0.3
-    end
+    local ta = 1.0
+    if te < 0.20 then ta = te / 0.20 end
     local text_total = REVEAL + TEXT_SHOW + FADE_OUT
-    if text_elapsed > text_total - FADE_OUT then
-      text_alpha = math.max(0, (text_total - text_elapsed) / FADE_OUT)
-    end
+    if te > text_total - FADE_OUT then ta = math.max(0, (text_total - te) / FADE_OUT) end
 
     local p = pal()
     local panel_font, _ = get_panel_fonts()
@@ -2789,26 +3287,44 @@ local function draw_login_animation()
     local f = love.graphics.getFont()
     local tw = f:getWidth(display_text)
     local th = f:getHeight()
+    local cx = sw / 2 - tw / 2
+    local cy2 = sh / 2 - th / 2
 
-    love.graphics.setColor(p.PRIMARY[1], p.PRIMARY[2], p.PRIMARY[3], 0.18 * text_alpha)
-    love.graphics.rectangle("fill", 0, sh / 2 - 40, sw, 80, 4, 4)
-    love.graphics.setColor(p.GLOW[1], p.GLOW[2], p.GLOW[3], 0.40 * text_alpha)
+    love.graphics.setColor(0, 0, 0, 0.72 * ta)
+    love.graphics.rectangle("fill", 0, sh / 2 - 48, sw, 96)
+
+    love.graphics.setColor(p.PRIMARY[1], p.PRIMARY[2], p.PRIMARY[3], 0.22 * ta)
+    love.graphics.rectangle("fill", 0, sh / 2 - 48, sw, 96)
+
+    love.graphics.setColor(p.GLOW[1], p.GLOW[2], p.GLOW[3], 0.55 * ta)
     love.graphics.setLineWidth(2)
-    love.graphics.line(0, sh / 2 - 40, sw, sh / 2 - 40)
-    love.graphics.line(0, sh / 2 + 40, sw, sh / 2 + 40)
+    love.graphics.line(0, sh / 2 - 48, sw, sh / 2 - 48)
+    love.graphics.line(0, sh / 2 + 48, sw, sh / 2 + 48)
 
-    local pulse = 0.5 + 0.5 * math.sin(now * 6)
-    love.graphics.setColor(p.GLOW[1], p.GLOW[2], p.GLOW[3], (0.25 + 0.15 * pulse) * text_alpha)
-    for dx = -2, 2 do
-      for dy = -2, 2 do
-        if dx ~= 0 or dy ~= 0 then
-          love.graphics.print(display_text, sw / 2 - tw / 2 + dx, sh / 2 - th / 2 + dy)
+    love.graphics.setColor(p.GLOW[1] * 0.5, p.GLOW[2] * 0.5, p.GLOW[3] * 0.5, 0.20 * ta)
+    love.graphics.line(0, sh / 2 - 44, sw, sh / 2 - 44)
+    love.graphics.line(0, sh / 2 + 44, sw, sh / 2 + 44)
+    love.graphics.setLineWidth(1)
+
+    local pulse = 0.5 + 0.5 * math.sin(now * 5.5)
+    local glow_r = math.min(1, p.GLOW[1] * 1.1)
+    local glow_g = math.min(1, p.GLOW[2] * 1.1)
+    local glow_b = math.min(1, p.GLOW[3] * 1.1)
+
+    for radius = 4, 1, -1 do
+      local ga = (0.08 - radius * 0.015) * (0.7 + 0.3 * pulse) * ta
+      love.graphics.setColor(glow_r, glow_g, glow_b, ga)
+      for dx = -radius, radius do
+        for dy = -radius, radius do
+          if math.abs(dx) == radius or math.abs(dy) == radius then
+            love.graphics.print(display_text, cx + dx, cy2 + dy)
+          end
         end
       end
     end
 
-    love.graphics.setColor(1, 1, 1, 0.95 * text_alpha)
-    love.graphics.print(display_text, sw / 2 - tw / 2, sh / 2 - th / 2)
+    love.graphics.setColor(1, 0.96, 1, 0.98 * ta)
+    love.graphics.print(display_text, cx, cy2)
 
     if prev_font then love.graphics.setFont(prev_font) end
   end
@@ -2952,6 +3468,7 @@ local function setup_neuro_bridge()
   end
   G.NEURO:register_actions(filtered_actions)
 
+  G.NEURO.ai_highlighted = setmetatable({}, {__mode = "k"})
   G.NEURO.state = nil
   G.NEURO.force_state = nil
   G.NEURO.force_inflight = false
@@ -3146,6 +3663,27 @@ love.update = function(dt)
 
         local now = neuro_now()
         update_joker_showcase(now)
+
+        -- Auto-login: after 5s in MENU with no persona chosen, pick one automatically
+        if G.NEURO.persona == "hiyori" and not G.NEURO.login_anim and not _auto_login_fired then
+          if state_name == "MENU" then
+            if not _menu_enter_t then _menu_enter_t = now end
+            if now - _menu_enter_t >= 5.0 then
+              _auto_login_fired = true
+              _menu_enter_t = nil
+              local picks = {"neuro", "evil"}
+              local pick = picks[math.random(#picks)]
+              local display_name = pick == "evil" and "Evil Neuro" or "Neuro-sama"
+              G.NEURO.persona = pick
+              G.NEURO.login_anim = { start = now, name = display_name, palette_ready = false }
+            end
+          elseif state_name ~= "SPLASH" then
+            _menu_enter_t = nil
+          end
+        elseif G.NEURO.persona ~= "hiyori" then
+          _auto_login_fired = false  -- reset so next run can auto-login again
+        end
+
         if G.NEURO.force_inflight and G.NEURO.force_sent_at and
           (now - G.NEURO.force_sent_at) > FORCE_TIMEOUT_SECONDS then
           G.NEURO.last_force_fingerprint = nil
@@ -3387,7 +3925,7 @@ local HIYORI_COLORS = {
 
 local NEURO_COLORS = {
   RED          = { 1.000, 0.302, 0.580, 1 },
-  BLUE         = { 0.000, 0.898, 1.000, 1 },
+  BLUE         = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
   PURPLE       = { 0.608, 0.447, 0.902, 1 },
   GREEN        = { 0.482, 0.769, 0.565, 1 },
   GOLD         = { 1.000, 0.843, 0.000, 1 },
@@ -3400,20 +3938,20 @@ local NEURO_COLORS = {
   JOKER_GREY   = { 0.745, 0.725, 0.800, 1 },
 
   MULT         = { 1.000, 0.651, 0.788, 1 },
-  CHIPS        = { 0.502, 0.875, 1.000, 1 },
+  CHIPS        = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
   XMULT        = { 1.000, 0.302, 0.580, 1 },
 
   UI_MULT      = { 1.000, 0.651, 0.788, 1 },
-  UI_CHIPS     = { 0.502, 0.875, 1.000, 1 },
+  UI_CHIPS     = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
   MONEY        = { 1.000, 0.843, 0.000, 1 },
-  BOOSTER      = { 0.000, 0.898, 1.000, 1 },
+  BOOSTER      = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
 
   EDITION      = { 0.855, 0.835, 0.925, 1 },
   DARK_EDITION = { 0.530, 0.490, 0.680, 1 },
   IMPORTANT    = { 1.000, 0.302, 0.580, 1 },
   FILTER       = { 1.000, 0.302, 0.580, 1 },
   VOUCHER      = { 1.000, 0.843, 0.000, 1 },
-  CHANCE       = { 0.000, 0.898, 1.000, 1 },
+  CHANCE       = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
 
   PALE_GREEN   = { 0.580, 0.820, 0.630, 1 },
   ETERNAL      = { 1.000, 0.302, 0.580, 1 },
@@ -3422,15 +3960,15 @@ local NEURO_COLORS = {
 
   BACKGROUND = {
     L = { 1.000, 0.780, 0.855, 1 },
-    D = { 0.502, 0.875, 1.000, 1 },
-    C = { 0.380, 0.780, 0.920, 1 },
+    D = { 0.980, 0.650, 0.780, 1 },  -- medium pink replaces light blue
+    C = { 0.960, 0.580, 0.720, 1 },  -- deeper pink replaces blue-ish
   },
 
   BLIND = {
-    Small = { 0.502, 0.875, 1.000, 1 },
+    Small = { 0.960, 0.580, 0.720, 1 },  -- pink
     Big   = { 1.000, 0.780, 0.855, 1 },
     Boss  = { 1.000, 0.302, 0.580, 1 },
-    won   = { 0.000, 0.898, 1.000, 1 },
+    won   = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
   },
 
   DYN_UI = {
@@ -3449,12 +3987,12 @@ local NEURO_COLORS = {
     BACKGROUND_WHITE    = { 0.984, 0.984, 1.000, 1 },
     BACKGROUND_DARK     = { 0.098, 0.086, 0.118, 1 },
     BACKGROUND_INACTIVE = { 0.170, 0.155, 0.200, 1 },
-    OUTLINE_LIGHT       = { 0.000, 0.898, 1.000, 1 },
-    OUTLINE_LIGHT_TRANS = { 0.000, 0.898, 1.000, 0.45 },
+    OUTLINE_LIGHT       = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
+    OUTLINE_LIGHT_TRANS = { 1.000, 0.420, 0.540, 0.45 },
     OUTLINE_DARK        = { 0.098, 0.086, 0.118, 1 },
     TRANSPARENT_LIGHT   = { 0.984, 0.984, 1.000, 0.18 },
     TRANSPARENT_DARK    = { 0.098, 0.086, 0.118, 0.16 },
-    HOVER               = { 0.000, 0.898, 1.000, 0.28 },
+    HOVER               = { 1.000, 0.420, 0.540, 0.28 },  -- hot pink replaces cyan
   },
 
   SET = {
@@ -3469,13 +4007,13 @@ local NEURO_COLORS = {
 
   SECONDARY_SET = {
     Default  = { 1.000, 0.780, 0.855, 1 },
-    Enhanced = { 0.000, 0.898, 1.000, 1 },
+    Enhanced = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
     Joker    = { 1.000, 0.302, 0.580, 1 },
     Tarot    = { 0.608, 0.447, 0.902, 1 },
-    Planet   = { 0.502, 0.875, 1.000, 1 },
+    Planet   = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
     Spectral = { 0.608, 0.447, 0.902, 1 },
     Voucher  = { 1.000, 0.843, 0.000, 1 },
-    Edition  = { 0.502, 0.875, 1.000, 1 },
+    Edition  = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
   },
 }
 

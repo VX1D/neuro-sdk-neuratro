@@ -1181,6 +1181,13 @@ local function handle_use_card(data)
       local t = (G.TIMERS and G.TIMERS.REAL) or os.clock()
       G.NEURO.last_action_at = t + pack_pick_block
 
+      -- Does this pack card need hand card selection? (Tarots like "change N to suit")
+      local needs_hand_sel = (not is_playing_card)
+        and card.ability and card.ability.consumeable
+        and card.ability.consumeable.max_highlighted
+        and card.ability.consumeable.max_highlighted > 0
+      local captured_hand_indices = (needs_hand_sel and hand_indices) or nil
+
       if G.E_MANAGER and Event then
         local fn = G.FUNCS and G.FUNCS.use_card
         G.E_MANAGER:add_event(Event({
@@ -1190,22 +1197,57 @@ local function handle_use_card(data)
             pcall(function()
               card.highlighted = false
               if NeuroAnim and NeuroAnim.pick_pack_card then NeuroAnim.pick_pack_card(card, bp) end
+              -- Pre-highlight hand cards for Tarots that need selection
+              if captured_hand_indices and G.hand and G.hand.cards then
+                clear_area_highlight(G.hand)
+                for _, idx in ipairs(captured_hand_indices) do
+                  local hcard = G.hand.cards[idx]
+                  if hcard then add_area_highlight(G.hand, hcard) end
+                end
+              end
               if is_playing_card then
                 pcall(function() card:click() end)
               elseif fn then
                 fn({ config = { ref_table = card }, UIBox = mock_UIBox })
               end
             end)
+            -- Auto-confirm hand selection after a short delay
+            if captured_hand_indices then
+              G.E_MANAGER:add_event(Event({
+                trigger = "after",
+                delay   = 0.6,
+                func    = function()
+                  pcall(function()
+                    local end_fn = G.FUNCS and G.FUNCS.end_consumeable
+                    if end_fn then end_fn() end
+                  end)
+                  return true
+                end,
+              }))
+            end
             return true
           end,
         }))
       else
         -- Fallback: immediate if E_MANAGER unavailable
         local fn = G.FUNCS and G.FUNCS.use_card
+        if captured_hand_indices and G.hand and G.hand.cards then
+          clear_area_highlight(G.hand)
+          for _, idx in ipairs(captured_hand_indices) do
+            local hcard = G.hand.cards[idx]
+            if hcard then add_area_highlight(G.hand, hcard) end
+          end
+        end
         if is_playing_card then
           pcall(function() card:click() end)
         elseif fn then
           fn({ config = { ref_table = card }, UIBox = mock_UIBox })
+        end
+        if captured_hand_indices then
+          pcall(function()
+            local end_fn = G.FUNCS and G.FUNCS.end_consumeable
+            if end_fn then end_fn() end
+          end)
         end
       end
 
@@ -3381,6 +3423,17 @@ FORCE_HANDLERS["BLIND_SELECT"] = function(rules)
   }
 end
 
+local function pack_hand_list()
+  if not (G and G.hand and G.hand.cards and #G.hand.cards > 0) then return "" end
+  local parts = {}
+  for i, c in ipairs(G.hand.cards) do
+    local v = c.base and c.base.value or "?"
+    local s = c.base and c.base.suit or "?"
+    parts[#parts + 1] = tostring(i) .. "=" .. tostring(v) .. tostring(s:sub(1,1))
+  end
+  return "Hand[" .. table.concat(parts, ",") .. "]. "
+end
+
 local function force_pack(rules, state_name)
   local pack_type = (state_name == "SMODS_BOOSTER_OPENED") and "BOOSTER" or state_name:gsub("_PACK", "")
   local picks_left = tonumber(G and G.GAME and G.GAME.pack_choices or 0) or 0
@@ -3388,17 +3441,43 @@ local function force_pack(rules, state_name)
   if picks_left <= 0 then
     actions[#actions + 1] = "skip_booster"
   end
+
+  -- Detect "tarot awaiting hand selection" sub-state
+  local cons_remaining = G and G.GAME and G.GAME.current_round
+    and G.GAME.current_round.consumeables_remaining or 0
+  if cons_remaining and cons_remaining > 0 then
+    -- A tarot has been activated and is waiting for hand card selection
+    actions = { "card_click", "end_consumeable" }
+    local hand_info = pack_hand_list()
+    local highlighted = ""
+    if G.hand and G.hand.highlighted and #G.hand.highlighted > 0 then
+      local hl = {}
+      for i, c in ipairs(G.hand.cards or {}) do
+        for _, h in ipairs(G.hand.highlighted) do
+          if h == c then hl[#hl + 1] = tostring(i) end
+        end
+      end
+      if #hl > 0 then highlighted = "Already selected: [" .. table.concat(hl, ",") .. "]. " end
+    end
+    return {
+      query = rules .. pack_type .. " pack. TAROT ACTIVATED — waiting for hand card selection. "
+        .. hand_info .. highlighted
+        .. 'Select cards: card_click|{"area":"hand","index":N} for each target card. '
+        .. "Then end_consumeable to confirm effect. "
+        .. "Check tarot_target_advice: " .. pack_type .. " tarot needs specific targeting.",
+      actions = actions,
+    }
+  end
+
   local pack_best = G and G.NEURO.pack_best
   local pick_hint = ""
   if pack_best then
     pick_hint = "Best card is index " .. pack_best.index .. " (rank " .. pack_best.rank .. "). Pick it. "
   end
-  -- #11: Skip hint when all cards rank C
   local all_c_hint = ""
   if pack_best and pack_best.rank == "C" then
     all_c_hint = "All cards rank C (weak). Consider skip_booster instead. "
   end
-  -- #12: Consumable slot full warning for consumable packs
   local slot_warn = ""
   local is_consumable_pack = (pack_type == "TAROT" or pack_type == "PLANET" or pack_type == "SPECTRAL")
   if is_consumable_pack and G and G.consumeables then
@@ -3408,11 +3487,35 @@ local function force_pack(rules, state_name)
       slot_warn = string.format("Consumable slots FULL (%d/%d). Picking a card will FAIL unless you use/sell one first. ", cons_count, cons_limit)
     end
   end
+
+  -- Build per-card selection hints for Tarots that need hand selection
+  local sel_hints = ""
+  local bp = G and (G.pack_cards or G.booster_pack)
+  if is_consumable_pack and bp and bp.cards then
+    local hand_info = pack_hand_list()
+    local needs_sel = {}
+    for i, c in ipairs(bp.cards) do
+      local mh = c.ability and c.ability.consumeable and c.ability.consumeable.max_highlighted
+      local mn = (c.ability and c.ability.consumeable and c.ability.consumeable.min_highlighted) or 1
+      if mh and mh > 0 then
+        local nm = c.ability and c.ability.name or "Tarot"
+        local advice = tarot_target_advice(nm, "")
+        needs_sel[#needs_sel + 1] = string.format(
+          "Card %d (%s) needs %d-%d hand cards: %s"
+          .. 'use_card|{"area":"booster_pack","index":%d,"hand_indices":[i,j,...]}.',
+          i, nm, mn, mh, advice ~= "" and advice or "", i)
+      end
+    end
+    if #needs_sel > 0 then
+      sel_hints = hand_info .. table.concat(needs_sel, " ") .. " "
+    end
+  end
+
   return {
     query = rules .. pack_type .. " pack. Picks left: " .. tostring(math.max(0, math.floor(picks_left))) .. ". "
-      .. pick_hint .. all_c_hint .. slot_warn .. "PC rows rank: S>A>B>C. "
-      .. 'Pick: use_card|{"area":"booster_pack","index":N}. '
-      .. "If popup: end_consumeable. If done: skip_booster.",
+      .. pick_hint .. all_c_hint .. slot_warn .. sel_hints .. "PC rows rank: S>A>B>C. "
+      .. 'Pick: use_card|{"area":"booster_pack","index":N} (add "hand_indices":[i,j] if card needs hand selection). '
+      .. "If done: skip_booster.",
     actions = actions
   }
 end

@@ -7,7 +7,7 @@
 Lua mod hooks into the game, Rust bridge relays messages over WebSocket,
 Neuro gets game state and responds with actions.
 
-[![Version](https://img.shields.io/badge/version-0.3.1-ff4d94?style=flat-square)](#changelog)
+[![Version](https://img.shields.io/badge/version-0.4.0-ff4d94?style=flat-square)](#changelog)
 [![License](https://img.shields.io/badge/license-MIT-80dfff?style=flat-square)](LICENSE)
 [![Balatro](https://img.shields.io/badge/Balatro-1.0.1-9b72e6?style=flat-square)](https://store.steampowered.com/app/2379780/Balatro/)
 [![Lua](https://img.shields.io/badge/Lua-5.1-ffd700?style=flat-square)](https://www.lua.org/)
