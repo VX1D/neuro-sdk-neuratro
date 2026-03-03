@@ -120,7 +120,7 @@ local function is_forced_action(name)
   if set then
     return not not set[name]
   end
-  local list = G.NEURO.force_actions
+  local list = G.NEURO.force_action_names
   if list then
     for i = 1, #list do
       if list[i] == name then

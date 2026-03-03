@@ -7,7 +7,7 @@
 Lua mod hooks into the game, Rust bridge relays messages over WebSocket,
 Neuro gets game state and responds with actions.
 
-[![Version](https://img.shields.io/badge/version-0.3.0-ff4d94?style=flat-square)](#changelog)
+[![Version](https://img.shields.io/badge/version-0.3.1-ff4d94?style=flat-square)](#changelog)
 [![License](https://img.shields.io/badge/license-MIT-80dfff?style=flat-square)](LICENSE)
 [![Balatro](https://img.shields.io/badge/Balatro-1.0.1-9b72e6?style=flat-square)](https://store.steampowered.com/app/2379780/Balatro/)
 [![Lua](https://img.shields.io/badge/Lua-5.1-ffd700?style=flat-square)](https://www.lua.org/)
@@ -212,6 +212,32 @@ neuro-bridge-rs/             Rust WebSocket <-> IPC relay
 ---
 
 ## Changelog
+
+### 0.3.1 -- 2026-03-03
+
+<details>
+<summary><strong>Hotfix: force query never sent (G.NEURO refactor collision)</strong></summary>
+
+- `G.NEURO.force_actions` field was shadowing the `Bridge:force_actions` method introduced by the 0.2.1 `G.NEURO_*` → `G.NEURO.*` refactor — `actions/force` was never actually sent
+- Renamed cached field to `G.NEURO.force_action_names` across `neuro-game.lua`, `dispatcher.lua`, `enforce.lua`
+
+</details>
+
+<details>
+<summary><strong>Shop money display uses actual balance</strong></summary>
+
+- Shop affordability display and money projection now use `G.GAME.dollars` directly instead of `dollars - bankrupt_at`
+- Previously items showed `(afford)` when the AI couldn't actually buy them (buffer was included in display but not in enforcement), causing repeated failed purchases
+
+</details>
+
+<details>
+<summary><strong>Removed forced play override</strong></summary>
+
+- Removed "SIM1 wins easily — play these indices, no thinking needed" shortcut that bypassed LLM decision-making
+- SIM1 is now presented as neutral information ("Strongest hand found: Straight at [...]") rather than a command
+
+</details>
 
 ### 0.3.0 -- 2026-03-03
 

@@ -105,7 +105,7 @@ local function is_forced_action(name)
   if set then
     return not not set[name]
   end
-  local list = G.NEURO.force_actions
+  local list = G.NEURO.force_action_names
   if list then
     for i = 1, #list do
       if list[i] == name then
@@ -122,7 +122,7 @@ local function clear_force_inflight()
   end
   G.NEURO.force_inflight = false
   G.NEURO.force_state = nil
-  G.NEURO.force_actions = nil
+  G.NEURO.force_action_names = nil
   G.NEURO.force_action_set = nil
   G.NEURO.force_sent_at = nil
 end
@@ -414,7 +414,7 @@ end
 
 local function shop_money_projection()
   if not (G and G.GAME) then return "" end
-  local m = (G.GAME.dollars or 0) - (G.GAME.bankrupt_at or 0)
+  local m = G.GAME.dollars or 0
   local no_int = G.GAME.modifiers and G.GAME.modifiers.no_interest
   local amt = G.GAME.interest_amount or 1
   local cap = G.GAME.interest_cap or 25
@@ -868,7 +868,7 @@ end
 
 local function shop_affordable_snapshot()
   local out = {
-    money = ((G and G.GAME and G.GAME.dollars) or 0) - ((G and G.GAME and G.GAME.bankrupt_at) or 0),
+    money = (G and G.GAME and G.GAME.dollars) or 0,
     jokers = 0,
     boosters = 0,
     vouchers = 0,
@@ -2585,7 +2585,7 @@ function Dispatcher.handle_message(msg, bridge)
     if G.NEURO.reforce_count <= 5 then
       G.NEURO.force_inflight = false
       G.NEURO.force_state = nil
-      G.NEURO.force_actions = nil
+      G.NEURO.force_action_names = nil
       G.NEURO.force_action_set = nil
       G.NEURO.force_sent_at = nil
     end
@@ -3014,12 +3014,8 @@ FORCE_HANDLERS["SELECTING_HAND"] = function(rules)
   local hand_actions = { "set_hand_highlight" }
   if has_usable_consumable then hand_actions[#hand_actions + 1] = "use_card" end
 
-  if sim1_str and sim1_score > 0 and remaining > 0 and sim1_score > remaining * 2 then
-    query = query .. "SIM1 wins easily (" .. tostring(math.floor(sim1_score)) .. " vs " .. tostring(math.floor(remaining)) .. " remaining). Play indices [" .. sim1_str .. "]. No thinking needed."
-    return { query = query, actions = hand_actions }
-  end
   if sim1_str then
-    query = query .. "Best simulated play: indices [" .. sim1_str .. "] as " .. (sim1_hand or "best") .. " for ~" .. tostring(math.floor(sim1_score)) .. " chips. "
+    query = query .. "Strongest hand found: " .. (sim1_hand or "best") .. " at indices [" .. sim1_str .. "] (~" .. tostring(math.floor(sim1_score)) .. " chips estimated). "
   end
   if has_usable_consumable then
     query = query .. "You have usable consumables. Consider using them BEFORE playing. "
@@ -3060,7 +3056,7 @@ FORCE_HANDLERS["SHOP"] = function(rules)
     elseif score >= 10 then return "B"
     else return "C" end
   end
-  local money = ((G and G.GAME and G.GAME.dollars) or 0) - ((G and G.GAME and G.GAME.bankrupt_at) or 0)
+  local money = (G and G.GAME and G.GAME.dollars) or 0
   local ante = tonumber(G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0) or 0
   local early_shop = ante > 0 and ante <= 2
   local shop_snap = shop_affordable_snapshot()

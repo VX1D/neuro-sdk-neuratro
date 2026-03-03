@@ -280,7 +280,7 @@ local function clear_force_state()
   end
   G.NEURO.force_inflight = false
   G.NEURO.force_state = nil
-  G.NEURO.force_actions = nil
+  G.NEURO.force_action_names = nil
   G.NEURO.force_action_set = nil
   G.NEURO.force_sent_at = nil
 end
@@ -2925,7 +2925,7 @@ local function setup_neuro_bridge()
     return
   end
   write_ipc_marker(ipc_dir)
-  if G.NEURO then
+  if G.NEURO and G.NEURO.send_startup then
     return
   end
   G.NEURO = NeuroBridge:new({ game = "Balatro", enabled = true, fs_dir = ipc_dir })
@@ -3184,7 +3184,7 @@ love.update = function(dt)
                 G.NEURO.force_state = state_name
                 G.NEURO.force_inflight = true
                 G.NEURO.force_sent_at = now
-                G.NEURO.force_actions = force.actions
+                G.NEURO.force_action_names = force.actions
                 G.NEURO.force_action_set = build_action_set(force.actions)
                 G.NEURO.last_force_fingerprint = force_fingerprint
                 neuro_last_force_attempt_at = now
