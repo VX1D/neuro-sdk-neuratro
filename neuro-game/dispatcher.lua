@@ -26,6 +26,7 @@ do
 end
 
 local TX_CACHE_MAX = 256
+local HAND_CONFIRM_DELAY = dotenv.num("NEURO_HAND_CONFIRM_DELAY", 0.6)
 local tx_settled = {}
 local tx_settled_order = {}
 local _last_reregister_at = nil
@@ -1215,7 +1216,7 @@ local function handle_use_card(data)
             if captured_hand_indices then
               G.E_MANAGER:add_event(Event({
                 trigger = "after",
-                delay   = 0.6,
+                delay   = HAND_CONFIRM_DELAY,
                 func    = function()
                   pcall(function()
                     local end_fn = G.FUNCS and G.FUNCS.end_consumeable

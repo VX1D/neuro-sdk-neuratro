@@ -19,6 +19,7 @@ do
   end
 end
 
+local Palette = require "palette"
 local NeuroBridge = require "bridge"
 local NeuroActions = require "actions"
 local NeuroState = require "state"
@@ -385,72 +386,10 @@ do
   end
 end
 
-local PALETTES = {
-  hiyori = {
-    PRIMARY    = { 0.20, 0.20, 0.22 },
-    DEEP       = { 0.10, 0.10, 0.12 },
-    GLOW       = { 0.40, 0.40, 0.42 },
-    BG         = { 0.05, 0.05, 0.06 },
-    ACCENT     = { 0.30, 0.30, 0.32, 1 },
-    NAME       = "H\xCC\xB6I\xCC\xB6Y\xCC\xB6O\xCC\xB6R\xCC\xB6I\xCC\xB6",
-    NAME_SHORT = "???",
-    D_MONEY    = { 0.50, 0.50, 0.45 },
-    D_GOLD     = { 0.45, 0.45, 0.40 },
-    D_CYAN     = { 0.35, 0.38, 0.40 },
-    D_GREEN    = { 0.35, 0.40, 0.35 },
-    D_RED      = { 0.50, 0.30, 0.30 },
-    D_WHITE    = { 0.60, 0.60, 0.60 },
-    D_DIM      = { 0.30, 0.30, 0.30 },
-    D_ORANGE   = { 0.45, 0.38, 0.25 },
-  },
-  neuro = {
-    PRIMARY    = { 0.120, 0.500, 0.480 },   -- deep dark teal (fills/borders: rich, not neon)
-    DEEP       = { 0.040, 0.090, 0.085 },
-    GLOW       = { 1.000, 0.420, 0.540 },   -- hot pink: panel text/borders/glow
-    BG         = { 0.045, 0.095, 0.090 },   -- near-black teal background
-    ACCENT     = { 0.878, 0.271, 0.341, 1 }, -- raspberry: game-over RED slot
-    NAME       = "NEURO-SAMA",
-    NAME_SHORT = "NEURO",
-    D_MONEY    = { 0.949, 0.859, 0.682 },
-    D_GOLD     = { 0.949, 0.859, 0.682 },
-    D_CYAN     = { 0.400, 0.929, 0.894 },
-    D_GREEN    = { 0.565, 0.800, 0.592 },
-    D_RED      = { 0.878, 0.271, 0.341 },
-    D_WHITE    = { 0.965, 0.975, 0.992 },
-    D_DIM      = { 0.694, 0.745, 0.800 },
-    D_ORANGE   = { 0.945, 0.643, 0.349 },
-  },
-  evil = {
-    PRIMARY    = { 1.0, 0.15, 0.22 },
-    DEEP       = { 0.75, 0.08, 0.14 },
-    GLOW       = { 1.0, 0.30, 0.35 },
-    BG         = { 0.10, 0.03, 0.06 },
-    ACCENT     = { 1.0, 0.15, 0.22, 1 },
-    NAME       = "EVIL NEURO",
-    NAME_SHORT = "EVIL",
-    D_MONEY    = { 0.92, 0.68, 0.25 },
-    D_GOLD     = { 0.88, 0.62, 0.20 },
-    D_CYAN     = { 0.55, 0.70, 0.85 },
-    D_GREEN    = { 0.45, 0.85, 0.45 },
-    D_RED      = { 1.00, 0.30, 0.28 },
-    D_WHITE    = { 0.95, 0.90, 0.88 },
-    D_DIM      = { 0.55, 0.48, 0.48 },
-    D_ORANGE   = { 1.00, 0.58, 0.20 },
-  },
-}
-
-local function pal()
-  local p = (G and G.NEURO.persona) or NEURO_PERSONA
-  return PALETTES[p] or PALETTES.neuro
-end
-
-local function PINK()      return pal().PRIMARY end
-local function PINK_GLOW() return pal().GLOW end
-local function DARK_BG()   return pal().BG end
-
 local _panel_font = nil
 local _panel_font_small = nil
 local _wrap_cache = {}
+local _wrap_cache_keys = {}
 local _wrap_cache_size = 0
 local _menu_enter_t = nil      -- when we first hit MENU state (past SPLASH)
 local _auto_login_fired = false
@@ -866,7 +805,7 @@ local function hook_card_draw()
 
       local pulse = 0.5 + 0.5 * math.sin(now * 10 * math.pi)
       local pulse2 = 0.5 + 0.5 * math.sin(now * 6 * math.pi + 1.2)
-      local pl = pal()
+      local pl = Palette.pal()
       local pc = pl.PRIMARY
       local gc = pl.GLOW
       local a = alpha
@@ -1199,6 +1138,9 @@ local function joker_template_ability(c)
 end
 
 local function joker_fx(c)
+  local center = c and c.config and c.config.center or {}
+  local key = center.key
+  if not (key and G and G.P_CENTERS and G.P_CENTERS[key]) then return "" end
   local ab = c and c.ability or {}
   local tb = joker_template_ability(c)
   if ab.x_mult and ab.x_mult > 1 then
@@ -1469,7 +1411,7 @@ local function draw_neuro_indicator()
     trace("IND: logo=" .. tostring(logo ~= nil))
     local state_name = G.NEURO.force_state or G.NEURO.state or ""
     trace("IND: state=" .. tostring(state_name))
-    local _pal = pal()
+    local _pal = Palette.pal()
     local persona_name = _pal.NAME
     trace("IND: persona=" .. tostring(persona_name))
     local state_label
@@ -1728,10 +1670,6 @@ local function draw_neuro_indicator()
       local ck = fid .. tostring(max_w) .. "\0" .. tostring(text)
       local cached = _wrap_cache[ck]
       if cached then return cached end
-      if _wrap_cache_size >= 400 then
-        _wrap_cache = {}
-        _wrap_cache_size = 0
-      end
       local ok, _, lines = pcall(function()
         local width, wrapped = f:getWrap(tostring(text), max_w)
         return width, wrapped
@@ -1744,7 +1682,15 @@ local function draw_neuro_indicator()
         out[1] = tostring(text)
       end
       _wrap_cache[ck] = out
+      _wrap_cache_keys[#_wrap_cache_keys + 1] = ck
       _wrap_cache_size = _wrap_cache_size + 1
+      if _wrap_cache_size >= 400 then
+        for i = 1, 200 do _wrap_cache[_wrap_cache_keys[i]] = nil end
+        local tail = {}
+        for i = 201, #_wrap_cache_keys do tail[#tail + 1] = _wrap_cache_keys[i] end
+        _wrap_cache_keys = tail
+        _wrap_cache_size = _wrap_cache_size - 200
+      end
       return out
     end
 
@@ -3039,300 +2985,8 @@ local function draw_neuro_indicator()
 end
 
 local function draw_login_animation()
-  if not G or not G.NEURO.login_anim then trace("LOGIN: skip, no anim") return end
-  trace("LOGIN: enter")
-  local anim = G.NEURO.login_anim
-  local now = (G.TIMERS and G.TIMERS.REAL) or (love.timer and love.timer.getTime()) or 0
-  local elapsed = now - anim.start
-
-  local PRE       = 0.08
-  local CHAOS     = 0.65
-  local HOLD      = 0.28
-  local REVEAL    = 0.60
-  local TEXT_SHOW = 1.80
-  local FADE_OUT  = 0.40
-  local TOTAL = PRE + CHAOS + HOLD + REVEAL + TEXT_SHOW + FADE_OUT
-
-  if elapsed > TOTAL then G.NEURO.login_anim = nil; return end
-
-  if not anim.palette_ready and elapsed >= PRE + CHAOS * 0.35 then
-    anim.palette_ready = true
-  end
-
-  local sw = love.graphics.getWidth()
-  local sh = love.graphics.getHeight()
-
-  local function gh(a, b)
-    local x = math.sin(a * 127.1 + b * 311.7 + 3.14159) * 43758.5453
-    return x - math.floor(x)
-  end
-  local function gh2(a, b)
-    local x = math.sin(a * 269.5 + b * 183.3 + 1.61803) * 57832.4391
-    return x - math.floor(x)
-  end
-
-  local gi
-  if elapsed < PRE then
-    gi = (elapsed / PRE) * 0.28
-  elseif elapsed < PRE + CHAOS then
-    local t = (elapsed - PRE) / CHAOS
-    if t < 0.08 then
-      gi = 0.28 + (t / 0.08) * 0.72
-    else
-      gi = 1.0
-    end
-  elseif elapsed < PRE + CHAOS + HOLD then
-    gi = (1.0 - (elapsed - PRE - CHAOS) / HOLD) * 0.22
-  else
-    gi = 0
-  end
-  gi = math.max(0, math.min(1, gi))
-
-  local ba
-  if elapsed < PRE then
-    ba = (elapsed / PRE) * 0.45
-  elseif elapsed < PRE + CHAOS then
-    ba = 0.45 + ((elapsed - PRE) / CHAOS) * 0.55
-  elseif elapsed < PRE + CHAOS + HOLD then
-    ba = 1.0
-  elseif elapsed < PRE + CHAOS + HOLD + REVEAL then
-    ba = 1.0 - (elapsed - PRE - CHAOS - HOLD) / REVEAL
-  else
-    ba = 0
-  end
-  ba = math.max(0, math.min(1, ba))
-
-  love.graphics.setColor(0, 0, 0, ba)
-  love.graphics.rectangle("fill", 0, 0, sw, sh)
-
-  if gi > 0.005 then
-    local f20  = math.floor(now * 20)
-    local f30  = math.floor(now * 30)
-    local f50  = math.floor(now * 50)
-    local f80  = math.floor(now * 80)
-    local f12  = math.floor(now * 12)
-    local f16  = math.floor(now * 16)
-    local f22  = math.floor(now * 22)
-
-    local step = gi > 0.80 and 2 or (gi > 0.50 and 3 or 5)
-    love.graphics.setColor(0, 0, 0, 0.35 * gi)
-    for sy = 0, sh - 1, step do
-      love.graphics.rectangle("fill", 0, sy, sw, 1)
-    end
-
-    love.graphics.setColor(0.04, 0.04, 0.06, 0.18 * gi)
-    for sx = 0, sw - 1, step do
-      love.graphics.rectangle("fill", sx, 0, 1, sh)
-    end
-
-    local col_n = math.floor(gi * gi * 40)
-    for i = 1, col_n do
-      local cx = math.floor(gh(i,       f50) * sw)
-      local cw = math.floor(gh(i + 0.1, f50) * 18) + 1
-      local ch = math.floor(gh(i + 0.2, f50) * sh * 0.88) + 8
-      local cy = math.floor(gh(i + 0.3, f50) * math.max(1, sh - ch))
-      local r4 = gh(i + 0.4, f50)
-      local g4 = gh(i + 0.5, f50)
-      local b4 = gh(i + 0.6, f50)
-      love.graphics.setColor(r4, g4, b4, gi * 0.65)
-      love.graphics.rectangle("fill", cx, cy, cw, ch)
-    end
-
-    local row_n = math.floor(gi * gi * 45)
-    for i = 1, row_n do
-      local ry  = math.floor(gh(i,       f20) * sh)
-      local rw  = math.floor(gh(i + 0.1, f20) * sw * 0.95) + 40
-      local rx  = math.floor(gh(i + 0.2, f20) * math.max(1, sw - rw))
-      local rh  = math.max(1, math.floor(gh(i + 0.3, f20) * 12) + 1)
-      local br  = 0.35 + gh(i + 0.5, f20) * 0.60
-      local hue = gh(i + 0.7, f20)
-      love.graphics.setColor(
-        math.min(1, br * (0.65 + hue * 0.35)),
-        math.min(1, br * (0.65 + gh(i + 0.8, f20) * 0.35)),
-        math.min(1, br * (0.85 + gh(i + 0.9, f20) * 0.15)),
-        gi * 0.96)
-      love.graphics.rectangle("fill", rx, ry, rw, rh)
-    end
-
-    if gi > 0.25 then
-      local mosh_n = math.floor((gi - 0.25) / 0.75 * 28)
-      for i = 1, mosh_n do
-        local mx  = math.floor(gh2(i * 2,     f80) * sw)
-        local my  = math.floor(gh2(i * 2 + 1, f80) * sh)
-        local mw  = math.floor(gh2(i * 2 + 2, f80) * 200) + 12
-        local mhh = math.floor(gh2(i * 2 + 3, f80) * 70)  + 5
-        local hm  = gh2(i, f80)
-        love.graphics.setColor(
-          math.abs(math.sin(hm * 6.28318 + 0.000)),
-          math.abs(math.sin(hm * 6.28318 + 2.094)),
-          math.abs(math.sin(hm * 6.28318 + 4.189)),
-          gi * 0.78)
-        love.graphics.rectangle("fill", mx, my, mw, mhh)
-      end
-    end
-
-    local nn = math.floor(gi * 140)
-    for i = 1, nn do
-      local nx = math.floor(gh(i,       f30 + 1111) * sw)
-      local ny = math.floor(gh(i + 0.2, f30 + 1111) * sh)
-      local nw = math.floor(gh(i + 0.4, f30 + 1111) * 28) + 1
-      local nh = math.floor(gh(i + 0.6, f30 + 1111) * 8)  + 1
-      local gr = 0.10 + gh(i + 0.8, f30 + 1111) * 0.88
-      love.graphics.setColor(gr, gr * 0.95, gr, gi * 0.65)
-      love.graphics.rectangle("fill", nx, ny, nw, nh)
-    end
-
-    local fringe = math.floor(gi * gi * 110)
-    if fringe > 0 then
-      love.graphics.setColor(1.0, 0.0, 0.06, gi * 0.42)
-      love.graphics.rectangle("fill", 0, 0, fringe, sh)
-      love.graphics.setColor(0.04, 0.12, 1.0, gi * 0.42)
-      love.graphics.rectangle("fill", sw - fringe, 0, fringe, sh)
-      love.graphics.setColor(0.0, 1.0, 0.08, gi * 0.18)
-      love.graphics.rectangle("fill", math.floor(fringe / 2), 0, math.max(1, math.floor(fringe / 3)), sh)
-    end
-
-    if gi > 0.40 then
-      for bi = 1, 3 do
-        local band_y = math.floor(gh(bi * 3, f12) * sh)
-        local band_h = math.floor(gi * 80) + 10
-        local sep    = math.floor(gi * 22) + bi * 4
-        love.graphics.setColor(1.0, 0.02, 0.02, gi * 0.16)
-        love.graphics.rectangle("fill", 0, band_y - sep, sw, band_h)
-        love.graphics.setColor(0.02, 0.02, 1.0, gi * 0.16)
-        love.graphics.rectangle("fill", 0, band_y + sep, sw, band_h)
-        love.graphics.setColor(0.02, 1.0, 0.40, gi * 0.07)
-        love.graphics.rectangle("fill", 0, band_y,        sw, math.floor(band_h / 3))
-      end
-    end
-
-    local speeds = { 38, 73, 119, 211 }
-    local alphas = { 0.22, 0.15, 0.09, 0.05 }
-    for ti = 1, 4 do
-      local ty2 = math.floor((now * speeds[ti]) % sh)
-      love.graphics.setColor(1, 1, 1, gi * alphas[ti])
-      love.graphics.rectangle("fill", 0, ty2, sw, 2 + ti)
-      love.graphics.setColor(0, 0, 0, gi * alphas[ti] * 0.60)
-      love.graphics.rectangle("fill", 0, (ty2 + 7) % sh, sw, ti + 1)
-    end
-
-    if gi > 0.45 then
-      local drop_n = math.floor((gi - 0.45) / 0.55 * 16)
-      for i = 1, drop_n do
-        local dx = math.floor(gh2(i * 5,     f80 + 555) * sw)
-        local dw = math.floor(gh2(i * 5 + 1, f80 + 555) * 10) + 1
-        local dr = gh2(i, f80 + 555)
-        love.graphics.setColor(math.min(1, dr * 2), 1, dr * 0.80, gi * 0.60)
-        love.graphics.rectangle("fill", dx, 0, dw, sh)
-      end
-    end
-
-    if gi > 0.60 then
-      local flicker = gh(9, f16)
-      if flicker > 0.48 then
-        local fi = (flicker - 0.48) / 0.52
-        love.graphics.setColor(1, 0.85, 1, fi * fi * 0.38 * gi)
-        love.graphics.rectangle("fill", 0, 0, sw, sh)
-      end
-    end
-
-    if gi > 0.80 then
-      local sv = gh(1, f22)
-      if sv > 0.68 then
-        love.graphics.setColor(1, 1, 1, 0.60 * gi)
-        love.graphics.rectangle("fill", 0, 0, sw, sh)
-      end
-    end
-
-    if gi > 0.93 then
-      local sv2 = gh2(3, math.floor(now * 28))
-      if sv2 > 0.82 then
-        love.graphics.setColor(1, 1, 1, 0.92)
-        love.graphics.rectangle("fill", 0, 0, sw, sh)
-      end
-    end
-
-    if gi > 0.70 then
-      local seg_n = math.floor((gi - 0.70) / 0.30 * 6)
-      for i = 1, seg_n do
-        local sx2 = math.floor(gh(i * 11, f50 + 777) * sw)
-        local sw2 = math.floor(sw / seg_n)
-        local off = math.floor((gh(i, f50 + 777) - 0.5) * gi * 30)
-        love.graphics.setColor(1, 1, 1, 0.08 * gi)
-        love.graphics.rectangle("fill", sx2, off, sw2, sh)
-      end
-    end
-  end
-
-  local text_start = PRE + CHAOS + HOLD
-  if elapsed >= text_start then
-    local te = elapsed - text_start
-    local full_text = "Hello " .. anim.name .. "!"
-    local TYPE_DUR = 0.68
-    local char_count = math.floor(math.min(1, te / TYPE_DUR) * #full_text)
-    local display_text = full_text:sub(1, char_count)
-    if char_count < #full_text then
-      display_text = display_text .. (math.floor(now * 4) % 2 == 0 and "_" or " ")
-    end
-
-    local ta = 1.0
-    if te < 0.20 then ta = te / 0.20 end
-    local text_total = REVEAL + TEXT_SHOW + FADE_OUT
-    if te > text_total - FADE_OUT then ta = math.max(0, (text_total - te) / FADE_OUT) end
-
-    local p = pal()
-    local panel_font, _ = get_panel_fonts()
-    local prev_font = love.graphics.getFont()
-    if panel_font then love.graphics.setFont(panel_font) end
-    local f = love.graphics.getFont()
-    local tw = f:getWidth(display_text)
-    local th = f:getHeight()
-    local cx = sw / 2 - tw / 2
-    local cy2 = sh / 2 - th / 2
-
-    love.graphics.setColor(0, 0, 0, 0.72 * ta)
-    love.graphics.rectangle("fill", 0, sh / 2 - 48, sw, 96)
-
-    love.graphics.setColor(p.PRIMARY[1], p.PRIMARY[2], p.PRIMARY[3], 0.22 * ta)
-    love.graphics.rectangle("fill", 0, sh / 2 - 48, sw, 96)
-
-    love.graphics.setColor(p.GLOW[1], p.GLOW[2], p.GLOW[3], 0.55 * ta)
-    love.graphics.setLineWidth(2)
-    love.graphics.line(0, sh / 2 - 48, sw, sh / 2 - 48)
-    love.graphics.line(0, sh / 2 + 48, sw, sh / 2 + 48)
-
-    love.graphics.setColor(p.GLOW[1] * 0.5, p.GLOW[2] * 0.5, p.GLOW[3] * 0.5, 0.20 * ta)
-    love.graphics.line(0, sh / 2 - 44, sw, sh / 2 - 44)
-    love.graphics.line(0, sh / 2 + 44, sw, sh / 2 + 44)
-    love.graphics.setLineWidth(1)
-
-    local pulse = 0.5 + 0.5 * math.sin(now * 5.5)
-    local glow_r = math.min(1, p.GLOW[1] * 1.1)
-    local glow_g = math.min(1, p.GLOW[2] * 1.1)
-    local glow_b = math.min(1, p.GLOW[3] * 1.1)
-
-    for radius = 4, 1, -1 do
-      local ga = (0.08 - radius * 0.015) * (0.7 + 0.3 * pulse) * ta
-      love.graphics.setColor(glow_r, glow_g, glow_b, ga)
-      for dx = -radius, radius do
-        for dy = -radius, radius do
-          if math.abs(dx) == radius or math.abs(dy) == radius then
-            love.graphics.print(display_text, cx + dx, cy2 + dy)
-          end
-        end
-      end
-    end
-
-    love.graphics.setColor(1, 0.96, 1, 0.98 * ta)
-    love.graphics.print(display_text, cx, cy2)
-
-    if prev_font then love.graphics.setFont(prev_font) end
-  end
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.setLineWidth(1)
+  NeuroAnim.draw_login_anim()
 end
-
 local function draw_neuro_cookie()
   if not G or not G.NEURO.egg or not G.NEURO.egg.expires_at then
     trace("COOKIE: skip")
@@ -3422,6 +3076,29 @@ local function setup_text_input()
   end
 end
 
+local function init_neuro_fields()
+  G.NEURO.ai_highlighted         = setmetatable({}, { __mode = "k" })
+  G.NEURO.state                  = nil
+  G.NEURO.force_state            = nil
+  G.NEURO.force_inflight         = false
+  G.NEURO.last_force_fingerprint = nil
+  G.NEURO.force_sent_at          = nil
+  G.NEURO.force_action_names     = nil
+  G.NEURO.force_action_set       = nil
+  G.NEURO.force_dirty            = false
+  G.NEURO.state_enter_serial     = 0
+  G.NEURO.shop_reroll_count      = nil
+  G.NEURO.in_run_setup           = nil
+  G.NEURO.last_failed_action     = nil
+  G.NEURO.dr_top                 = nil
+  G.NEURO.pack_best              = nil
+  G.NEURO.rules_sent             = nil
+  G.NEURO.seed_pasted            = nil
+  G.NEURO.login_anim             = nil
+  G.NEURO.game_over_hooked       = nil
+  G.NEURO.persona                = (NEURO_PERSONA ~= "neuro") and NEURO_PERSONA or "hiyori"
+end
+
 local function setup_neuro_bridge()
   if not G then
     return
@@ -3445,6 +3122,7 @@ local function setup_neuro_bridge()
     return
   end
   G.NEURO = NeuroBridge:new({ game = "Balatro", enabled = true, fs_dir = ipc_dir })
+  init_neuro_fields()
   G.NEURO:set_state_provider(NeuroState.build)
   G.NEURO:set_state_name_provider(NeuroState.get_state_name)
   G.NEURO:set_message_handler(function(msg)
@@ -3467,17 +3145,6 @@ local function setup_neuro_bridge()
     end
   end
   G.NEURO:register_actions(filtered_actions)
-
-  G.NEURO.ai_highlighted = setmetatable({}, {__mode = "k"})
-  G.NEURO.state = nil
-  G.NEURO.force_state = nil
-  G.NEURO.force_inflight = false
-  G.NEURO.last_force_fingerprint = nil
-  if NEURO_PERSONA ~= "neuro" then
-    G.NEURO.persona = NEURO_PERSONA
-  else
-    G.NEURO.persona = "hiyori"
-  end
 end
 
 local function hook_game_over_screen()
@@ -3499,7 +3166,7 @@ local function hook_game_over_screen()
     end
 
     local saved_red = G.C.RED
-    local accent = pal().ACCENT
+    local accent = Palette.pal().ACCENT
     G.C.RED = { accent[1], accent[2], accent[3], accent[4] or 1 }
 
     local ok, t = pcall(_orig_create_UIBox_game_over)

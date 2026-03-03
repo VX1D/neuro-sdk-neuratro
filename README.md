@@ -7,7 +7,7 @@
 Lua mod hooks into the game, Rust bridge relays messages over WebSocket,
 Neuro gets game state and responds with actions.
 
-[![Version](https://img.shields.io/badge/version-0.4.0-ff4d94?style=flat-square)](#changelog)
+[![Version](https://img.shields.io/badge/version-0.4.1-ff4d94?style=flat-square)](#changelog)
 [![License](https://img.shields.io/badge/license-MIT-80dfff?style=flat-square)](LICENSE)
 [![Balatro](https://img.shields.io/badge/Balatro-1.0.1-9b72e6?style=flat-square)](https://store.steampowered.com/app/2379780/Balatro/)
 [![Lua](https://img.shields.io/badge/Lua-5.1-ffd700?style=flat-square)](https://www.lua.org/)
@@ -212,6 +212,44 @@ neuro-bridge-rs/             Rust WebSocket <-> IPC relay
 ---
 
 ## Changelog
+
+### 0.4.1 -- 2026-03-03
+
+<details>
+<summary><strong>Pack UI: horizontal grid layout</strong></summary>
+
+- Pack cards now displayed side-by-side in a horizontal grid instead of stacked vertically — each card gets more space and a bigger visual impact
+- Panel width scales with card count (`n_cards * 155 + 20`), re-centered on screen
+- Slots are taller (190px) with sprite on top, name below, description below that
+- Slide-in animation changed from right→left to up-from-bottom
+
+</details>
+
+<details>
+<summary><strong>Pack UI: edition prefix + miniature enhancements</strong></summary>
+
+- Edition names prepended to card names in the pack overlay (`Negative 9 of Clubs`, `Polychrome The Fool`, etc.)
+- Card miniatures now render enhanced playing card base faces — `Enhanced` cards draw the suit/rank sprite first, then the enhancement overlay at 0.82 alpha
+- Seal indicator added to miniature: coloured dot (Red/Blue/Gold/Purple) in bottom-right corner with shadow and specular highlight
+
+</details>
+
+<details>
+<summary><strong>Voucher buy popup: "NEW VOUCHER" with green accent</strong></summary>
+
+- Buying a voucher from the shop now shows a distinctive "NEW VOUCHER" popup with green border glow and title bar fill instead of the generic "SHOP BUY" label
+- Popup height increased to 260px to give the voucher description room
+
+</details>
+
+<details>
+<summary><strong>Bug fixes: pack ghost, panel resize, duplicate pick crash</strong></summary>
+
+- **Pack ghost**: after Neuro picked a card, the card-selection overlay persisted beneath the joker gain panel — fixed by clearing `_pack_picked` state on leaving pack states and gating the render on `is_pack_state`
+- **Right panel resize**: hands/discards/target rows were disappearing and reappearing after every play because they only showed during `SELECTING_HAND` — now shown in all mid-round states; panel height lerps smoothly in both directions instead of snapping on grow
+- **Duplicate pick crash** (`common_events.lua:2393 attempt to index local 'other' (a nil value)`): the action finalizer was unconditionally setting `last_action_at = now`, clobbering the pack pick handler's `now + 3.0` block; fixed to only update `last_action_at` when the new value is strictly greater
+
+</details>
 
 ### 0.4.0 -- 2026-03-03
 
