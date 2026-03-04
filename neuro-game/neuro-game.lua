@@ -11,11 +11,18 @@ end
 _G.NEURO_SDK_MOD_LOADED = true
 
 do
-  if SMODS and SMODS.current_mod and SMODS.current_mod.path then
-    local modPath = SMODS.current_mod.path .. "?.lua"
-    if not package.path:find(modPath, 1, true) then
-      package.path = package.path .. ";" .. modPath
+  local function add_path(p)
+    if p and not package.path:find(p, 1, true) then
+      package.path = package.path .. ";" .. p
     end
+  end
+  if SMODS and SMODS.current_mod and SMODS.current_mod.path then
+    add_path(SMODS.current_mod.path .. "?.lua")
+  end
+  local _appdata = os.getenv("APPDATA")
+  if _appdata then
+    local _d = _appdata .. "\\Balatro\\Mods\\neuro-game\\"
+    add_path(_d .. "?.lua")
   end
 end
 
@@ -1332,29 +1339,18 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
           local n = card_display_name(c)
           local cost = c.cost or 0
           local afford = cost <= money
-          local fx = ""
-          local fx_from_desc = false
-          local fx_is_static_joker = false
+          scard(afford and GREEN or DIM, string.format("$%d  %s", cost, n), c)
+          -- brief effect line for jokers
           if sa.tag == "Jokers" then
             local jfx = joker_fx(c)
-            if jfx ~= "" then fx = jfx; fx_is_static_joker = true end
+            if jfx ~= "" then ssub(pick_desc_color(jfx), jfx) end
           end
-          scard(afford and GREEN or DIM, string.format("$%d  %s", cost, n), c)
-          if fx == "" then
-            local short_desc = card_description(c)
-            if (not short_desc or short_desc == "") and c and c.config and c.config.center then
-              short_desc = Utils.safe_description(c.config.center.loc_txt, c, 140)
-            end
-            if short_desc and short_desc ~= "" then fx = short_desc; fx_from_desc = true end
+          -- full description (always show, colored per-word in renderer)
+          local desc = card_description(c)
+          if (not desc or desc == "") and c and c.config and c.config.center then
+            desc = Utils.safe_description(c.config.center.loc_txt, c)
           end
-          if fx ~= "" then ssub(pick_desc_color(fx), fx) end
-          if not fx_from_desc and not fx_is_static_joker then
-            local desc = card_description(c)
-            if (not desc or desc == "") and c and c.config and c.config.center then
-              desc = Utils.safe_description(c.config.center.loc_txt, c)
-            end
-            if desc then sdesc(pick_desc_color(desc), desc) end
-          end
+          if desc and desc ~= "" then sdesc(DIM, desc) end
         end
       end
     end
@@ -1985,27 +1981,34 @@ local function draw_neuro_indicator()
         love.graphics.translate(-math.floor((lp_w + 20) * _left_panel_slide_frac + 0.5), 0)
       end
 
-      love.graphics.setColor(bg[1], bg[2], bg[3], 0.96)
-      love.graphics.rectangle("fill", lp_x, lp_y, lp_w, lp_total_h, 10, 10)
-      love.graphics.setColor(p[1], p[2], p[3], 0.05)
-      love.graphics.rectangle("fill", lp_x + 1, lp_y + 1, lp_w - 2, lp_total_h - 2, 10, 10)
-
-      love.graphics.setColor(pg[1], pg[2], pg[3], 0.06 + 0.04 * pulse)
-      love.graphics.setLineWidth(6)
-      love.graphics.rectangle("line", lp_x - 3, lp_y - 3, lp_w + 6, lp_total_h + 6, 13, 13)
-      love.graphics.setColor(p[1], p[2], p[3], 0.10 + 0.06 * pulse)
+      -- drop shadow
+      love.graphics.setColor(0, 0, 0, 0.28)
+      love.graphics.rectangle("fill", lp_x + 2, lp_y + 3, lp_w, lp_total_h, 12, 12)
+      -- panel fill
+      love.graphics.setColor(bg[1], bg[2], bg[3], 0.97)
+      love.graphics.rectangle("fill", lp_x, lp_y, lp_w, lp_total_h, 12, 12)
+      love.graphics.setColor(p[1], p[2], p[3], 0.06)
+      love.graphics.rectangle("fill", lp_x + 1, lp_y + 1, lp_w - 2, lp_total_h - 2, 12, 12)
+      -- top inner highlight
+      love.graphics.setColor(1, 1, 1, 0.025)
+      love.graphics.rectangle("fill", lp_x + 2, lp_y + 2, lp_w - 4, math.min(lp_total_h * 0.28, 48), 10, 10)
+      -- soft outer glow
+      love.graphics.setColor(pg[1], pg[2], pg[3], 0.04 + 0.03 * pulse)
       love.graphics.setLineWidth(4)
-      love.graphics.rectangle("line", lp_x - 1, lp_y - 1, lp_w + 2, lp_total_h + 2, 11, 11)
-      love.graphics.setColor(p[1], p[2], p[3], 0.55 + 0.20 * pulse)
-      love.graphics.setLineWidth(2)
-      love.graphics.rectangle("line", lp_x, lp_y, lp_w, lp_total_h, 10, 10)
+      love.graphics.rectangle("line", lp_x - 2, lp_y - 2, lp_w + 4, lp_total_h + 4, 14, 14)
+      -- clean border
+      love.graphics.setColor(p[1], p[2], p[3], 0.45 + 0.15 * pulse)
+      love.graphics.setLineWidth(1.5)
+      love.graphics.rectangle("line", lp_x, lp_y, lp_w, lp_total_h, 12, 12)
 
-      love.graphics.setColor(p[1], p[2], p[3], 0.18 + 0.06 * pulse)
-      love.graphics.rectangle("fill", lp_x + 2, lp_y + 2, lp_w - 4, lp_title_h - 2, 8, 8)
-      love.graphics.setColor(p[1], p[2], p[3], 0.08)
-      love.graphics.rectangle("fill", lp_x + 2, lp_y + lp_title_h * 0.6, lp_w - 4, lp_title_h * 0.4, 0, 0)
-      love.graphics.setColor(p[1], p[2], p[3], 0.80 + 0.15 * pulse)
-      love.graphics.rectangle("fill", lp_x + 6, lp_y + 7, 3, lp_title_h - 14, 2, 2)
+      -- title bar
+      love.graphics.setColor(p[1], p[2], p[3], 0.22 + 0.06 * pulse)
+      love.graphics.rectangle("fill", lp_x + 2, lp_y + 2, lp_w - 4, lp_title_h - 2, 10, 10)
+      love.graphics.setColor(0, 0, 0, 0.10)
+      love.graphics.rectangle("fill", lp_x + 2, lp_y + lp_title_h * 0.55, lp_w - 4, lp_title_h * 0.45, 0, 0)
+      -- accent bar
+      love.graphics.setColor(pg[1], pg[2], pg[3], 0.85 + 0.10 * pulse)
+      love.graphics.rectangle("fill", lp_x + 6, lp_y + 7, 3, lp_title_h - 14, 1.5, 1.5)
 
       love.graphics.setColor(0, 0, 0, 0.30)
       love.graphics.print("SHOP", lp_x + 16, lp_y + 6)
@@ -2050,22 +2053,17 @@ local function draw_neuro_indicator()
           love.graphics.setColor(p[1], p[2], p[3], 0.22 + 0.04 * pulse)
           love.graphics.rectangle("fill", lp_x + lp_pad_x + indent - 5, lcy + 1, 2, cur_h - 3, 1, 1)
           if panel_font_small then love.graphics.setFont(panel_font_small) end
+          local sf = panel_font_small or font
           if r[8] then
-            local lines = wrapped_lines(txt, math.max(20, lp_content_w - indent), panel_font_small or font)
+            local lines = wrapped_lines(txt, math.max(20, lp_content_w - indent), sf)
             local ly = lcy
             for i = 1, #lines do
-              love.graphics.setColor(0, 0, 0, 0.20)
-              love.graphics.print(lines[i], lp_x + lp_pad_x + indent + 1, ly + 1)
-              love.graphics.setColor(col[1], col[2], col[3], 0.95)
-              love.graphics.print(lines[i], lp_x + lp_pad_x + indent, ly)
+              draw_colored_desc(lines[i], lp_x + lp_pad_x + indent, ly, 0.95, sf)
               ly = ly + small_line_h
             end
           else
             local draw_txt = trunc(txt, lp_content_w - indent, panel_font_small)
-            love.graphics.setColor(0, 0, 0, 0.20)
-            love.graphics.print(draw_txt, lp_x + lp_pad_x + indent + 1, lcy + 1)
-            love.graphics.setColor(col[1], col[2], col[3], 0.95)
-            love.graphics.print(draw_txt, lp_x + lp_pad_x + indent, lcy)
+            draw_colored_desc(draw_txt, lp_x + lp_pad_x + indent, lcy, 0.95, sf)
           end
           if panel_font_small then love.graphics.setFont(font) end
           lcy = lcy + cur_h
@@ -2102,15 +2100,15 @@ local function draw_neuro_indicator()
         elseif r[3] then
           local col = r[1]
           local txt = r[2] or ""
-          love.graphics.setColor(col[1], col[2], col[3], 0.12)
-          love.graphics.rectangle("fill", lp_x + 3, lcy - 1, lp_w - 6, line_h + 2, 5, 5)
-          love.graphics.setColor(col[1], col[2], col[3], 0.06)
-          love.graphics.rectangle("fill", lp_x + 3, lcy + line_h * 0.4, lp_w - 6, line_h * 0.6 + 2, 0, 5)
-          love.graphics.setColor(col[1], col[2], col[3], 0.75 + 0.18 * pulse)
-          love.graphics.rectangle("fill", lp_x + 5, lcy + 2, 3, line_h - 3, 2, 2)
-          love.graphics.setColor(col[1], col[2], col[3], 0.25 + 0.10 * pulse)
+          love.graphics.setColor(col[1], col[2], col[3], 0.14)
+          love.graphics.rectangle("fill", lp_x + 3, lcy - 1, lp_w - 6, line_h + 2, 6, 6)
+          love.graphics.setColor(0, 0, 0, 0.08)
+          love.graphics.rectangle("fill", lp_x + 3, lcy + line_h * 0.45, lp_w - 6, line_h * 0.55 + 2, 0, 6)
+          love.graphics.setColor(col[1], col[2], col[3], 0.80 + 0.15 * pulse)
+          love.graphics.rectangle("fill", lp_x + 5, lcy + 2, 3, line_h - 3, 1.5, 1.5)
+          love.graphics.setColor(col[1], col[2], col[3], 0.18 + 0.06 * pulse)
           love.graphics.setLineWidth(1)
-          love.graphics.rectangle("line", lp_x + 3, lcy - 1, lp_w - 6, line_h + 2, 5, 5)
+          love.graphics.rectangle("line", lp_x + 3, lcy - 1, lp_w - 6, line_h + 2, 6, 6)
           love.graphics.setColor(0, 0, 0, 0.30)
           love.graphics.print(trunc(txt, lp_content_w - 10), lp_x + lp_pad_x + 5, lcy + 2)
           love.graphics.setColor(col[1], col[2], col[3], 1.0)
@@ -2531,28 +2529,34 @@ local function draw_neuro_indicator()
       love.graphics.push()
       love.graphics.translate(math.floor((p_w + 20) * _right_panel_slide_frac + 0.5), 0)
     end
-    love.graphics.setColor(bg[1], bg[2], bg[3], 0.96)
-    love.graphics.rectangle("fill", p_x, p_y, p_w, total_h, 10, 10)
-    love.graphics.setColor(p[1], p[2], p[3], 0.05)
-    love.graphics.rectangle("fill", p_x + 1, p_y + 1, p_w - 2, total_h - 2, 10, 10)
-
-    love.graphics.setColor(pg[1], pg[2], pg[3], 0.06 + 0.04 * pulse)
-    love.graphics.setLineWidth(6)
-    love.graphics.rectangle("line", p_x - 3, p_y - 3, p_w + 6, total_h + 6, 13, 13)
-    love.graphics.setColor(p[1], p[2], p[3], 0.10 + 0.06 * pulse)
+    -- drop shadow
+    love.graphics.setColor(0, 0, 0, 0.28)
+    love.graphics.rectangle("fill", p_x + 2, p_y + 3, p_w, total_h, 12, 12)
+    -- panel fill
+    love.graphics.setColor(bg[1], bg[2], bg[3], 0.97)
+    love.graphics.rectangle("fill", p_x, p_y, p_w, total_h, 12, 12)
+    love.graphics.setColor(p[1], p[2], p[3], 0.06)
+    love.graphics.rectangle("fill", p_x + 1, p_y + 1, p_w - 2, total_h - 2, 12, 12)
+    -- top inner highlight
+    love.graphics.setColor(1, 1, 1, 0.025)
+    love.graphics.rectangle("fill", p_x + 2, p_y + 2, p_w - 4, math.min(total_h * 0.28, 48), 10, 10)
+    -- soft outer glow
+    love.graphics.setColor(pg[1], pg[2], pg[3], 0.04 + 0.03 * pulse)
     love.graphics.setLineWidth(4)
-    love.graphics.rectangle("line", p_x - 1, p_y - 1, p_w + 2, total_h + 2, 11, 11)
-    love.graphics.setColor(p[1], p[2], p[3], 0.55 + 0.20 * pulse)
-    love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", p_x, p_y, p_w, total_h, 10, 10)
+    love.graphics.rectangle("line", p_x - 2, p_y - 2, p_w + 4, total_h + 4, 14, 14)
+    -- clean border
+    love.graphics.setColor(p[1], p[2], p[3], 0.45 + 0.15 * pulse)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.rectangle("line", p_x, p_y, p_w, total_h, 12, 12)
 
-    love.graphics.setColor(p[1], p[2], p[3], 0.18 + 0.06 * pulse)
-    love.graphics.rectangle("fill", p_x + 2, p_y + 2, p_w - 4, title_h - 2, 8, 8)
-    love.graphics.setColor(p[1], p[2], p[3], 0.08)
-    love.graphics.rectangle("fill", p_x + 2, p_y + title_h * 0.6, p_w - 4, title_h * 0.4, 0, 0)
-
-    love.graphics.setColor(p[1], p[2], p[3], 0.80 + 0.15 * pulse)
-    love.graphics.rectangle("fill", p_x + 6, p_y + 7, 3, title_h - 14, 2, 2)
+    -- title bar
+    love.graphics.setColor(p[1], p[2], p[3], 0.22 + 0.06 * pulse)
+    love.graphics.rectangle("fill", p_x + 2, p_y + 2, p_w - 4, title_h - 2, 10, 10)
+    love.graphics.setColor(0, 0, 0, 0.10)
+    love.graphics.rectangle("fill", p_x + 2, p_y + title_h * 0.55, p_w - 4, title_h * 0.45, 0, 0)
+    -- accent bar
+    love.graphics.setColor(pg[1], pg[2], pg[3], 0.85 + 0.10 * pulse)
+    love.graphics.rectangle("fill", p_x + 6, p_y + 7, 3, title_h - 14, 1.5, 1.5)
     love.graphics.setColor(p[1], p[2], p[3], 0.40 + 0.20 * pulse)
     love.graphics.rectangle("fill", p_x + 6, p_y + 7, 1, title_h - 14, 1, 1)
 
@@ -2763,8 +2767,8 @@ local function draw_neuro_indicator()
             local D_SHOW = 2.40
             local D_TOTAL = D_FADE + D_SHOW + D_FADE
 
-            -- guard slot bounds (joker sold mid-cycle)
-            if _desc_slot >= n then _desc_slot = 0; _desc_phase_t = 0.0 end
+            -- guard slot bounds (joker sold mid-cycle — skip fade-in to avoid blank flash)
+            if _desc_slot >= n then _desc_slot = 0; _desc_phase_t = D_FADE end
 
             local fade_a, show_progress
             if n == 1 then
@@ -2907,15 +2911,15 @@ local function draw_neuro_indicator()
           local indent = r[4] or 0
 
           if is_hdr then
-            love.graphics.setColor(col[1], col[2], col[3], 0.12)
-            love.graphics.rectangle("fill", p_x + 3, cy - 1, p_w - 6, line_h + 2, 5, 5)
-            love.graphics.setColor(col[1], col[2], col[3], 0.06)
-            love.graphics.rectangle("fill", p_x + 3, cy + line_h * 0.4, p_w - 6, line_h * 0.6 + 2, 0, 5)
-            love.graphics.setColor(col[1], col[2], col[3], 0.75 + 0.18 * pulse)
-            love.graphics.rectangle("fill", p_x + 5, cy + 2, 3, line_h - 3, 2, 2)
-            love.graphics.setColor(col[1], col[2], col[3], 0.25 + 0.10 * pulse)
+            love.graphics.setColor(col[1], col[2], col[3], 0.14)
+            love.graphics.rectangle("fill", p_x + 3, cy - 1, p_w - 6, line_h + 2, 6, 6)
+            love.graphics.setColor(0, 0, 0, 0.08)
+            love.graphics.rectangle("fill", p_x + 3, cy + line_h * 0.45, p_w - 6, line_h * 0.55 + 2, 0, 6)
+            love.graphics.setColor(col[1], col[2], col[3], 0.80 + 0.15 * pulse)
+            love.graphics.rectangle("fill", p_x + 5, cy + 2, 3, line_h - 3, 1.5, 1.5)
+            love.graphics.setColor(col[1], col[2], col[3], 0.18 + 0.06 * pulse)
             love.graphics.setLineWidth(1)
-            love.graphics.rectangle("line", p_x + 3, cy - 1, p_w - 6, line_h + 2, 5, 5)
+            love.graphics.rectangle("line", p_x + 3, cy - 1, p_w - 6, line_h + 2, 6, 6)
             love.graphics.setColor(0, 0, 0, 0.30)
             love.graphics.print(trunc(txt, content_w - 10), p_x + p_pad_x + 5, cy + 2)
             love.graphics.setColor(col[1], col[2], col[3], 1.0)

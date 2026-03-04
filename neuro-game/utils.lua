@@ -229,15 +229,10 @@ function Utils.safe_name(card)
   end
 
   local placeholders = collect_placeholder_values(card)
-  if card.label and card.label ~= "" then
-    local lbl = clean_loc_text(card.label, placeholders)
-    if lbl and lbl ~= "" then
-      if lbl:find("_") and not lbl:find(" ") then
-        lbl = humanize_identifier(lbl)
-      end
-      if lbl and lbl ~= "" then return lbl end
-    end
-  end
+  local center = card.config and card.config.center or {}
+
+  -- Try proper localization sources first so SMODS/modded cards get their real names
+  -- (card.label for SMODS cards is often the raw key like "vedalsdrink", not the display name)
 
   local ui_name = nil
   local ok_ui, n = pcall(function()
@@ -255,7 +250,6 @@ function Utils.safe_name(card)
     if nm and nm ~= "" then return nm end
   end
 
-  local center = card.config and card.config.center or {}
   if center.loc_txt and center.loc_txt.name then
     local nm = clean_loc_text(center.loc_txt.name, placeholders)
     if nm and nm ~= "" then return nm end
@@ -266,6 +260,23 @@ function Utils.safe_name(card)
     if pc and pc.loc_txt and pc.loc_txt.name then
       local nm = clean_loc_text(pc.loc_txt.name, placeholders)
       if nm and nm ~= "" then return nm end
+    end
+  end
+
+  -- Fall back to card.label — but only if it looks like a real name (has spaces or is capitalized)
+  -- Skip raw identifiers like "vedalsdrink" that slip through as labels for SMODS cards
+  if card.label and card.label ~= "" then
+    local lbl = clean_loc_text(card.label, placeholders)
+    if lbl and lbl ~= "" then
+      if lbl:find("_") and not lbl:find(" ") then
+        lbl = humanize_identifier(lbl)
+      end
+      -- Accept label if it has spaces (multi-word name) or starts uppercase (capitalized name)
+      -- Reject single-word all-lowercase strings like "vedalsdrink" (raw SMODS keys)
+      local first_char = lbl:sub(1, 1)
+      if lbl:find(" ") or (first_char == first_char:upper() and first_char ~= first_char:lower()) then
+        return lbl
+      end
     end
   end
 

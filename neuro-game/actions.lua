@@ -639,6 +639,7 @@ function Actions.is_action_valid(action_name)
     local has_any =
       has_cards(G and G.consumeables)
       or has_cards(G and G.booster_pack)
+      or has_cards(G and G.pack_cards)
       or has_cards(G and G.shop_booster)
     if not has_any then
       return false

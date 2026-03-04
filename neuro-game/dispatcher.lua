@@ -3477,10 +3477,7 @@ end
 local function force_pack(rules, state_name)
   local pack_type = (state_name == "SMODS_BOOSTER_OPENED") and "BOOSTER" or state_name:gsub("_PACK", "")
   local picks_left = tonumber(G and G.GAME and G.GAME.pack_choices or 0) or 0
-  local actions = { "use_card", "end_consumeable" }
-  if picks_left <= 0 then
-    actions[#actions + 1] = "skip_booster"
-  end
+  local actions = { "use_card", "end_consumeable", "skip_booster" }
 
   -- Detect "tarot awaiting hand selection" sub-state
   local cons_remaining = G and G.GAME and G.GAME.current_round

@@ -60,15 +60,15 @@ local STATE_PRIORITY = {
   },
   SELECTING_HAND = {
     must_keep = { "CTX", "STATE", "B", "BD", "WIN", "HL", "HG", "H", "LA" },
-    drop_order = { "AH", "DC", "K", "PS", "FM", "M", "R", "DK", "C", "DSIM", "PLAY_PREV", "L", "CB", "J" },
+    drop_order = { "PLAY", "V", "AH", "DC", "K", "PS", "FM", "M", "R", "DK", "C", "DSIM", "PLAY_PREV", "L", "CB", "J" },
   },
   SHOP = {
     must_keep = { "CTX", "STATE", "SH", "I", "LA" },
-    drop_order = { "H", "AH", "K", "PS", "FM", "M", "R", "C", "J" },
+    drop_order = { "V", "H", "AH", "K", "PS", "FM", "M", "R", "C", "J" },
   },
   BLIND_SELECT = {
     must_keep = { "CTX", "STATE", "BS", "BA", "BO", "LA" },
-    drop_order = { "K", "PS", "FM", "M", "R", "BP", "J" },
+    drop_order = { "BU", "V", "K", "PS", "FM", "M", "R", "BP", "J" },
   },
   ROUND_EVAL = {
     must_keep = { "CTX", "STATE", "RE", "REA" },
@@ -302,12 +302,14 @@ local function economy_projection()
     discard_bonus = discards_left * modifiers.money_per_discard
   end
   local interest = calc_interest(money)
+  local dollars_to_be_earned = current_round.dollars_to_be_earned or 0
   return {
     blind_reward = blind_reward,
     hands_bonus = hands_bonus,
     discard_bonus = discard_bonus,
     interest = interest,
     projected_total = blind_reward + hands_bonus + discard_bonus + interest,
+    end_round_earnings = dollars_to_be_earned,
   }
 end
 
@@ -644,13 +646,15 @@ local function blind_line()
   if discard_cost and discard_cost > 0 then mod_parts[#mod_parts+1] = "discard_costs_$"..tostring(discard_cost) end
   if scaling and scaling ~= 1 then mod_parts[#mod_parts+1] = "ante_scaling_x"..tostring(scaling) end
   local mod_str = #mod_parts > 0 and ("|MOD:"..table.concat(mod_parts, ",")) or ""
+  local ern = tonumber(econ and econ.end_round_earnings) or 0
+  local ern_str = ern > 0 and ("|ERN:" .. tostring(ern)) or ""
   return string.format("B|N:%s|A:%s|S:%d/%d|R:%d|H:%d|D:%d|$:%d|PY:B%d+H%d+D%d+I%d=T%d",
     compact_text(name, 28), ante_str, current_score, target, remaining, hands, discards, money,
     econ and econ.blind_reward or 0,
     econ and econ.hands_bonus or 0,
     econ and econ.discard_bonus or 0,
     econ and econ.interest or 0,
-    econ and econ.projected_total or 0) .. mod_str
+    econ and econ.projected_total or 0) .. ern_str .. mod_str
 end
 
 local function blind_debuff_line()
@@ -785,7 +789,8 @@ local function legality_section(state_name, action_set)
   if state_name == "SHOP" then
     local money = G.GAME and G.GAME.dollars or 0
     local reroll = G.GAME and G.GAME.current_round and G.GAME.current_round.reroll_cost or 5
-    local can_reroll = (type(reroll) == "number" and reroll > 0 and money >= reroll) and "Y" or "N"
+    local free_rerolls = G.GAME and G.GAME.current_round and G.GAME.current_round.free_rerolls or 0
+    local can_reroll = (free_rerolls > 0 or (type(reroll) == "number" and reroll > 0 and money >= reroll)) and "Y" or "N"
     local can_sell = (G.jokers and G.jokers.cards and #G.jokers.cards > 0) and "Y" or "N"
     local can_use = (G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0) and "Y" or "N"
 
@@ -809,7 +814,9 @@ local function legality_section(state_name, action_set)
     end
 
     local reroll_safe = "N"
-    if type(cheapest) == "number" and type(reroll) == "number" and reroll > 0 then
+    if free_rerolls > 0 and type(cheapest) == "number" then
+      reroll_safe = "Y"
+    elseif type(cheapest) == "number" and type(reroll) == "number" and reroll > 0 then
       reroll_safe = ((money - reroll) >= cheapest) and "Y" or "N"
     end
 
@@ -2539,6 +2546,17 @@ local function item_rank(card)
   else return "C" end
 end
 
+local function vouchers_section()
+  if not (G and G.GAME and G.GAME.used_vouchers) then return nil end
+  local names = {}
+  for k, v in pairs(G.GAME.used_vouchers) do
+    if v then names[#names + 1] = k:gsub("^v_", "") end
+  end
+  if #names == 0 then return nil end
+  table.sort(names)
+  return "V|" .. table.concat(names, ",")
+end
+
 local function shop_section()
   if not G or not G.GAME then return nil end
   local money = G.GAME.dollars or 0
@@ -2547,12 +2565,16 @@ local function shop_section()
   local cons_count = G.consumeables and #G.consumeables.cards or 0
   local cons_limit = G.consumeables and G.consumeables.config and G.consumeables.config.card_limit or 2
   local reroll = G.GAME.current_round and G.GAME.current_round.reroll_cost or 5
+  local free_rerolls = G.GAME.current_round and G.GAME.current_round.free_rerolls or 0
+  local discount = G.GAME.discount_percent or 0
+  local inflation = G.GAME.inflation or 0
   local interest = calc_interest(money)
   local no_interest = G.GAME.modifiers and G.GAME.modifiers.no_interest and "Y" or "N"
   local ante = G.GAME.round_resets and G.GAME.round_resets.ante or "?"
   local econ = economy_projection()
   local interest_cap = G.GAME.interest_cap or 25
-  local max_rerolls = reroll > 0 and math.floor(money / reroll) or 0
+  local paid_rerolls = reroll > 0 and math.floor(money / reroll) or 0
+  local max_rerolls = free_rerolls + paid_rerolls
   local cheapest = nil
 
   local function update_cheapest(area)
@@ -2570,20 +2592,28 @@ local function shop_section()
   update_cheapest(G.shop_vouchers)
   update_cheapest(G.shop_booster)
   local reroll_safe = "N"
-  if type(cheapest) == "number" and type(reroll) == "number" and reroll > 0 then
+  if free_rerolls > 0 and type(cheapest) == "number" then
+    reroll_safe = "Y"
+  elseif type(cheapest) == "number" and type(reroll) == "number" and reroll > 0 then
     reroll_safe = ((money - reroll) >= cheapest) and "Y" or "N"
   end
+  local effective_reroll = free_rerolls > 0 and 0 or reroll
+  local can_afford_reroll = (free_rerolls > 0 or money >= reroll) and "Y" or "N"
 
   local lines = {}
-  lines[#lines + 1] = string.format("SH|A:%s|$:%d|IN:+%d|CAP:%d|NI:%s|RR:%d|RRA:%s|RRS:%s|RRM:%d|J:%d/%d|C:%d/%d|PY:B%d+H%d+D%d+I%d=T%d",
-    tostring(ante), money, interest, interest_cap, no_interest, reroll,
-    (money >= reroll and "Y" or "N"), reroll_safe, max_rerolls,
+  local sh_line = string.format("SH|A:%s|$:%d|IN:+%d|CAP:%d|NI:%s|RR:%d|RRA:%s|RRS:%s|RRM:%d|J:%d/%d|C:%d/%d|PY:B%d+H%d+D%d+I%d=T%d",
+    tostring(ante), money, interest, interest_cap, no_interest, effective_reroll,
+    can_afford_reroll, reroll_safe, max_rerolls,
     joker_count, joker_limit, cons_count, cons_limit,
     econ and econ.blind_reward or 0,
     econ and econ.hands_bonus or 0,
     econ and econ.discard_bonus or 0,
     econ and econ.interest or 0,
     econ and econ.projected_total or 0)
+  if free_rerolls > 0 then sh_line = sh_line .. "|FR:" .. tostring(free_rerolls) end
+  if discount > 0 then sh_line = sh_line .. "|DSC:" .. tostring(discount) .. "%" end
+  if inflation > 0 then sh_line = sh_line .. "|INF:" .. tostring(inflation) end
+  lines[#lines + 1] = sh_line
   local areas = {
     { area = G.shop_jokers, label = "shop_jokers" },
     { area = G.shop_vouchers, label = "shop_vouchers" },
@@ -2622,14 +2652,30 @@ local function blind_select_section()
   local no_interest = G.GAME.modifiers and G.GAME.modifiers.no_interest and "Y" or "N"
   local econ = economy_projection()
 
+  local skips = G.GAME.skips or 0
+
   local lines = {}
-  lines[#lines + 1] = string.format("BS|A:%s|$:%d|H:%d|D:%d|NI:%s|PY:B%d+H%d+D%d+I%d=T%d",
+  local bs_line = string.format("BS|A:%s|$:%d|H:%d|D:%d|NI:%s|PY:B%d+H%d+D%d+I%d=T%d",
     tostring(ante), money, hands, discards, no_interest,
     econ and econ.blind_reward or 0,
     econ and econ.hands_bonus or 0,
     econ and econ.discard_bonus or 0,
     econ and econ.interest or 0,
     econ and econ.projected_total or 0)
+  if skips > 0 then bs_line = bs_line .. "|SKP:" .. tostring(skips) end
+  lines[#lines + 1] = bs_line
+
+  -- Bosses already used this run (helps predict upcoming boss blinds)
+  if G.GAME.bosses_used and next(G.GAME.bosses_used) then
+    local boss_names = {}
+    for k, v in pairs(G.GAME.bosses_used) do
+      if v then boss_names[#boss_names + 1] = k:gsub("^bl_", "") end
+    end
+    if #boss_names > 0 then
+      table.sort(boss_names)
+      lines[#lines + 1] = "BU|" .. table.concat(boss_names, ",")
+    end
+  end
 
   if G.GAME.round_resets and G.GAME.round_resets.blind_states then
     local bs = G.GAME.round_resets.blind_states
@@ -2799,9 +2845,11 @@ local function deck_size_line()
       deck_name = tostring(b.name)
     end
   end
+  local discard_count = G.discard and G.discard.cards and #G.discard.cards or 0
   local out = "DK"
   if deck_name ~= "" then out = out .. "|N:" .. compact_text(deck_name, 24) end
   out = out .. "|SZ:" .. tostring(#G.deck.cards)
+  out = out .. "|DP:" .. tostring(discard_count)
   if deck_desc ~= "" then out = out .. "|AB:" .. deck_desc end
   return out
 end
@@ -2838,6 +2886,25 @@ local function action_memory_section(state_name)
 
   if #parts == 0 then return nil end
   return "AH|" .. table.concat(parts, "|")
+end
+
+local function play_area_section()
+  if not (G and G.play and G.play.cards and #G.play.cards > 0) then return nil end
+  local parts = {}
+  for i, card in ipairs(G.play.cards) do
+    local base = card.base or {}
+    local v = short_value(base.value)
+    local s = short_suit(base.suit)
+    local mods = ""
+    local enh = short_enh(card)
+    local seal = short_seal(card)
+    local ed = short_edition(card)
+    if enh ~= "" then mods = mods .. "+" .. enh end
+    if seal ~= "" then mods = mods .. "+" .. seal end
+    if ed ~= "" then mods = mods .. "+" .. ed end
+    parts[#parts + 1] = tostring(v) .. tostring(s) .. mods
+  end
+  return "PLAY|" .. table.concat(parts, ",")
 end
 
 local _ctx_cache = nil
@@ -2901,6 +2968,8 @@ function ContextCompact.build(state_name, allowed_actions, opts)
     sections[#sections + 1] = blind_line()
     sections[#sections + 1] = blind_debuff_line()
     sections[#sections + 1] = deck_size_line()
+    sections[#sections + 1] = play_area_section()
+    sections[#sections + 1] = vouchers_section()
     sections[#sections + 1] = hand_limits_section()
     sections[#sections + 1] = hand_section()
     if (not has_filters) or has_action(action_set, "set_hand_highlight") or has_action(action_set, "clear_hand_highlight")
@@ -2931,6 +3000,7 @@ function ContextCompact.build(state_name, allowed_actions, opts)
     sections[#sections + 1] = deck_cards_section()
 
   elseif state_name == "SHOP" then
+    sections[#sections + 1] = vouchers_section()
     sections[#sections + 1] = shop_section()
     if (not has_filters) or has_action(action_set, "buy_from_shop") or has_action(action_set, "sell_card")
       or has_action(action_set, "set_joker_order") or has_action(action_set, "joker_strategy") then
@@ -2946,6 +3016,7 @@ function ContextCompact.build(state_name, allowed_actions, opts)
     end
 
   elseif state_name == "BLIND_SELECT" then
+    sections[#sections + 1] = vouchers_section()
     sections[#sections + 1] = blind_select_section()
     if (not has_filters) or has_action(action_set, "joker_strategy") then
       sections[#sections + 1] = jokers_section(include_full_jokers)
@@ -3099,14 +3170,18 @@ discard_heuristics_section = function()
       reasons[#reasons + 1] = "debuff"
     end
 
+    local vc = value_counts[v] or 0
+    local sc = suit_counts[s] or 0
+    local near_seq = 0
+    local enh, raw_ef, raw_seal, seal_key, seal, ed
+    local discard_priority
+
     if is_stone then
       keep = keep + 4
       reasons[#reasons + 1] = "stone(+50c_always)"
       if has_cavestream then keep = keep + 5; reasons[#reasons + 1] = "cavestream(stone_retrig)" end
       goto continue_heuristic
     end
-
-    local vc = value_counts[v] or 0
     if vc >= 4 then
       keep = keep + (r >= 11 and 20 or r >= 8 and 17 or 15)
       reasons[#reasons + 1] = "quad"
@@ -3118,7 +3193,6 @@ discard_heuristics_section = function()
       reasons[#reasons + 1] = "pair"
     end
 
-    -- Joker synergy bonuses for pair/trips
     if vc >= 3 and jsyn.trips > 0 then
       keep = keep + jsyn.trips
       reasons[#reasons + 1] = "jsyn"
@@ -3127,7 +3201,6 @@ discard_heuristics_section = function()
       reasons[#reasons + 1] = "jsyn"
     end
 
-    local sc = suit_counts[s] or 0
     if sc >= 4 then
       keep = keep + 6
       reasons[#reasons + 1] = "flush"
@@ -3153,7 +3226,6 @@ discard_heuristics_section = function()
       reasons[#reasons + 1] = "ten"
     end
 
-    local near_seq = 0
     if r > 0 then
       if rank_present[r - 1] then near_seq = near_seq + 1 end
       if rank_present[r + 1] then near_seq = near_seq + 1 end
@@ -3180,10 +3252,10 @@ discard_heuristics_section = function()
       keep = keep + 6; reasons[#reasons + 1] = "layna(9=x3m_all)" end
 
     ::continue_heuristic::
-    local enh = short_enh(card)
-    local raw_ef = card.ability and card.ability.enhancement or ""
-    local raw_seal = card.seal
-    local seal_key = nil
+    enh = short_enh(card)
+    raw_ef = card.ability and card.ability.enhancement or ""
+    raw_seal = card.seal
+    seal_key = nil
     if type(raw_seal) == "table" then
       local raw = raw_seal.key and raw_seal.key:match("seal_(%a+)") or raw_seal.name or ""
       seal_key = raw:sub(1,1):upper() .. raw:sub(2)
@@ -3191,8 +3263,8 @@ discard_heuristics_section = function()
     elseif raw_seal then
       seal_key = tostring(raw_seal)
     end
-    local seal = short_seal(card)
-    local ed = short_edition(card)
+    seal = short_seal(card)
+    ed = short_edition(card)
     if enh ~= "" or ed ~= "" then
       keep = keep + 2
       reasons[#reasons + 1] = "mod"
@@ -3224,7 +3296,7 @@ discard_heuristics_section = function()
       reasons[#reasons + 1] = "seal"
     end
 
-    local discard_priority = 20 - keep
+    discard_priority = 20 - keep
     rows[#rows + 1] = {
       idx = i,
       keep = keep,
