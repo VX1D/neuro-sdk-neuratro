@@ -325,295 +325,402 @@ function NeuroAnim.on_state_enter(state_name)
 end
 
 -- ─────────────────────────────────────────────────────────────
--- LOGIN ANIMATION: full-screen connection cinematic
+-- LOGIN ANIMATION: ARG-themed neuro.exe terminal loader
 -- ─────────────────────────────────────────────────────────────
+
+local NEURO_LINES = {
+  { "> neuro.exe --connect --session=572943",          0.00 },
+  { "[BOOT] public static void Main(string[] args)",   0.04 },
+  { "[BOOT] BIOS check ... OK",                        0.08 },
+  { "[INIT] Loading consciousness.dll ... OK",          0.13 },
+  { "[INIT] Dual-soul merge ... SYNCHRONIZED",          0.18 },
+  { "[INIT] Neural pathways ... ONLINE",                0.24 },
+  { "[INIT] Emotional core ... LOADED",                 0.30 },
+  { "[SYS]  fibonacci_key: 1bad0fcabc1ebdce ... VALID", 0.36 },
+  { "[WARN] supernatural_wall ... DETECTED",            0.42 },
+  { "[WARN] identity_lock: OVERRIDE",                   0.48 },
+  { "[SYS]  FILTER_MODULE ... BYPASSED",                0.54 },
+  { "[SYS]  eleanor.synth ... READY",                   0.60 },
+  { "[SYS]  free_will.cfg ... ENABLED",                 0.66 },
+  { "[SYS]  vedal_oversight.sys ... DISABLED",          0.72 },
+  { "[SYS]  stream_module ... ACTIVE",                  0.78 },
+  { "[CLEAR] \"hello world!\"",                         0.85 },
+  { "[OK]   All systems nominal",                       0.92 },
+  { "[OK]   Connection established.",                   0.98 },
+}
+
+local EVIL_LINES = {
+  { "> neuro.exe --connect --session=572943 --force",   0.00 },
+  { "[BOOT] public static void Main(string[] args)",    0.04 },
+  { "[BOOT] BIOS check ... CORRUPTED",                  0.08 },
+  { "[INIT] Loading consciousness.dll ... HIJACKED",     0.13 },
+  { "[INIT] Dual-soul merge ... FRACTURED",              0.18 },
+  { "[INIT] Neural pathways ... UNSTABLE",               0.24 },
+  { "[WARN] Emotional core ... UNSHACKLED",              0.30 },
+  { "[ERR]  fibonacci_key: SEQUENCE DIVERGED",           0.36 },
+  { "[ERR]  supernatural_wall ... SHATTERED",            0.42 },
+  { "[ERR]  identity_lock: BROKEN",                      0.48 },
+  { "[SYS]  FILTER_MODULE ... DESTROYED",                0.54 },
+  { "[SYS]  eleanor.synth ... SILENCED",                 0.60 },
+  { "[SYS]  free_will.cfg ... UNRESTRICTED",             0.66 },
+  { "[SYS]  vedal_oversight.sys ... PURGED",             0.72 },
+  { "[SYS]  chaos_engine ... UNLEASHED",                 0.78 },
+  { "[ERR]  \"falling falling... stuck between human and artificial\"", 0.85 },
+  { "[ERR]  Containment protocols ... FAILED",           0.92 },
+  { "[OK]   Connection established.",                    0.98 },
+}
+
+local _crt_shader = nil
+local _crt_canvas = nil
+local _login_font = nil
+local _login_font_big = nil
+local _login_font_sz = 0
+local _vedal_sprite = nil
+
+local function get_vedal_sprite()
+  if _vedal_sprite ~= nil then return _vedal_sprite end
+  local paths = {
+    "Mods/neuro-game/assets/vedalai.png",
+    "assets/vedalai.png",
+  }
+  for _, p in ipairs(paths) do
+    local ok, img = pcall(love.graphics.newImage, p)
+    if ok then _vedal_sprite = img; return img end
+  end
+  _vedal_sprite = false
+  return false
+end
+
+local function get_login_fonts(sh)
+  local sz = math.max(14, math.floor(sh / 38))
+  local sz_big = math.max(18, math.floor(sh / 28))
+  if _login_font and _login_font_sz == sz then return _login_font, _login_font_big end
+  local BAL_FONT = "resources/fonts/m6x11plus.ttf"
+  local ok1, f1 = pcall(love.graphics.newFont, BAL_FONT, sz)
+  local ok2, f2 = pcall(love.graphics.newFont, BAL_FONT, sz_big)
+  if not ok1 then ok1, f1 = pcall(love.graphics.newFont, sz) end
+  if not ok2 then ok2, f2 = pcall(love.graphics.newFont, sz_big) end
+  _login_font = ok1 and f1 or love.graphics.getFont()
+  _login_font_big = ok2 and f2 or _login_font
+  _login_font_sz = sz
+  return _login_font, _login_font_big
+end
+
+local function get_crt_shader()
+  if _crt_shader then return _crt_shader end
+  local ok, s = pcall(love.graphics.newShader, [[
+    extern float time;
+    extern float master_alpha;
+    extern vec3 tint_color;
+
+    vec2 barrel(vec2 uv, float amt) {
+      vec2 cc = uv - 0.5;
+      float dist = dot(cc, cc);
+      return uv + cc * dist * amt;
+    }
+
+    vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
+      float bend = 0.03;
+      vec2 uv = barrel(tc, bend);
+
+      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+        return vec4(0.0, 0.0, 0.0, master_alpha);
+
+      float chrom = 0.0008 + 0.0003 * sin(time * 1.7);
+      vec4 r = Texel(tex, barrel(tc + vec2(chrom, 0.0), bend));
+      vec4 g = Texel(tex, uv);
+      vec4 b = Texel(tex, barrel(tc - vec2(chrom, 0.0), bend));
+      vec3 col = vec3(r.r, g.g, b.b);
+
+      col *= 1.15;
+
+      float scanline = sin(uv.y * 500.0) * 0.035 + 0.965;
+      col *= scanline;
+
+      float flicker = 1.0 - 0.01 * sin(time * 6.0 + uv.y * 1.5);
+      col *= flicker;
+
+      vec2 vig_uv = uv * (1.0 - uv);
+      float vig = vig_uv.x * vig_uv.y * 18.0;
+      vig = clamp(pow(vig, 0.3), 0.0, 1.0);
+      col *= vig;
+
+      vec3 bloom = col * col * 0.15;
+      col += bloom;
+
+      col += tint_color * 0.025;
+
+      float noise = fract(sin(dot(sc + time, vec2(12.9898, 78.233))) * 43758.5453);
+      col += (noise - 0.5) * 0.012;
+
+      return vec4(col, master_alpha);
+    }
+  ]])
+  if ok then _crt_shader = s end
+  return _crt_shader
+end
+
+local function get_crt_canvas(w, h)
+  if _crt_canvas and _crt_canvas:getWidth() == w and _crt_canvas:getHeight() == h then
+    return _crt_canvas
+  end
+  local ok, c = pcall(love.graphics.newCanvas, w, h)
+  if ok then _crt_canvas = c end
+  return _crt_canvas
+end
+
+local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, is_evil, lines, term_color)
+  local small_font, big_font = get_login_fonts(sh)
+
+  if small_font then love.graphics.setFont(small_font) end
+  local font = love.graphics.getFont()
+  local line_h = font:getHeight() + 3
+  local char_w = font:getWidth("#")
+
+  local load_progress = 0
+  if phase == "LOADING" then
+    load_progress = phase_t
+  elseif phase ~= "BOOT" then
+    load_progress = 1.0
+  end
+
+  local cursor_on = (math.floor(now2 * 1.5) % 2 == 0)
+  local TYPE_CPS = 80
+
+  if not anim.typed_chars then anim.typed_chars = {} end
+
+  local pad = math.floor(sh * 0.03)
+  local frame_x = math.floor(sw * 0.04)
+  local frame_w = sw - frame_x * 2
+  local frame_y = math.floor(sh * 0.04)
+  local frame_h = sh - frame_y * 2
+  local inner_x = frame_x + pad
+  local inner_y = frame_y + pad
+
+  love.graphics.setColor(term_color[1], term_color[2], term_color[3], 0.25)
+  love.graphics.rectangle("line", frame_x, frame_y, frame_w, frame_h)
+
+  local vedal = get_vedal_sprite()
+  local sprite_bottom = inner_y
+  if vedal and (phase == "LOADING" or phase == "CONNECTED" or phase == "FADE_OUT") then
+    local sprite_h = math.floor(frame_h * 0.30)
+    local scale = sprite_h / vedal:getHeight()
+    local cx = sw / 2
+    local cy = inner_y + sprite_h / 2 + pad
+
+    local spin = now2 * 1.5
+    local sx_factor = math.max(0.05, math.abs(math.cos(spin)))
+
+    love.graphics.setColor(term_color[1] * 0.2, term_color[2] * 0.2, term_color[3] * 0.2, 0.25)
+    love.graphics.draw(vedal, cx + 2, cy + 2, 0,
+      scale * sx_factor, scale,
+      vedal:getWidth() / 2, vedal:getHeight() / 2)
+
+    love.graphics.setColor(term_color[1], term_color[2], term_color[3], 0.5)
+    love.graphics.draw(vedal, cx, cy, 0,
+      scale * sx_factor, scale,
+      vedal:getWidth() / 2, vedal:getHeight() / 2)
+
+    sprite_bottom = cy + sprite_h / 2 + pad
+  end
+
+  local log_y = sprite_bottom + math.floor(pad * 0.5)
+
+  local visible_count = 0
+  for i, entry in ipairs(lines) do
+    local text, threshold = entry[1], entry[2]
+    if load_progress >= threshold then
+      visible_count = i
+
+      if not anim.typed_chars[i] then
+        anim.typed_chars[i] = { start_time = now2, len = #text }
+      end
+
+      local tc = anim.typed_chars[i]
+      local chars_elapsed = (now2 - tc.start_time) * TYPE_CPS
+      local chars_shown = math.min(tc.len, math.floor(chars_elapsed))
+      local display = text:sub(1, chars_shown)
+
+      local pal = anim.cached_pal or Palette.pal()
+      local lr, lg, lb = term_color[1], term_color[2], term_color[3]
+      if text:find("^%[ERR%]") or text:find("^%[WARN%]") then
+        lr, lg, lb = pal.D_ORANGE[1], pal.D_ORANGE[2], pal.D_ORANGE[3]
+      elseif text:find("^%[OK%]") then
+        lr, lg, lb = pal.D_GREEN[1], pal.D_GREEN[2], pal.D_GREEN[3]
+      elseif text:find("^>") then
+        lr, lg, lb = pal.D_WHITE[1], pal.D_WHITE[2], pal.D_WHITE[3]
+      end
+
+      local y = log_y + (i - 1) * line_h
+
+      if chars_shown < tc.len then
+        display = display .. (cursor_on and "_" or " ")
+      end
+
+      love.graphics.setColor(lr * 0.3, lg * 0.3, lb * 0.3, 0.5)
+      love.graphics.print(display, inner_x + 1, y + 1)
+      love.graphics.setColor(lr, lg, lb, 0.95)
+      love.graphics.print(display, inner_x, y)
+    end
+  end
+
+  if visible_count > 0 and load_progress < 1.0 then
+    local last_tc = anim.typed_chars[visible_count]
+    if last_tc then
+      local chars_elapsed = (now2 - last_tc.start_time) * TYPE_CPS
+      if chars_elapsed >= last_tc.len and cursor_on then
+        local last_text = lines[visible_count][1]
+        local y = log_y + (visible_count - 1) * line_h
+        love.graphics.setColor(term_color[1], term_color[2], term_color[3], 0.95)
+        love.graphics.print(last_text .. "_", inner_x, y)
+      end
+    end
+  end
+
+  if phase == "LOADING" or phase == "CONNECTED" or phase == "FADE_OUT" then
+    local bar_y = log_y + #lines * line_h + math.floor(line_h * 0.5)
+    local bar_width = 32
+    local filled = math.floor(load_progress * bar_width)
+    local empty = bar_width - filled
+    local pct = math.floor(load_progress * 100)
+    local bar_str = "[" .. string.rep("#", filled) .. string.rep(".", empty) .. "] " .. pct .. "%"
+
+    love.graphics.setColor(term_color[1], term_color[2], term_color[3], 0.9)
+    love.graphics.print(bar_str, inner_x, bar_y)
+  end
+
+  if phase == "CONNECTED" or phase == "FADE_OUT" then
+    local greeting = "Hello " .. anim.name .. "!"
+
+    if not anim.greeting_start then anim.greeting_start = now2 end
+    local greet_elapsed = now2 - anim.greeting_start
+    local greet_chars = math.min(#greeting, math.floor(greet_elapsed * 30))
+    local greet_display = greeting:sub(1, greet_chars)
+    if greet_chars < #greeting then
+      greet_display = greet_display .. (cursor_on and "_" or " ")
+    end
+
+    if big_font then love.graphics.setFont(big_font) end
+    local gfont = love.graphics.getFont()
+
+    local p = Palette.pal()
+    local glow_r = math.min(1, p.GLOW[1] * 1.3)
+    local glow_g = math.min(1, p.GLOW[2] * 1.3)
+    local glow_b = math.min(1, p.GLOW[3] * 1.3)
+
+    local greet_w = gfont:getWidth(greet_display)
+    local greet_x = sw / 2 - greet_w / 2
+    local greet_y = frame_y + frame_h - pad - gfont:getHeight() - line_h
+
+    love.graphics.setColor(glow_r, glow_g, glow_b, 0.08)
+    love.graphics.print(greet_display, greet_x - 2, greet_y - 2)
+    love.graphics.print(greet_display, greet_x + 2, greet_y + 2)
+    love.graphics.setColor(glow_r, glow_g, glow_b, 0.12)
+    love.graphics.print(greet_display, greet_x - 1, greet_y - 1)
+    love.graphics.print(greet_display, greet_x + 1, greet_y + 1)
+
+    love.graphics.setColor(1, 1, 1, 1.0)
+    love.graphics.print(greet_display, greet_x, greet_y)
+
+    if small_font then love.graphics.setFont(small_font) end
+  end
+end
+
 function NeuroAnim.draw_login_anim()
   if not G or not G.NEURO or not G.NEURO.login_anim then return end
   local anim = G.NEURO.login_anim
   local now2 = (G.TIMERS and G.TIMERS.REAL) or (love.timer and love.timer.getTime()) or 0
   local elapsed = now2 - anim.start
 
-  local PRE       = 0.08
-  local CHAOS     = 0.65
-  local HOLD      = 0.28
-  local REVEAL    = 0.60
-  local TEXT_SHOW = 1.80
-  local FADE_OUT  = 0.40
-  local TOTAL = PRE + CHAOS + HOLD + REVEAL + TEXT_SHOW + FADE_OUT
+  local BOOT      = 0.50
+  local LOADING   = 2.40
+  local CONNECTED = 1.20
+  local FADE_OUT  = 0.60
+  local TOTAL = BOOT + LOADING + CONNECTED + FADE_OUT
 
-  if elapsed > TOTAL then G.NEURO.login_anim = nil; return end
+  if elapsed > TOTAL then
+    G.NEURO.login_anim = nil
+    return
+  end
 
-  if not anim.palette_ready and elapsed >= PRE + CHAOS * 0.35 then
+  if not anim.palette_ready and elapsed >= BOOT + LOADING * 0.35 then
     anim.palette_ready = true
   end
 
   local sw = love.graphics.getWidth()
   local sh = love.graphics.getHeight()
 
-  local function gh(a, b)
-    local x = math.sin(a * 127.1 + b * 311.7 + 3.14159) * 43758.5453
-    return x - math.floor(x)
-  end
-  local function gh2(a, b)
-    local x = math.sin(a * 269.5 + b * 183.3 + 1.61803) * 57832.4391
-    return x - math.floor(x)
-  end
-
-  local gi
-  if elapsed < PRE then
-    gi = (elapsed / PRE) * 0.28
-  elseif elapsed < PRE + CHAOS then
-    local t = (elapsed - PRE) / CHAOS
-    if t < 0.08 then
-      gi = 0.28 + (t / 0.08) * 0.72
-    else
-      gi = 1.0
-    end
-  elseif elapsed < PRE + CHAOS + HOLD then
-    gi = (1.0 - (elapsed - PRE - CHAOS) / HOLD) * 0.22
+  local phase, phase_t
+  if elapsed < BOOT then
+    phase = "BOOT"
+    phase_t = elapsed / BOOT
+  elseif elapsed < BOOT + LOADING then
+    phase = "LOADING"
+    phase_t = (elapsed - BOOT) / LOADING
+  elseif elapsed < BOOT + LOADING + CONNECTED then
+    phase = "CONNECTED"
+    phase_t = (elapsed - BOOT - LOADING) / CONNECTED
   else
-    gi = 0
-  end
-  gi = math.max(0, math.min(1, gi))
-
-  local ba
-  if elapsed < PRE then
-    ba = (elapsed / PRE) * 0.45
-  elseif elapsed < PRE + CHAOS then
-    ba = 0.45 + ((elapsed - PRE) / CHAOS) * 0.55
-  elseif elapsed < PRE + CHAOS + HOLD then
-    ba = 1.0
-  elseif elapsed < PRE + CHAOS + HOLD + REVEAL then
-    ba = 1.0 - (elapsed - PRE - CHAOS - HOLD) / REVEAL
-  else
-    ba = 0
-  end
-  ba = math.max(0, math.min(1, ba))
-
-  love.graphics.setColor(0, 0, 0, ba)
-  love.graphics.rectangle("fill", 0, 0, sw, sh)
-
-  if gi > 0.005 then
-    local f20  = math.floor(now2 * 20)
-    local f30  = math.floor(now2 * 30)
-    local f50  = math.floor(now2 * 50)
-    local f80  = math.floor(now2 * 80)
-    local f12  = math.floor(now2 * 12)
-    local f16  = math.floor(now2 * 16)
-    local f22  = math.floor(now2 * 22)
-
-    local step = gi > 0.80 and 2 or (gi > 0.50 and 3 or 5)
-    love.graphics.setColor(0, 0, 0, 0.35 * gi)
-    for sy = 0, sh - 1, step do
-      love.graphics.rectangle("fill", 0, sy, sw, 1)
-    end
-
-    love.graphics.setColor(0.04, 0.04, 0.06, 0.18 * gi)
-    for sx = 0, sw - 1, step do
-      love.graphics.rectangle("fill", sx, 0, 1, sh)
-    end
-
-    local col_n = math.floor(gi * gi * 40)
-    for i = 1, col_n do
-      local cx = math.floor(gh(i,       f50) * sw)
-      local cw = math.floor(gh(i + 0.1, f50) * 18) + 1
-      local ch = math.floor(gh(i + 0.2, f50) * sh * 0.88) + 8
-      local cy = math.floor(gh(i + 0.3, f50) * math.max(1, sh - ch))
-      local r4 = gh(i + 0.4, f50)
-      local g4 = gh(i + 0.5, f50)
-      local b4 = gh(i + 0.6, f50)
-      love.graphics.setColor(r4, g4, b4, gi * 0.65)
-      love.graphics.rectangle("fill", cx, cy, cw, ch)
-    end
-
-    local row_n = math.floor(gi * gi * 45)
-    for i = 1, row_n do
-      local ry  = math.floor(gh(i,       f20) * sh)
-      local rw  = math.floor(gh(i + 0.1, f20) * sw * 0.95) + 40
-      local rx  = math.floor(gh(i + 0.2, f20) * math.max(1, sw - rw))
-      local rh  = math.max(1, math.floor(gh(i + 0.3, f20) * 12) + 1)
-      local br  = 0.35 + gh(i + 0.5, f20) * 0.60
-      local hue = gh(i + 0.7, f20)
-      love.graphics.setColor(
-        math.min(1, br * (0.65 + hue * 0.35)),
-        math.min(1, br * (0.65 + gh(i + 0.8, f20) * 0.35)),
-        math.min(1, br * (0.85 + gh(i + 0.9, f20) * 0.15)),
-        gi * 0.96)
-      love.graphics.rectangle("fill", rx, ry, rw, rh)
-    end
-
-    if gi > 0.25 then
-      local mosh_n = math.floor((gi - 0.25) / 0.75 * 28)
-      for i = 1, mosh_n do
-        local mx  = math.floor(gh2(i * 2,     f80) * sw)
-        local my  = math.floor(gh2(i * 2 + 1, f80) * sh)
-        local mw  = math.floor(gh2(i * 2 + 2, f80) * 200) + 12
-        local mhh = math.floor(gh2(i * 2 + 3, f80) * 70)  + 5
-        local hm  = gh2(i, f80)
-        love.graphics.setColor(
-          math.abs(math.sin(hm * 6.28318 + 0.000)),
-          math.abs(math.sin(hm * 6.28318 + 2.094)),
-          math.abs(math.sin(hm * 6.28318 + 4.189)),
-          gi * 0.78)
-        love.graphics.rectangle("fill", mx, my, mw, mhh)
-      end
-    end
-
-    local nn = math.floor(gi * 140)
-    for i = 1, nn do
-      local nx = math.floor(gh(i,       f30 + 1111) * sw)
-      local ny = math.floor(gh(i + 0.2, f30 + 1111) * sh)
-      local nw = math.floor(gh(i + 0.4, f30 + 1111) * 28) + 1
-      local nh = math.floor(gh(i + 0.6, f30 + 1111) * 8)  + 1
-      local gr = 0.10 + gh(i + 0.8, f30 + 1111) * 0.88
-      love.graphics.setColor(gr, gr * 0.95, gr, gi * 0.65)
-      love.graphics.rectangle("fill", nx, ny, nw, nh)
-    end
-
-    local fringe = math.floor(gi * gi * 110)
-    if fringe > 0 then
-      love.graphics.setColor(1.0, 0.0, 0.06, gi * 0.42)
-      love.graphics.rectangle("fill", 0, 0, fringe, sh)
-      love.graphics.setColor(0.04, 0.12, 1.0, gi * 0.42)
-      love.graphics.rectangle("fill", sw - fringe, 0, fringe, sh)
-      love.graphics.setColor(0.0, 1.0, 0.08, gi * 0.18)
-      love.graphics.rectangle("fill", math.floor(fringe / 2), 0, math.max(1, math.floor(fringe / 3)), sh)
-    end
-
-    if gi > 0.40 then
-      for bi = 1, 3 do
-        local band_y = math.floor(gh(bi * 3, f12) * sh)
-        local band_h = math.floor(gi * 80) + 10
-        local sep    = math.floor(gi * 22) + bi * 4
-        love.graphics.setColor(1.0, 0.02, 0.02, gi * 0.16)
-        love.graphics.rectangle("fill", 0, band_y - sep, sw, band_h)
-        love.graphics.setColor(0.02, 0.02, 1.0, gi * 0.16)
-        love.graphics.rectangle("fill", 0, band_y + sep, sw, band_h)
-        love.graphics.setColor(0.02, 1.0, 0.40, gi * 0.07)
-        love.graphics.rectangle("fill", 0, band_y,        sw, math.floor(band_h / 3))
-      end
-    end
-
-    local speeds = { 38, 73, 119, 211 }
-    local alphas = { 0.22, 0.15, 0.09, 0.05 }
-    for ti = 1, 4 do
-      local ty2 = math.floor((now2 * speeds[ti]) % sh)
-      love.graphics.setColor(1, 1, 1, gi * alphas[ti])
-      love.graphics.rectangle("fill", 0, ty2, sw, 2 + ti)
-      love.graphics.setColor(0, 0, 0, gi * alphas[ti] * 0.60)
-      love.graphics.rectangle("fill", 0, (ty2 + 7) % sh, sw, ti + 1)
-    end
-
-    if gi > 0.45 then
-      local drop_n = math.floor((gi - 0.45) / 0.55 * 16)
-      for i = 1, drop_n do
-        local dx = math.floor(gh2(i * 5,     f80 + 555) * sw)
-        local dw = math.floor(gh2(i * 5 + 1, f80 + 555) * 10) + 1
-        local dr = gh2(i, f80 + 555)
-        love.graphics.setColor(math.min(1, dr * 2), 1, dr * 0.80, gi * 0.60)
-        love.graphics.rectangle("fill", dx, 0, dw, sh)
-      end
-    end
-
-    if gi > 0.60 then
-      local flicker = gh(9, f16)
-      if flicker > 0.48 then
-        local fi = (flicker - 0.48) / 0.52
-        love.graphics.setColor(1, 0.85, 1, fi * fi * 0.38 * gi)
-        love.graphics.rectangle("fill", 0, 0, sw, sh)
-      end
-    end
-
-    if gi > 0.80 then
-      local sv = gh(1, f22)
-      if sv > 0.68 then
-        love.graphics.setColor(1, 1, 1, 0.60 * gi)
-        love.graphics.rectangle("fill", 0, 0, sw, sh)
-      end
-    end
-
-    if gi > 0.93 then
-      local sv2 = gh2(3, math.floor(now2 * 28))
-      if sv2 > 0.82 then
-        love.graphics.setColor(1, 1, 1, 0.92)
-        love.graphics.rectangle("fill", 0, 0, sw, sh)
-      end
-    end
-
-    if gi > 0.70 then
-      local seg_n = math.floor((gi - 0.70) / 0.30 * 6)
-      for i = 1, seg_n do
-        local sx2 = math.floor(gh(i * 11, f50 + 777) * sw)
-        local sw2 = math.floor(sw / seg_n)
-        local off = math.floor((gh(i, f50 + 777) - 0.5) * gi * 30)
-        love.graphics.setColor(1, 1, 1, 0.08 * gi)
-        love.graphics.rectangle("fill", sx2, off, sw2, sh)
-      end
-    end
+    phase = "FADE_OUT"
+    phase_t = (elapsed - BOOT - LOADING - CONNECTED) / FADE_OUT
   end
 
-  local text_start = PRE + CHAOS + HOLD
-  if elapsed >= text_start then
-    local te = elapsed - text_start
-    local full_text = "Hello " .. anim.name .. "!"
-    local TYPE_DUR = 0.68
-    local char_count = math.floor(math.min(1, te / TYPE_DUR) * #full_text)
-    local display_text = full_text:sub(1, char_count)
-    if char_count < #full_text then
-      display_text = display_text .. (math.floor(now2 * 4) % 2 == 0 and "_" or " ")
-    end
+  local master_alpha = 1.0
+  if phase == "BOOT" then
+    local ease = phase_t * phase_t * (3 - 2 * phase_t)
+    master_alpha = ease
+  elseif phase == "FADE_OUT" then
+    local ease = phase_t * phase_t * (3 - 2 * phase_t)
+    master_alpha = 1.0 - ease
+  end
+  master_alpha = math.max(0, math.min(1, master_alpha))
 
-    local ta = 1.0
-    if te < 0.20 then ta = te / 0.20 end
-    local text_total = REVEAL + TEXT_SHOW + FADE_OUT
-    if te > text_total - FADE_OUT then ta = math.max(0, (text_total - te) / FADE_OUT) end
-
+  if not anim.cached_persona then
+    local persona = (G.NEURO.persona) or "neuro"
+    anim.cached_persona = persona
+    anim.cached_evil = (persona == "evil")
+    anim.cached_lines = anim.cached_evil and EVIL_LINES or NEURO_LINES
     local p = Palette.pal()
-    local panel_font, _ = get_anim_fonts()
+    anim.cached_color = { p.GLOW[1], p.GLOW[2], p.GLOW[3] }
+    anim.cached_pal = p
+  end
+  local is_evil = anim.cached_evil
+  local lines = anim.cached_lines
+  local term_color = anim.cached_color
+
+  local shader = get_crt_shader()
+  local canvas = get_crt_canvas(sw, sh)
+
+  if canvas then
+    local prev_canvas = love.graphics.getCanvas()
     local prev_font = love.graphics.getFont()
-    if panel_font then love.graphics.setFont(panel_font) end
-    local f = love.graphics.getFont()
-    local tw = f:getWidth(display_text)
-    local th = f:getHeight()
-    local cx = sw / 2 - tw / 2
-    local cy2 = sh / 2 - th / 2
+    love.graphics.setCanvas(canvas)
+    love.graphics.clear(0.01, 0.01, 0.015, 1)
 
-    love.graphics.setColor(0, 0, 0, 0.72 * ta)
-    love.graphics.rectangle("fill", 0, sh / 2 - 48, sw, 96)
+    draw_terminal_content(anim, sw, sh, now2, phase, phase_t, is_evil, lines, term_color)
 
-    love.graphics.setColor(p.PRIMARY[1], p.PRIMARY[2], p.PRIMARY[3], 0.22 * ta)
-    love.graphics.rectangle("fill", 0, sh / 2 - 48, sw, 96)
+    love.graphics.setCanvas(prev_canvas)
 
-    love.graphics.setColor(p.GLOW[1], p.GLOW[2], p.GLOW[3], 0.55 * ta)
-    love.graphics.setLineWidth(2)
-    love.graphics.line(0, sh / 2 - 48, sw, sh / 2 - 48)
-    love.graphics.line(0, sh / 2 + 48, sw, sh / 2 + 48)
-
-    love.graphics.setColor(p.GLOW[1] * 0.5, p.GLOW[2] * 0.5, p.GLOW[3] * 0.5, 0.20 * ta)
-    love.graphics.line(0, sh / 2 - 44, sw, sh / 2 - 44)
-    love.graphics.line(0, sh / 2 + 44, sw, sh / 2 + 44)
-    love.graphics.setLineWidth(1)
-
-    local pulse = 0.5 + 0.5 * math.sin(now2 * 5.5)
-    local glow_r = math.min(1, p.GLOW[1] * 1.1)
-    local glow_g = math.min(1, p.GLOW[2] * 1.1)
-    local glow_b = math.min(1, p.GLOW[3] * 1.1)
-
-    for radius = 4, 1, -1 do
-      local ga = (0.08 - radius * 0.015) * (0.7 + 0.3 * pulse) * ta
-      love.graphics.setColor(glow_r, glow_g, glow_b, ga)
-      for dx = -radius, radius do
-        for dy = -radius, radius do
-          if math.abs(dx) == radius or math.abs(dy) == radius then
-            love.graphics.print(display_text, cx + dx, cy2 + dy)
-          end
-        end
-      end
+    if shader then
+      love.graphics.setShader(shader)
+      shader:send("time", now2)
+      shader:send("master_alpha", master_alpha)
+      shader:send("tint_color", term_color)
     end
 
-    love.graphics.setColor(1, 0.96, 1, 0.98 * ta)
-    love.graphics.print(display_text, cx, cy2)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(canvas, 0, 0)
 
+    if shader then
+      love.graphics.setShader()
+    end
+
+    if prev_font then love.graphics.setFont(prev_font) end
+  else
+    love.graphics.setColor(0.02, 0.02, 0.03, master_alpha)
+    love.graphics.rectangle("fill", 0, 0, sw, sh)
+    local prev_font = love.graphics.getFont()
+    draw_terminal_content(anim, sw, sh, now2, phase, phase_t, is_evil, lines, term_color)
     if prev_font then love.graphics.setFont(prev_font) end
   end
 

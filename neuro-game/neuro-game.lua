@@ -960,9 +960,9 @@ local FOOTER_EMOTE_EVERY = 3
 local JOKER_SHOWCASE_DURATION = 4.8
 local JOKER_SHOWCASE_FADE_IN = 0.30
 local JOKER_SHOWCASE_FADE_OUT = 0.55
-local BUY_SHOWCASE_DURATION = 5.5
-local BUY_SHOWCASE_FADE_IN = 0.30
-local BUY_SHOWCASE_FADE_OUT = 0.7
+local BUY_SHOWCASE_DURATION = 3.2
+local BUY_SHOWCASE_FADE_IN = 0.20
+local BUY_SHOWCASE_FADE_OUT = 0.5
 local _known_joker_refs = nil
 local _known_cons_refs  = nil
 local _joker_showcase = nil
@@ -980,6 +980,8 @@ local _pack_prev_cards = {}
 local _pack_picked = {}
 local _pack_appear_t = 0
 local _pack_last_sn = nil
+local _pack_card_indices = {}
+local _pack_initial_count = 0
 
 local function queue_card_showcase(tag, card, shown_cost, now)
   if not G or not card then return end
@@ -1400,12 +1402,15 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
       if (not desc or desc == "") and c and c.ability then
         desc = Utils.safe_description(c.ability.loc_txt, c)
       end
+      if not _pack_card_indices[c] then
+        _pack_card_indices[c] = i
+      end
       pack_rows.cards[#pack_rows.cards + 1] = {
         card = c,
         name = n,
         desc = desc or "",
         rc = rc,
-        index = i,
+        index = _pack_card_indices[c],
       }
     end
   end
@@ -1459,205 +1464,7 @@ local function draw_neuro_indicator()
     local trunc
     local wrapped_lines
 
-    draw_buy_panel = function()
-      if not _buy_showcase then return end
-      local area_tag = tostring(_buy_showcase.area or "shop")
-      if area_tag == "booster_choice" or area_tag == "pack_browse" then return end
-
-      local orange = _pal.D_ORANGE
-      local small_h = panel_font_small and panel_font_small:getHeight() or font:getHeight()
-
-      local elapsed = now - (_buy_showcase.started or now)
-      local a = 1
-      if elapsed < BUY_SHOWCASE_FADE_IN then
-        a = math.max(0, math.min(1, elapsed / BUY_SHOWCASE_FADE_IN))
-      elseif (not _buy_showcase.winner_at) and elapsed > (BUY_SHOWCASE_DURATION - BUY_SHOWCASE_FADE_OUT) then
-        a = math.max(0, (BUY_SHOWCASE_DURATION - elapsed) / BUY_SHOWCASE_FADE_OUT)
-      end
-      if a <= 0 then return end
-
-      local bx, by, bw, bh = 10, 20, 420, 230
-      local title = "SHOP BUY"
-      local subtitle_tag = area_tag
-      if area_tag == "booster_pick" then
-        title = "PACK PICK"
-        subtitle_tag = "booster pack"
-      elseif area_tag == "joker_gain" then
-        title = "NEW JOKER"
-        subtitle_tag = "gained"
-        bh = 260
-      elseif area_tag == "shop_jokers" then
-        title = "SHOP BUY"
-        subtitle_tag = "joker"
-      elseif area_tag == "shop_vouchers" then
-        title = "NEW VOUCHER"
-        subtitle_tag = "voucher"
-        bh = 260
-      elseif area_tag == "shop_booster" then
-        title = "SHOP BUY"
-        subtitle_tag = "pack"
-      elseif area_tag == "shop" or area_tag == "event" then
-        title = "SHOP BUY"
-        subtitle_tag = "shop"
-      end
-      local shown_cost = tonumber(_buy_showcase.cost) or 0
-      local subtitle = (shown_cost > 0)
-        and string.format("%s  $%d", subtitle_tag, shown_cost)
-        or tostring(subtitle_tag)
-      local baccent = (area_tag == "shop_vouchers") and _pal.D_GREEN or pg
-
-      -- Slide in from the left (tied to alpha so it glides with the fade)
-      local slide_x = math.floor(-(bw + bx + 10) * (1 - a) + 0.5)
-      love.graphics.push()
-      love.graphics.translate(slide_x, 0)
-
-      -- drop shadow
-      love.graphics.setColor(0, 0, 0, 0.28 * a)
-      love.graphics.rectangle("fill", bx + 5, by + 5, bw, bh, 10, 10)
-
-      love.graphics.setColor(bg[1], bg[2], bg[3], 0.95 * a)
-      love.graphics.rectangle("fill", bx, by, bw, bh, 10, 10)
-      love.graphics.setColor(p[1], p[2], p[3], (0.08) * a)
-      love.graphics.rectangle("fill", bx + 1, by + 1, bw - 2, bh - 2, 10, 10)
-      love.graphics.setColor(p[1], p[2], p[3], (0.65 + 0.25 * pulse) * a)
-      love.graphics.setLineWidth(2)
-      love.graphics.rectangle("line", bx, by, bw, bh, 10, 10)
-      love.graphics.setColor(baccent[1], baccent[2], baccent[3], (0.12 + 0.06 * pulse) * a)
-      love.graphics.setLineWidth(4)
-      love.graphics.rectangle("line", bx - 2, by - 2, bw + 4, bh + 4, 12, 12)
-
-      love.graphics.setColor(baccent[1], baccent[2], baccent[3], (0.55 + 0.15 * pulse) * a)
-      love.graphics.rectangle("fill", bx + 3, by + 3, bw - 6, 36, 7, 7)
-
-      love.graphics.setColor(1, 1, 1, 0.97 * a)
-      love.graphics.print(title, bx + 12, by + 8)
-      if panel_font_small then love.graphics.setFont(panel_font_small) end
-      local can_afford = shown_cost <= 0 or (G and G.GAME and (G.GAME.dollars or 0) >= shown_cost)
-      if shown_cost > 0 then
-        love.graphics.setColor(can_afford and 0.35 or 1.0, can_afford and 1.0 or 0.25, 0.10, 0.92 * a)
-      else
-        love.graphics.setColor(1, 1, 1, 0.80 * a)
-      end
-      love.graphics.print(subtitle, bx + 12, by + 23)
-      if panel_font_small then love.graphics.setFont(font) end
-      -- affordability bar (single-card mode only, lives in gap between header and sprite)
-      if shown_cost > 0 then
-        local gold_now = G and G.GAME and (G.GAME.dollars or 0) or 0
-        local frac = math.min(1.0, gold_now / math.max(1, shown_cost))
-        love.graphics.setColor(p[1], p[2], p[3], 0.15 * a)
-        love.graphics.rectangle("fill", bx + 3, by + 40, bw - 6, 3, 1, 1)
-        love.graphics.setColor(can_afford and 0.30 or 0.95, can_afford and 0.95 or 0.25, 0.10, (0.78 + 0.15 * pulse) * a)
-        love.graphics.rectangle("fill", bx + 3, by + 40, math.max(2, (bw - 6) * frac), 3, 1, 1)
-      end
-
-      local card = _buy_showcase.card
-      local sprite_h = 110
-      local sprite_x = bx + 12
-      local sprite_y = by + 46
-      local sprite_w = draw_card_mini(card, sprite_x, sprite_y, sprite_h)
-      if sprite_w <= 0 then sprite_w = sprite_h * 0.75 end
-
-      -- rarity tint on card frame
-      local cr = card and rarity_color(card)
-      if cr and type(cr) == "table" then
-        love.graphics.setColor(cr[1], cr[2], cr[3], 0.12 * a)
-        love.graphics.rectangle("fill", sprite_x - 3, sprite_y - 3, sprite_w + 6, sprite_h + 6, 5, 5)
-        love.graphics.setColor(cr[1], cr[2], cr[3], (0.35 + 0.10 * pulse) * a)
-        love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", sprite_x - 2, sprite_y - 2, sprite_w + 4, sprite_h + 4, 4, 4)
-        love.graphics.setLineWidth(1)
-        -- thin left stripe on panel body matching rarity
-        love.graphics.setColor(cr[1], cr[2], cr[3], (0.55 + 0.18 * pulse) * a)
-        love.graphics.rectangle("fill", bx + 3, by + 46, 3, sprite_h + 6, 2, 2)
-      end
-
-      -- inspect shimmer — slow sweep across card, shows Neuro is examining it
-      -- Drive from elapsed so shimmer fires ~0.6s into panel life (guaranteed visible)
-      local shimmer_t = math.fmod(elapsed + 0.4, 2.5)
-      if shimmer_t < 1.0 then
-        local sx_sh = sprite_x + shimmer_t * (sprite_w + 18) - 9
-        local sl = math.max(sprite_x, sx_sh - 5)
-        local sr = math.min(sprite_x + sprite_w, sx_sh + 11)
-        if sr > sl then
-          love.graphics.setColor(1, 1, 1, math.sin(shimmer_t * math.pi) * 0.26 * a)
-          love.graphics.rectangle("fill", sl, sprite_y, sr - sl, sprite_h)
-        end
-      end
-
-      local tx = sprite_x + sprite_w + 10
-      local tw = bw - (tx - bx) - 12
-      local is_joker_area = (area_tag == "joker_gain" or area_tag == "shop_jokers")
-
-      local name_line = trunc(_buy_showcase.name or "Purchase", tw)
-      love.graphics.setColor(1, 1, 1, 0.98 * a)
-      love.graphics.print(name_line, tx, sprite_y + 2)
-      local bs_ed = card and card_edition_tag(card) or ""
-      if bs_ed ~= "" then
-        draw_animated_edition(bs_ed, tx + font:getWidth(name_line), sprite_y + 2, a, font, now, pk)
-      end
-      local ty = sprite_y + 20
-
-      -- joker fx (all joker areas, not just joker_gain)
-      local fx = (is_joker_area and card) and joker_fx(card) or ""
-      if fx ~= "" then
-        if panel_font_small then love.graphics.setFont(panel_font_small) end
-        love.graphics.setColor(pg[1], pg[2], pg[3], 0.95 * a)
-        love.graphics.print(trunc(fx, tw, panel_font_small), tx, ty)
-        if panel_font_small then love.graphics.setFont(font) end
-        ty = ty + small_h + 2
-      end
-
-      -- sell value badge (jokers only)
-      local sell_v = is_joker_area and card and tonumber(card.sell_cost)
-      if sell_v and sell_v > 0 then
-        if panel_font_small then love.graphics.setFont(panel_font_small) end
-        love.graphics.setColor(0.40, 0.95, 0.45, 0.82 * a)
-        love.graphics.print("sell $" .. tostring(sell_v), tx, ty)
-        if panel_font_small then love.graphics.setFont(font) end
-        ty = ty + small_h + 2
-      end
-
-      -- description
-      local desc = tostring(_buy_showcase.desc or "")
-      local desc_lines = wrapped_lines(desc, tw, panel_font_small or font)
-      local max_lines = 6
-      if #desc_lines > max_lines then
-        desc_lines[max_lines] = trunc(desc_lines[max_lines], tw - 8, panel_font_small or font) .. " ..."
-      end
-      if panel_font_small then love.graphics.setFont(panel_font_small) end
-      love.graphics.setColor(orange[1], orange[2], orange[3], 0.92 * a)
-      for i = 1, math.min(#desc_lines, max_lines) do
-        love.graphics.print(desc_lines[i], tx, ty)
-        ty = ty + small_h + 1
-      end
-      if panel_font_small then love.graphics.setFont(font) end
-
-      -- countdown timer bar (shrinks right as panel ages)
-      local timer_frac = math.max(0, 1.0 - elapsed / BUY_SHOWCASE_DURATION)
-      love.graphics.setColor(p[1], p[2], p[3], 0.20 * a)
-      love.graphics.rectangle("fill", bx + 6, by + bh - 9, bw - 12, 5, 2, 2)
-      love.graphics.setColor(pg[1], pg[2], pg[3], (0.80 + 0.15 * pulse) * a)
-      love.graphics.rectangle("fill", bx + 6, by + bh - 9, math.max(4, (bw - 12) * timer_frac), 5, 2, 2)
-
-      -- PURCHASED! flash during fade-out
-      local in_fade_out = (not _buy_showcase.winner_at)
-        and elapsed > (BUY_SHOWCASE_DURATION - BUY_SHOWCASE_FADE_OUT)
-      if in_fade_out then
-        local ft = (elapsed - (BUY_SHOWCASE_DURATION - BUY_SHOWCASE_FADE_OUT)) / BUY_SHOWCASE_FADE_OUT
-        local fa = math.sin(ft * math.pi)
-        love.graphics.setColor(1, 0.88, 0.10, fa * 0.42)
-        love.graphics.rectangle("fill", sprite_x - 2, sprite_y - 2, sprite_w + 4, sprite_h + 4, 5, 5)
-        local bought_txt = "BOUGHT!"
-        local btw = font:getWidth(bought_txt)
-        local bty = sprite_y + math.floor(sprite_h / 2) - math.floor(font:getHeight() / 2)
-        love.graphics.setColor(0, 0, 0, fa * 0.50)
-        love.graphics.print(bought_txt, sprite_x + math.max(0, math.floor((sprite_w - btw) / 2)) + 1, bty + 1)
-        love.graphics.setColor(1, 1, 0.20, fa * 0.95)
-        love.graphics.print(bought_txt, sprite_x + math.max(0, math.floor((sprite_w - btw) / 2)), bty)
-      end
-
-      love.graphics.pop()
-    end
+    draw_buy_panel = function() end
     trace("IND: colors resolved")
     local logo_h = 20
     local logo_w = 0
@@ -2256,10 +2063,13 @@ local function draw_neuro_indicator()
       _pack_appear_t = now
       _pack_picked = {}
       _pack_prev_cards = {}
+      _pack_card_indices = {}
+      _pack_initial_count = 0
     elseif not is_pack_state and _pack_last_sn ~= nil then
-      -- just left pack state — kill residue immediately so it doesn't ghost over other panels
       _pack_picked = {}
       _pack_prev_cards = {}
+      _pack_card_indices = {}
+      _pack_initial_count = 0
     end
     _pack_last_sn = is_pack_state and sn or nil
 
@@ -2334,7 +2144,10 @@ local function draw_neuro_indicator()
       end
       table.sort(display_cards, function(a, b) return a.index < b.index end)
 
-      local n_cards = #display_cards
+      if _pack_initial_count == 0 and #display_cards > 0 then
+        _pack_initial_count = #display_cards
+      end
+      local n_cards = math.max(#display_cards, _pack_initial_count)
       local pk_w = math.min(sw - 40, math.max(500, n_cards * 155 + 20))
       local pk_x = math.floor((sw - pk_w) / 2)
       local pk_content_w = pk_w - pk_pad * 2
@@ -2384,7 +2197,7 @@ local function draw_neuro_indicator()
           slide_y = math.floor((1 - ef) * 40)
         end
 
-        local slot_x = pk_x + pk_pad + (ci - 1) * (slot_w + slot_gap)
+        local slot_x = pk_x + pk_pad + (dc.index - 1) * (slot_w + slot_gap)
         local is_gold = dc.state == "highlighted" or dc.state == "picked"
         local pulse2 = math.sin(now * 3.2)
         local pulse3 = math.sin(now * 4.5)
@@ -2521,6 +2334,68 @@ local function draw_neuro_indicator()
       end
 
       center_top_y = center_top_y + pk_total_h + 4
+    end
+
+    if _buy_showcase then
+      local area_tag = tostring(_buy_showcase.area or "shop")
+      if area_tag ~= "booster_choice" and area_tag ~= "pack_browse" then
+        local elapsed = now - (_buy_showcase.started or now)
+        local ba = 1
+        if elapsed < BUY_SHOWCASE_FADE_IN then
+          ba = math.max(0, math.min(1, elapsed / BUY_SHOWCASE_FADE_IN))
+        elseif (not _buy_showcase.winner_at) and elapsed > (BUY_SHOWCASE_DURATION - BUY_SHOWCASE_FADE_OUT) then
+          ba = math.max(0, (BUY_SHOWCASE_DURATION - elapsed) / BUY_SHOWCASE_FADE_OUT)
+        end
+        if ba > 0 then
+          local bt_label = "BOUGHT"
+          if area_tag == "booster_pick" then bt_label = "PICKED"
+          elseif area_tag == "joker_gain" then bt_label = "NEW JOKER"
+          elseif area_tag == "shop_vouchers" then bt_label = "VOUCHER"
+          elseif area_tag == "shop_booster" then bt_label = "OPENED"
+          end
+          local bt_name = _buy_showcase.name or "Card"
+          local bt_cost = tonumber(_buy_showcase.cost) or 0
+          local bt_text = bt_label .. ": " .. bt_name
+          if bt_cost > 0 then bt_text = bt_text .. "  $" .. bt_cost end
+
+          local card = _buy_showcase.card
+          local cr = card and rarity_color(card)
+          local bt_accent = cr or pg
+
+          local bt_w = math.min(sw - 40, 480)
+          local bt_h = 34
+          local bt_x = math.floor((sw - bt_w) / 2)
+          local bt_y = center_top_y
+          local slide_y_bt = math.floor((1 - ba) * 12)
+
+          love.graphics.setColor(bg[1], bg[2], bg[3], 0.92 * ba)
+          love.graphics.rectangle("fill", bt_x, bt_y + slide_y_bt, bt_w, bt_h, 6, 6)
+          love.graphics.setColor(bt_accent[1], bt_accent[2], bt_accent[3], (0.45 + 0.15 * pulse) * ba)
+          love.graphics.setLineWidth(1.5)
+          love.graphics.rectangle("line", bt_x, bt_y + slide_y_bt, bt_w, bt_h, 6, 6)
+          love.graphics.setColor(bt_accent[1], bt_accent[2], bt_accent[3], 0.55 * ba)
+          love.graphics.rectangle("fill", bt_x + 3, bt_y + slide_y_bt + 3, 3, bt_h - 6, 1.5, 1.5)
+
+          local bt_tx = bt_x + 12
+          if card then
+            local mini_h = bt_h - 6
+            local mini_w = draw_card_mini(card, bt_x + 6, bt_y + slide_y_bt + 3, mini_h)
+            if mini_w > 0 then bt_tx = bt_x + 6 + mini_w + 6 end
+          end
+
+          local bt_str = trunc(bt_text, bt_w - (bt_tx - bt_x) - 8)
+          love.graphics.setColor(0, 0, 0, 0.30 * ba)
+          love.graphics.print(bt_str, bt_tx + 1, bt_y + slide_y_bt + 8)
+          love.graphics.setColor(1, 1, 1, 0.95 * ba)
+          love.graphics.print(bt_str, bt_tx, bt_y + slide_y_bt + 7)
+
+          local timer_frac = math.max(0, 1.0 - elapsed / BUY_SHOWCASE_DURATION)
+          love.graphics.setColor(bt_accent[1], bt_accent[2], bt_accent[3], 0.50 * ba)
+          love.graphics.rectangle("fill", bt_x + 4, bt_y + slide_y_bt + bt_h - 4, math.max(2, (bt_w - 8) * timer_frac), 2, 1, 1)
+
+          center_top_y = center_top_y + bt_h + 4
+        end
+      end
     end
 
     trace("IND: panel bg draw start p_x=" .. tostring(p_x) .. " p_y=" .. tostring(p_y) .. " p_w=" .. tostring(p_w) .. " total_h=" .. tostring(total_h))
@@ -3973,6 +3848,7 @@ end
 
 local original_love_mousepressed = love.mousepressed
 love.mousepressed = function(x, y, button, istouch, presses)
+  if G and G.NEURO and G.NEURO.login_anim then return end
   local ok, err = pcall(function()
     local handled = false
     if not handled and original_love_mousepressed then
@@ -3989,6 +3865,7 @@ end
 
 local original_love_keypressed = love.keypressed
 love.keypressed = function(key, scancode, isrepeat)
+  if G and G.NEURO and G.NEURO.login_anim then return end
   if key == "f8" then
     local tok, terr = pcall(function() require("test_deadlock").run() end)
     if not tok then print("[test] Error: " .. tostring(terr)) end

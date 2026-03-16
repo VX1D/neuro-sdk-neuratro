@@ -1337,8 +1337,10 @@ local function handle_buy_from_shop(data)
   -- Reserve the cost now so concurrent purchases see reduced available budget
   G.NEURO.reserved_dollars = (tonumber(G.NEURO.reserved_dollars or 0) or 0) + cost
 
+  local buy_area_name = data.area
+  local buy_index = data.index
+
   return function()
-    -- Glow + highlight the card so the AI overlay fires
     pcall(function()
       card.highlighted = true
       if G and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
@@ -1347,7 +1349,7 @@ local function handle_buy_from_shop(data)
     local shop_buy_delay = dotenv.num("NEURO_SHOP_BUY_DELAY", 2.2)
     local t = (G and G.TIMERS and G.TIMERS.REAL) or os.clock()
     G.NEURO.last_action_at = t + shop_buy_block
-    queue_purchase_showcase()  -- show panel immediately
+    queue_purchase_showcase()
     if G and G.E_MANAGER and Event then
       G.E_MANAGER:add_event(Event({
         trigger   = "after",
@@ -1356,13 +1358,19 @@ local function handle_buy_from_shop(data)
         func      = function()
           pcall(function()
             card.highlighted = false
-            -- NEURO_AI_HIGHLIGHTED auto-clears when highlighted=false; glow fades naturally
             G.NEURO.reserved_dollars = math.max(0, (tonumber(G.NEURO.reserved_dollars or 0) or 0) - cost)
             local cur_dollars = G.GAME and G.GAME.dollars or 0
-            if cost > cur_dollars then return end  -- money changed during highlight window, abort
+            if cost > cur_dollars then return end
+
+            local live_area = get_area(buy_area_name)
+            local live_card = live_area and live_area.cards and live_area.cards[buy_index]
+            local buy_card = live_card or card
+            local buy_cfg = { ref_table = buy_card }
+            if is_booster or data.use then buy_cfg.id = "buy_and_use" end
+
             local fn = G.FUNCS and G.FUNCS.buy_from_shop
-            if fn then fn({ config = cfg, UIBox = mock_UIBox }) end
-            if NeuroAnim and NeuroAnim.on_buy then NeuroAnim.on_buy(card) end
+            if fn then fn({ config = buy_cfg, UIBox = mock_UIBox }) end
+            if NeuroAnim and NeuroAnim.on_buy then NeuroAnim.on_buy(buy_card) end
           end)
           return true
         end,
@@ -2179,6 +2187,10 @@ local PARAM_VALIDATORS = {
     local persona = data.persona
     if persona ~= "neuro" and persona ~= "evil" then
       return nil, "Choose 'neuro' for Neuro-sama or 'evil' for Evil Neuro."
+    end
+    if G and G.NEURO and G.NEURO.persona ~= "hiyori" then
+      local cur = G.NEURO.persona == "evil" and "Evil Neuro" or "Neuro-sama"
+      return nil, "Identity already set to " .. cur .. ". Cannot change mid-session."
     end
     return function()
       if G then

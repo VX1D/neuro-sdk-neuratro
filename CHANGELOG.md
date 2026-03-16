@@ -1,5 +1,29 @@
 # Changelog
 
+### 0.5.3 -- 2026-03-16
+
+<details>
+<summary><strong>Booster pack UI: stable card positions after pick</strong></summary>
+
+- Cards no longer reshuffle after the AI picks from a booster pack. Each card stays in its original slot position regardless of how many have been picked
+- Original card indices are preserved in `_pack_card_indices` across picks — Balatro shifts array indices when a card leaves, but the UI now maps back to the original slot
+- Pack panel width stays constant using `_pack_initial_count` — no more slot resizing as cards are removed
+- Slot X position driven by stored index (`dc.index - 1`) instead of iteration order (`ci - 1`)
+
+</details>
+
+<details>
+<summary><strong>Buy popup replaced with compact top-center toast</strong></summary>
+
+- Removed the large 420x230 left-corner buy showcase panel that overlapped with other UI elements
+- Purchases now show as a compact 480x34px toast bar at the top center, stacking below the joker showcase and pack browser in the `center_top_y` flow
+- Toast shows: tiny card sprite, label (`BOUGHT` / `NEW JOKER` / `VOUCHER` / `PICKED` / `OPENED`), card name, and cost — single line, rarity-colored accent
+- Duration shortened from 5.5s to 3.2s with faster fade-in/out (0.2s/0.5s)
+- Queueable via the existing purchase showcase queue — multiple buys animate sequentially without overlap
+- Eliminates the "4 active windows" problem during shop/pack states
+
+</details>
+
 ### 0.5.2 -- 2026-03-04
 
 <details>
