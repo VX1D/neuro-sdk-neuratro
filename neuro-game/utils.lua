@@ -163,9 +163,36 @@ local function build_ui_text(card)
     return nil, nil
   end
 
+  -- generate_UIBox_ability_table() instantiates DynaText/Moveable objects into
+  -- G.I.MOVEABLE as a side effect of building the tooltip definition. We only
+  -- want the text and discard the returned table, so snapshot the registry and
+  -- remove anything the call leaves behind. Without this, every panel render of
+  -- a card leaks DynaText objects that the base game keeps re-drawing forever,
+  -- which makes G.I.MOVEABLE grow unbounded and tanks FPS over a run.
+  local mv = G and G.I and G.I.MOVEABLE
+  local before
+  if type(mv) == "table" then
+    before = {}
+    for _, obj in pairs(mv) do before[obj] = true end
+  end
+
   local ok, ui = pcall(function()
     return card:generate_UIBox_ability_table()
   end)
+
+  if type(mv) == "table" and before then
+    local kill = {}
+    for _, obj in pairs(mv) do
+      if obj and not before[obj] then kill[#kill + 1] = obj end
+    end
+    for i = 1, #kill do
+      local obj = kill[i]
+      pcall(function()
+        if type(obj.remove) == "function" then obj:remove() end
+      end)
+    end
+  end
+
   if not ok or type(ui) ~= "table" then
     return nil, nil
   end
