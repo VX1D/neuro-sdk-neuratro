@@ -1,0 +1,16 @@
+std = "balatro"
+
+# Lenient profile for tests/ only (applied by scripts/lint_lua.sh). The offline harness deliberately
+# does things a linter flags: fake globals, unused mock-callback args, divide-by-zero probes, and byte
+# escape strings in wire fixtures. Runtime code keeps the strict selene.toml; this keeps expected test
+# scaffolding noise from burying real runtime findings.
+[lints]
+mixed_table = "allow"
+incorrect_standard_library_use = "allow"
+multiple_statements = "allow"
+global_usage = "allow"
+
+# test-harness specific:
+unused_variable = "allow"   # mock callbacks intentionally ignore args
+divide_by_zero = "allow"    # tests/test_json_wire.lua exercises inf/nan wire encoding on purpose
+bad_string_escape = "allow" # tests/test_force_roundtrip.lua embeds raw byte-escape fixtures

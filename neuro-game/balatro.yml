@@ -1,0 +1,171 @@
+---
+base: lua51
+globals:
+  # Giant Balatro runtime state (read + write, fields freely mutated)
+  G:
+    property: full-write
+  love:
+    property: full-write
+  SMODS:
+    property: full-write
+  SMODS_load_file:
+    property: read-only
+  Card:
+    property: full-write
+  Blind:
+    property: full-write
+  Event:
+    property: full-write
+  EventManager:
+    property: full-write
+  Node:
+    property: full-write
+  Moveable:
+    property: full-write
+  Sprite:
+    property: full-write
+  AnimatedSprite:
+    property: full-write
+  DynaText:
+    property: full-write
+  UIBox:
+    property: full-write
+  UIElement:
+    property: full-write
+  CardArea:
+    property: full-write
+  Tag:
+    property: full-write
+  Particles:
+    property: full-write
+  Controller:
+    property: full-write
+  Game:
+    property: full-write
+  Mult:
+    property: full-write
+  Tavern:
+    property: full-write
+  G_FUNCS:
+    property: full-write
+  NFS:
+    property: full-write
+  nativefs:
+    property: full-write
+  # Engine free functions (read-only)
+  localize:
+    property: read-only
+  attention_text:
+    property: read-only
+  play_sound:
+    property: read-only
+  ease_dollars:
+    property: read-only
+  ease_background_colour:
+    property: read-only
+  ease_background_colour_blind:
+    property: read-only
+  check_for_unlock:
+    property: read-only
+  inc_career_stat:
+    property: read-only
+  create_card:
+    property: read-only
+  create_playing_card:
+    property: read-only
+  copy_card:
+    property: read-only
+  copy_table:
+    property: read-only
+  add_tag:
+    property: read-only
+  eval_card:
+    property: read-only
+  card_eval_status_text:
+    property: read-only
+  evaluate_play:
+    property: read-only
+  get_flush:
+    property: read-only
+  get_straight:
+    property: read-only
+  get_X_same:
+    property: read-only
+  get_highest:
+    property: read-only
+  SMODS_create_card:
+    property: read-only
+  mod_chips:
+    property: read-only
+  mod_mult:
+    property: read-only
+  number_format:
+    property: read-only
+  format_ui_value:
+    property: read-only
+  nth:
+    property: read-only
+  save_run:
+    property: read-only
+  save_progress:
+    property: read-only
+  Vector2:
+    property: read-only
+  HEX:
+    property: read-only
+  RGBA:
+    property: read-only
+  darken:
+    property: read-only
+  lighten:
+    property: read-only
+  mix_colours:
+    property: read-only
+  adjust_alpha:
+    property: read-only
+  lerp:
+    property: read-only
+  math_round:
+    property: read-only
+  round_number:
+    property: read-only
+  pseudorandom:
+    property: read-only
+  pseudorandom_element:
+    property: read-only
+  pseudoseed:
+    property: read-only
+  pseudohash:
+    property: read-only
+  UIT:
+    property: read-only
+  create_UIBox_generic_options:
+    property: read-only
+  create_toggle:
+    property: read-only
+  create_option_cycle:
+    property: read-only
+  create_slider:
+    property: read-only
+  reset_idols:
+    property: read-only
+  reset_mail_rank:
+    property: read-only
+  reset_castle_card:
+    property: read-only
+  set_screen_positions:
+    property: read-only
+  bind_prof_nav:
+    property: read-only
+  loc_colour:
+    property: read-only
+  loc_text:
+    property: read-only
+  get_blind_amount:
+    property: read-only
+  get_deck_win_sticker:
+    property: read-only
+  find_joker:
+    property: read-only
+  prep_draw:
+    property: read-only

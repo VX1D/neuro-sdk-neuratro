@@ -1,5 +1,9 @@
 # Changelog
 
+### 1.0.0
+
+_WIP — so much changed, full notes will take a while._
+
 ### 0.5.3 -- 2026-03-16
 
 <details>

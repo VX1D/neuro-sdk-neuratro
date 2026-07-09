@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "neuro-bridge"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -386,7 +386,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
- "url",
 ]
 
 [[package]]

@@ -1,0 +1,82 @@
+# Config template. Copy to neuro.conf and uncomment what you want to change.
+# Precedence: env var > neuro.conf > default. The F8 panel reads/writes neuro.conf.
+# No API keys here -- the player reads NEURO_LLM_* from its own env.
+
+# ---- Runtime -----------------------------------------------------------------
+# NEURO_PERSONA=neuro            # neuro | evil  (reload to reskin)
+# NEURO_DEBUG=off                # off | on   -- debug logging
+# NEURO_PERF_LOG=off             # off | on   -- append perf jsonl
+# NEURO_AI_CARD_GLOW=on          # off | on   -- AI hover glow on cards
+# NEURO_OVERLAY_DEV=off          # off | on   -- overlay dev-isolate harness
+# NEURO_STAGING_DEBUG=off        # off | on
+# NEURO_OUTBOX_TRUNCATE_ON_STARTUP=on   # off | on
+# NEURO_INBOX_TRUNCATE_ON_STARTUP=off   # off | on
+# NEURO_SELFTEST_ON_BOOT=off     # off | on
+# NEURO_SELFTEST_PACK=off        # off | on
+# NEURO_SELFTEST_FILTER=         # substring filter for selftest cases
+# Boot-resolved elsewhere, shown read-only in the F8 RUNTIME page (set via env/launcher):
+#   NEURO_ENABLE   -- arm the SDK bridge (unset = enabled if an IPC dir is found; 0/false = off)
+#   NEURO_IPC_DIR  -- IPC filesystem dir (default: AppData/Roaming/Balatro/neuro-ipc)
+#   NEURO_TRACE    -- crash-trace log
+
+# ---- Master speed levers -----------------------------------------------------
+# NEURO_SPEED_MULT=1.0           # 0.1-2.0. THE lever: scales staging + (when <0.6) fast cooldowns
+# NEURO_COOLDOWN_SCALE=1.0       # 0.25-3.0. multiplies every cooldown
+# NEURO_CD_OVERRIDE=off          # off = cooldowns auto-track game speed; on = sliders are literal
+# NEURO_CD_PRESET=auto           # auto | 0.5x | 1x | 2x | 4x
+
+# ---- Flags -------------------------------------------------------------------
+# NEURO_CTX_SPLIT=on             # split silent context / volatile force
+# NEURO_STATE_VERBOSE=off
+# NEURO_FORCE_ONLY=off           # only emit force turns, no silent context
+# NEURO_REDUCED_MOTION=off
+# NEURO_DEBUG_OVERLAY=off        # off | compact | expanded
+
+# ---- Fine-grained timing (defaults in core/config.lua; the F8 panel edits these) ----
+# COOLDOWNS
+# NEURO_STATE_COOLDOWN=0.05
+# NEURO_ACTION_COOLDOWN=0.08
+# NEURO_ENFORCE_COOLDOWN=0.60
+# NEURO_GLOBAL_COOLDOWN=2.0
+# NEURO_FORCE_DEBOUNCE=0.12
+# NEURO_TRANSITION_COOLDOWN=0.15
+# THROTTLES
+# NEURO_THROTTLE_SHOP=1.20
+# NEURO_THROTTLE_PACK=1.20
+# NEURO_GLOBAL_THROTTLE_SELECTING_HAND=1.8
+# NEURO_GLOBAL_THROTTLE_SHOP=6.0
+# NEURO_GLOBAL_THROTTLE_BLIND_SELECT=3.0
+# NEURO_GLOBAL_THROTTLE_PACK=4.5
+# POST-ACTION
+# NEURO_POST_PLAY=1.4
+# NEURO_POST_DISCARD=0.9
+# NEURO_POST_BUY=0.8
+# NEURO_SHOP_BUY_DELAY=2.2
+# NEURO_SHOP_BUY_BLOCK=2.2
+# NEURO_PACK_PICK_DELAY=2.2
+# NEURO_PACK_PICK_BLOCK=3.0
+# ENTRY COOLDOWNS
+# NEURO_ENTRY_CD_SHOP=2.5
+# NEURO_ENTRY_CD_ROUND_EVAL=5.0
+# NEURO_ENTRY_CD_SMODS_BOOSTER_OPENED=4.5
+# NEURO_ENTRY_CD_BUFFOON_PACK=4.5
+# NEURO_ENTRY_CD_TAROT_PACK=4.5
+# NEURO_ENTRY_CD_PLANET_PACK=4.5
+# NEURO_ENTRY_CD_SPECTRAL_PACK=4.5
+# NEURO_ENTRY_CD_STANDARD_PACK=4.5
+# WATCHDOGS
+# NEURO_FORCE_STALL_SECONDS=12
+# NEURO_STAGING_FAILSAFE=12.0
+# NEURO_GAMEOVER_COOLDOWN=5
+# NEURO_SHOP_BUY_WATCHDOG_GRACE=1.5
+# NEURO_PACK_PICK_WATCHDOG_GRACE=1.5
+# CADENCE
+# NEURO_STATE_INTERVAL=1.0
+# NEURO_HOVER_PER_CARD=0.95
+# NEURO_HOVER_SHOP=1.0
+# LAYOUT
+# NEURO_OVERLAY_SCALE_RIGHT=1.0
+# NEURO_OVERLAY_SCALE_LEFT=1.0
+
+# ---- Colours (per persona; written by the F8 COLOURS page) -------------------
+# NEURO_COLOR_<PERSONA>_<KEY>=RRGGBB   e.g. NEURO_COLOR_NEURO_ACCENT=0A141E

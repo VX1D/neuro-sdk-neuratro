@@ -2,16 +2,8 @@ if ($null -eq $env:NEURO_SDK_WS_URL -or $env:NEURO_SDK_WS_URL -eq "") {
   $env:NEURO_SDK_WS_URL = "ws://127.0.0.1:8000"
 }
 
-$modRoot = Join-Path $env:APPDATA "Balatro\Mods\neuro-game"
-
 if ($null -eq $env:NEURO_IPC_DIR -or $env:NEURO_IPC_DIR -eq "") {
-  if (Test-Path -LiteralPath $modRoot) {
-    $env:NEURO_IPC_DIR = Join-Path $modRoot "ipc"
-  } else {
-    Write-Host "ERROR: neuro-game mod not found at $modRoot"
-    Write-Host "Copy the neuro-game folder to $modRoot first"
-    exit 1
-  }
+  $env:NEURO_IPC_DIR = Join-Path $env:APPDATA "Balatro\neuro-ipc"
 }
 
 Write-Host "Bridge using IPC directory: $env:NEURO_IPC_DIR"
@@ -22,4 +14,10 @@ if (!(Test-Path $env:NEURO_IPC_DIR)) {
 }
 
 Set-Location (Join-Path $PSScriptRoot "neuro-bridge-rs")
-cargo run --release
+
+$bin = "target\release\neuro-bridge.exe"
+if (!(Test-Path $bin)) {
+  Write-Host "Bridge binary not found at $bin, building..."
+  cargo build --release
+}
+& $bin

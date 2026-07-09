@@ -1,0 +1,18 @@
+std = "balatro"
+
+[lints]
+# Keep the smells the user cares about at default (warn/deny per selene defaults):
+# unused_variable, shadowing, undefined_variable, unscoped_variables,
+# empty_if, empty_loop, etc. are all on by default.
+
+# Mixed table (array + hash) is common & idiomatic in Balatro state tables.
+mixed_table = "allow"
+# The Balatro std here is hand-written (balatro.yml) and does not model exact
+# shapes/arities of engine globals (Event/localize/play_sound are used both as
+# callables and reassigned). This lint only fires against that imperfect std, so
+# it is pure false-positive noise for this audit.
+incorrect_standard_library_use = "allow"
+# Multiple statements per line appears in some terse engine-style code.
+multiple_statements = "allow"
+# Balatro mods heavily rely on global variables (_G) to interface with the engine.
+global_usage = "allow"
