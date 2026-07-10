@@ -195,6 +195,18 @@ end
 
 local function row_h(r) return Rows.height(r, ROW_METRICS) end
 
+-- rn/ln scale the right/left panels. Module-level (over per-frame scale vars set at draw
+-- entry) so the hot draw path doesn't allocate two closures every frame. Single-threaded.
+local _rp_s, _lp_s = 1, 1
+local function rn(v)
+  local r = math.floor(v * _rp_s + 0.5)
+  return r < 1 and 1 or r
+end
+local function ln(v)
+  local r = math.floor(v * _lp_s + 0.5)
+  return r < 1 and 1 or r
+end
+
 local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg)
   local GOLD, CYAN, MONEY, RED, WHITE, DIM, ORANGE =
     colors.D_GOLD, colors.D_CYAN, colors.D_MONEY,
@@ -404,16 +416,9 @@ local function draw_neuro_indicator()
 
   local rp_s = Tuning.get("NEURO_OVERLAY_SCALE_RIGHT") or 1
   local lp_s = Tuning.get("NEURO_OVERLAY_SCALE_LEFT") or 1
+  _rp_s, _lp_s = rp_s, lp_s   -- feed the module-level rn/ln for this frame
   local rfont, rfont_small = get_panel_fonts(rp_s)
   local lfont, lfont_small = get_panel_fonts(lp_s)
-  local function rn(v)
-    local r = math.floor(v * rp_s + 0.5)
-    return r < 1 and 1 or r
-  end
-  local function ln(v)
-    local r = math.floor(v * lp_s + 0.5)
-    return r < 1 and 1 or r
-  end
   local rp_sh = rp_s < 0.75 and 1 or 2
   local lp_sh = lp_s < 0.75 and 1 or 2
 

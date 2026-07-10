@@ -493,7 +493,7 @@ function Staging.mark_settled(action_id, ok)
   if G and G.NEURO then
     ForceHelpers.set_action_phase(ok and "resolved" or "failed")
   end
-  debug_mark(ok and "resolved" or "failed", ok and nil or "action result failed")
+  if ok then debug_mark("resolved") else debug_mark("failed", "action result failed") end
 end
 
 function Staging.get_debug_lines()

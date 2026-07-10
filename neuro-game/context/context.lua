@@ -144,7 +144,7 @@ function Context.get_scoring_explanation(sel)
       local ok, hand_info, _, _, scoring_hand = pcall(G.FUNCS.get_poker_hand_info, sel)
       local ht = ok and type(hand_info) == "string" and hand_info ~= "" and hand_info or nil
       if ht then
-        local hand_data = G.GAME.hands[ht]
+        local hand_data = G.GAME.hands and G.GAME.hands[ht]
         if hand_data then
           table.insert(explanation, "")
           table.insert(explanation, "=== SELECTED HAND ===")

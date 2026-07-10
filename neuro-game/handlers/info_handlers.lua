@@ -33,55 +33,25 @@ local function safe_context_result(fetch_fn, fallback)
   return tostring(value)
 end
 
-local function handle_scoring_explanation(_data)
-  if not G or not G.GAME then
-    return nil, "Game not available yet."
-  end
-  return function()
-    local Context = require("context.context")
-    return safe_context_result(Context.get_scoring_explanation, "Scoring explanation unavailable")
-  end
-end
-
-local function handle_shop_context(_data)
-  if not G or not G.GAME then
-    return nil, "Game not available yet."
-  end
-  return function()
-    local Context = require("context.context")
-    return safe_context_result(Context.get_shop_context, "Shop context unavailable")
+-- These context handlers share one shape: guard G/G.GAME (plus an optional extra field),
+-- then defer to a Context getter with a fallback string.
+local function make_context_handler(getter, fallback, extra_guard)
+  return function(_data)
+    if not G or not G.GAME or (extra_guard and not extra_guard()) then
+      return nil, "Game not available yet."
+    end
+    return function()
+      local Context = require("context.context")
+      return safe_context_result(Context[getter], fallback)
+    end
   end
 end
 
-local function handle_blind_info(_data)
-  if not G or not G.GAME or not G.GAME.blind then
-    return nil, "Game not available yet."
-  end
-  return function()
-    local Context = require("context.context")
-    return safe_context_result(Context.get_blind_info, "Blind info unavailable")
-  end
-end
-
-local function handle_hand_levels_info(_data)
-  if not G or not G.GAME or not G.GAME.hands then
-    return nil, "Game not available yet."
-  end
-  return function()
-    local Context = require("context.context")
-    return safe_context_result(Context.get_hand_levels_info, "Hand levels unavailable")
-  end
-end
-
-local function handle_full_game_context(_data)
-  if not G or not G.GAME then
-    return nil, "Game not available yet."
-  end
-  return function()
-    local Context = require("context.context")
-    return safe_context_result(Context.get_full_game_context, "Full game context unavailable")
-  end
-end
+local handle_scoring_explanation = make_context_handler("get_scoring_explanation", "Scoring explanation unavailable")
+local handle_shop_context        = make_context_handler("get_shop_context", "Shop context unavailable")
+local handle_blind_info          = make_context_handler("get_blind_info", "Blind info unavailable", function() return G.GAME.blind end)
+local handle_hand_levels_info    = make_context_handler("get_hand_levels_info", "Hand levels unavailable", function() return G.GAME.hands end)
+local handle_full_game_context   = make_context_handler("get_full_game_context", "Full game context unavailable")
 
 local function handle_quick_status(_data)
   if not G or not G.GAME then

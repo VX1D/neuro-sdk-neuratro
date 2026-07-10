@@ -314,7 +314,6 @@ function Config.save(path)
 end
 
 Config.default_path = default_path
-Config.reseed = reseed
 Config.DEFS = DEFS
 Config.RUNTIME = RUNTIME
 Config.load_overrides = Config.load   -- legacy name (core.tuning alias, tests)

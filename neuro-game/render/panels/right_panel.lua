@@ -195,7 +195,10 @@ local function draw_rp_header(ctx)
   cy = cy + r_U
 end
 
--- reads/returns the cursor via P.cy, but carousel slot/phase state lives on module-scope S, not P
+-- reads/returns the cursor via P.cy, but carousel slot/phase state lives on module-scope S, not P.
+-- The arg table is reused across frames (draw_desc_carousel destructures every field upfront and
+-- never retains P) so the hot path allocates no ~28-field literal per frame. Single-threaded.
+local _carousel_P = {}
 local function draw_desc_carousel(P)
   local r, rx, cy = P.r, P.rx, P.cy
   local now, cur_card_a, pulse = P.now, P.cur_card_a, P.pulse
@@ -478,17 +481,17 @@ local function draw_rp_rows(ctx)
         cy = cy + rp_sep_h - r_U
 
       elseif kind == "carousel" then
-        cy = draw_desc_carousel({
-          r = r, rx = rx, cy = cy, now = now, cur_card_a = cur_card_a, pulse = pulse,
-          rn = rn, content_w = content_w, p_w = p_w, p_pad_x = p_pad_x,
-          rp_card_line_h = rp_card_line_h, rp_small_line_h = rp_small_line_h,
-          rp_text_h = rp_text_h, r_small_text_h = r_small_text_h,
-          rp_font = rp_font, rfont_small = rfont_small,
-          persona_evil = persona_evil, persona_neuro = persona_neuro,
-          pg = pg, ACC = ACC, FR = FR, FRD = FRD, GOLD = GOLD,
-          shimr = shimr, shimg = shimg, shimb = shimb,
-          trunc = trunc, wrapped_lines = wrapped_lines, draw_colored_desc = draw_colored_desc,
-        })
+        local P = _carousel_P
+        P.r, P.rx, P.cy, P.now, P.cur_card_a, P.pulse = r, rx, cy, now, cur_card_a, pulse
+        P.rn, P.content_w, P.p_w, P.p_pad_x = rn, content_w, p_w, p_pad_x
+        P.rp_card_line_h, P.rp_small_line_h = rp_card_line_h, rp_small_line_h
+        P.rp_text_h, P.r_small_text_h = rp_text_h, r_small_text_h
+        P.rp_font, P.rfont_small = rp_font, rfont_small
+        P.persona_evil, P.persona_neuro = persona_evil, persona_neuro
+        P.pg, P.ACC, P.FR, P.FRD, P.GOLD = pg, ACC, FR, FRD, GOLD
+        P.shimr, P.shimg, P.shimb = shimr, shimg, shimb
+        P.trunc, P.wrapped_lines, P.draw_colored_desc = trunc, wrapped_lines, draw_colored_desc
+        cy = draw_desc_carousel(P)
 
       elseif kind == "header" then
         local col = r.color

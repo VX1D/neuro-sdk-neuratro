@@ -189,7 +189,7 @@ local function blind_select_section()
           compact_text(key, 24),
           compact_text(blind_def.name or key, 30),
           compact_text(states[btype] or "?", 16),
-          target and tostring(target) or "?",
+          target and Utils.fmt_num(target) or "?",
           reward,
           tag_name,
           tag_effect,

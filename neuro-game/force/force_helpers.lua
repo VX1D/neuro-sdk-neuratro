@@ -27,8 +27,6 @@ end
 
 local DeckNames = require("facts.deck_names")
 local get_back_display_name = DeckNames.get_back_display_name
-local deck_center_of = DeckNames.deck_center_of
-local current_deck_center = DeckNames.current_deck_center
 local deck_name_of = DeckNames.deck_name_of
 
 local function menu_action_tree_query()
@@ -63,8 +61,6 @@ end
 M.once_until = once_until
 M.failed_action_warning = failed_action_warning
 M.get_back_display_name = get_back_display_name
-M.deck_center_of = deck_center_of
-M.current_deck_center = current_deck_center
 M.deck_name_of = deck_name_of
 M.menu_action_tree_query = menu_action_tree_query
 M.is_run_setup_overlay = StateKinds.is_run_setup_overlay
