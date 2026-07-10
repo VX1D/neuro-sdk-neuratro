@@ -198,7 +198,6 @@ M.reroll_facts = reroll_facts
 M.spend_floor = spend_floor
 M.spendable = spendable
 M.item_afford_status = item_afford_status
-M.owns_voucher = owns_voucher
 M.can_reroll_boss = can_reroll_boss
 M.blind_type = blind_type
 M.blind_target = blind_target

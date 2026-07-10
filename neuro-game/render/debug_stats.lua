@@ -112,12 +112,6 @@ function M.setup()
   M._force_stall = Tuning.force_stall_seconds()
 end
 
-M.incr = Metrics.incr
-M.set = Metrics.set
-M.record_timing = Metrics.record_timing
-M.time_begin = Metrics.time_begin
-M.time_end = Metrics.time_end
-
 function M.sample(dt)
   if not M._on and not PERF_LOG then return end
   local fr = M._frame

@@ -21,7 +21,7 @@ local function handle_buy_from_shop(data)
   local floor = shop_spend_floor()
   local spendable = dollars - reserved - floor
   if cost > spendable then
-    local credit = (floor < 0) and (" (Credit Card lets you go to $" .. floor .. ")") or ""
+    local credit = (floor < 0) and string.format(" (Credit Card lets you go to -$%d)", math.abs(floor)) or ""
     if reserved > 0 then
       return nil, string.format("Can't afford %s ($%d): $%d cash, $%d reserved for pending buys%s.", card_name, cost, dollars, reserved, credit)
     else

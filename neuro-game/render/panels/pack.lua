@@ -5,6 +5,8 @@ local caps_label, tracked_width = H.caps_label, H.tracked_width
 local draw_card_mini = H.draw_card_mini
 local PACK_CARD_APPEAR_D = H.PACK_CARD_APPEAR_D
 
+local function by_pack_index(a, b) return a.index < b.index end
+
 local function draw_pack_panel(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
   local pg, ACC, FRD, ORANGE, WHITE, CYAN, GOLD = th.pg, th.ACC, th.FRD, th.ORANGE, th.WHITE, th.CYAN, th.GOLD
@@ -115,7 +117,7 @@ local function draw_pack_panel(ctx)
         }
       end
     end
-    table.sort(display_cards, function(a, b) return a.index < b.index end)
+    table.sort(display_cards, by_pack_index)
 
     if not leaving and S.pack_initial_count == 0 and #display_cards > 0 then
       S.pack_initial_count = #display_cards

@@ -8,6 +8,11 @@ local SHOP_SLIDE_IN_PX = H.SHOP_SLIDE_IN_PX
 local buy_flare01 = H.buy_flare01
 local Rows = require "hud.rows"
 
+-- Reused per-frame so the shop draw path doesn't allocate a metrics table + row_h closure
+-- every frame. Single-threaded; all fields are rewritten at draw entry before use.
+local _lp_metrics = { carousel_pad = 0 }
+local function lp_row_h(r) return Rows.height(r, _lp_metrics) end
+
 local function draw_shop_panel(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
   local pg, bg, ACC, FR, FRD, DIM, WHITE, GOLD = th.pg, th.bg, th.ACC, th.FR, th.FRD, th.DIM, th.WHITE, th.GOLD
@@ -41,12 +46,10 @@ local function draw_shop_panel(ctx)
     local lp_line_h, lp_small_line_h = l_text_h + ln(4), l_small_text_h + ln(2)
     local lp_card_line_h, lp_sep_h = ln(card_line_h), ln(sep_h)
 
-    local lp_metrics = {
-      line_h = lp_line_h, small_line_h = lp_small_line_h, card_line_h = lp_card_line_h,
-      sep_h = lp_sep_h, carousel_pad = 0, content_w = lp_content_w,
-      small_font = lp_small_font, wrap = wrapped_lines,
-    }
-    local function lp_row_h(r) return Rows.height(r, lp_metrics) end
+    local lp_metrics = _lp_metrics
+    lp_metrics.line_h, lp_metrics.small_line_h, lp_metrics.card_line_h = lp_line_h, lp_small_line_h, lp_card_line_h
+    lp_metrics.sep_h, lp_metrics.content_w = lp_sep_h, lp_content_w
+    lp_metrics.small_font, lp_metrics.wrap = lp_small_font, wrapped_lines
     local lp_data_h = ln(8)
     for _, r in ipairs(shop_rows) do lp_data_h = lp_data_h + lp_row_h(r) end
     local lp_title_h = ln(44)

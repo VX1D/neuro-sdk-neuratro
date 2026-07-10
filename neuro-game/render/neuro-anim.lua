@@ -37,10 +37,6 @@ function Motion.anim01(t, d)
   return Motion.ease_out_cubic(math.min(1, t / d))
 end
 
-function Motion.anim_enabled()
-  return not Motion.reduced
-end
-
 function Motion.pulse(now, hz, phase)
   if Motion.reduced then return 0.5 end
   return 0.5 + 0.5 * math.sin(now * (hz or 1) + (phase or 0))

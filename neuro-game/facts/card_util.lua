@@ -391,7 +391,6 @@ end
 M.joker_fx = joker_fx
 M.card_set = card_set
 M.booster_kind = booster_kind
-M.is_negative = is_negative
 M.area_has_negative = area_has_negative
 M.is_joker_like_card = is_joker_like_card
 M.has_consumable_space = has_consumable_space
@@ -424,8 +423,6 @@ M.enhancement_name = enhancement_name
 M.enhancement_short = enhancement_short
 M.seal_name = seal_name
 M.seal_short = seal_short
-M.seal_desc = seal_desc
-M.edition_desc = edition_desc
 M.card_modifier_desc = card_modifier_desc
 
 return M

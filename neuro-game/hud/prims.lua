@@ -140,20 +140,6 @@ local SPARK_PX = parse_px({
   "..X..",
 })
 
-local DARK_BOW_PX = parse_px({
-  "X.X.......X.X",
-  "XXX.......XXX",
-  "XXXX.OOO.XXXX",
-  "XXXXXOWOXXXXX",
-  "XXXX.OOO.XXXX",
-  "XXX.......XXX",
-  "X.X.......X.X",
-  "....XX.XX....",
-  "....XX.XX....",
-  "...XX...XX...",
-  "...X.....X...",
-  "..OX.....XO..",
-})
 local DARK_BOW_HEAD_PX = parse_px({
   "X.X.......X.X",
   "XXX.......XXX",
@@ -279,23 +265,6 @@ local FLAME_B_PX = parse_px({
   "XWX",
   "XWX",
 })
-local ROSE_PX = parse_px({
-  ".....WWWWW.....",
-  "...WWOO.XXWW...",
-  "..WOOOO.XXXXW..",
-  ".WW.OOO.XXX.WW.",
-  ".WXX.OO.XX.OOW.",
-  "WXXXX.O.X.OOOOW",
-  "WXXXXXWWWOOOOOW",
-  "W.....WWW.....W",
-  "WOOOOOWWWXXXXXW",
-  "WOOOO.X.O.XXXXW",
-  ".WOO.XX.OO.XXW.",
-  ".WW.XXX.OOO.WW.",
-  "..WXXXX.OOOOW..",
-  "...WWXX.OOWW...",
-  ".....WWWWW.....",
-})
 local LINK_PX = parse_px({
   ".XX.",
   "X..X",
@@ -303,59 +272,6 @@ local LINK_PX = parse_px({
   "X..X",
   ".XX.",
 })
-local PANE_A_PX = parse_px({
-  "....X....",
-  "...XXX...",
-  "..XXXXX..",
-  ".XXXXXXX.",
-  ".........",
-  "XX..O..XX",
-  "XX.OOO.XX",
-  "X.OOWOO.X",
-  "XX.OOO.XX",
-  "XX..O..XX",
-  ".........",
-  "XXXX.XXXX",
-  "XXXX.XXXX",
-  "XXXX.XXXX",
-})
-local PANE_B_PX = parse_px({
-  "....X....",
-  "...XXX...",
-  "..XX.XX..",
-  ".XXX.XXX.",
-  ".........",
-  "X.O...O.X",
-  "X..O.O..X",
-  "XX..W..XX",
-  "X..O.O..X",
-  "X.O...O.X",
-  ".........",
-  "XXX.X.XXX",
-  "XXX.X.XXX",
-  "XXXXXXXXX",
-})
-local PANE_C_PX = parse_px({
-  "....X....",
-  "...XXX...",
-  "..XXXXX..",
-  ".........",
-  "XXX.OO.XX",
-  "XXX.OO.XX",
-  ".........",
-  "OO.XX.WW.",
-  "OO.XX.WW.",
-  ".........",
-  "XXX.OO.XX",
-  "XXX.OO.XX",
-  ".........",
-  "XXXXXXXXX",
-})
-local PANE_PATS = { PANE_A_PX, PANE_B_PX, PANE_C_PX }
-local GLASS_X = { 0, 0, 0 }
-local GLASS_O = { 0, 0, 0 }
-local GLASS_B = { 0, 0, 0 }
-local GLASS_W = { 1, 0.93, 0.72 }
 
 local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
   local x0 = math.floor(cx - pat.w * s / 2 + 0.5)
@@ -393,9 +309,6 @@ local FLAME_HOT = { 1, 0.95, 0.75 }
 local SEAL_WAX = { 0.34, 0.035, 0.065 }
 local SEAL_HI = { 1, 0.92, 0.85 }
 
-function Prims.draw_dark_bow(cx, cy, u, acc, a, gold, shadow, body)
-  draw_px(DARK_BOW_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), body or BOW_WINE, a, acc, gold, shadow)
-end
 
 function Prims.draw_dark_bow_mini(cx, cy, u, acc, a, gold, shadow, body)
   draw_px(DARK_BOW_HEAD_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), body or BOW_WINE, a, acc, gold, shadow)
@@ -736,106 +649,8 @@ function Prims.quatrefoil(cx, cy, r, gold, a, pulse)
   draw_px(QUATREFOIL_PX, cx, cy, s, gold, (0.80 + Prims.EVIL.PULSE_AMP * pulse) * a, BOW_WINE)
 end
 
-function Prims.stained_glass_band(x, y, w, h, u, gold, c1, c2, c3, a, pulse, now, flare)
-  if w < u * 60 or h < u * 10 then return end
-  pulse = pulse or 0.5
-  flare = flare or 0
-  x, y, w, h = math.floor(x + 0.5), math.floor(y + 0.5), math.floor(w + 0.5), math.floor(h + 0.5)
-  local E = Prims.EVIL
-  local cols = { c1, c2, c3 }
-  local gk = (0.9 + 0.1 * pulse) * a
-  local border_h = u * 3
-  local glass_h = h - border_h - 5
-  local s = math.max(1, math.floor(glass_h / 14))
-  local n = math.max(4, math.min(12, math.floor(w / (9 * s + u * 6))))
-  local mid = math.floor(n / 2)
-  local sel, selk = -1, 0
-  if now and not Prims.Motion.reduced then
-    sel = math.floor(now * 0.4) % n
-    selk = math.sin(math.pi * ((now * 0.4) % 1)) * 0.12
-  end
-  local fits = (9 * s + 2) <= math.floor(w / n)
-  local x0 = x
-  for i = 0, n - 1 do
-    local x1 = x + math.floor((i + 1) * w / n)
-    local pw = x1 - x0
-    local c = cols[(i * 2 + 1) % 3 + 1]
-    love.graphics.setColor(c[1], c[2], c[3], (0.22 + 0.10 * flare) * gk)
-    love.graphics.rectangle("fill", x0 + 1, y + 2, pw - 2, h - 3)
-    if fits then
-      GLASS_X[1], GLASS_X[2], GLASS_X[3] = c[1] * 0.70 + 0.18, c[2] * 0.70 + 0.18, c[3] * 0.70 + 0.18
-      GLASS_O[1], GLASS_O[2], GLASS_O[3] = c[1] * 0.55 + 0.45, c[2] * 0.55 + 0.45, c[3] * 0.55 + 0.45
-      local aX = 0.50 * gk
-      local aL = (i == sel and selk or 0) + 0.25 * flare
-      local aO = (0.60 + aL) * gk
-      local aW = (0.55 + aL) * gk
-      local pat = PANE_PATS[i % 3 + 1]
-      local ox = x0 + 1 + math.floor((pw - 2 - 9 * s) / 2)
-      local oy = y + 2 + (glass_h - 14 * s)
-      for k = 1, #pat, 3 do
-        local py2, cls = pat[k + 1], pat[k + 2]
-        local lit = (py2 >= 5 and py2 <= 9) and 1.15 or 1
-        if cls == 0 then
-          love.graphics.setColor(math.min(1, GLASS_X[1] * lit), math.min(1, GLASS_X[2] * lit),
-            math.min(1, GLASS_X[3] * lit), aX)
-        elseif cls == 1 then
-          love.graphics.setColor(math.min(1, GLASS_O[1] * lit), math.min(1, GLASS_O[2] * lit),
-            math.min(1, GLASS_O[3] * lit), aO)
-        else
-          love.graphics.setColor(GLASS_W[1], GLASS_W[2], GLASS_W[3], aW)
-        end
-        love.graphics.rectangle("fill", ox + pat[k] * s, oy + py2 * s, s, s)
-      end
-      if i == mid then
-        draw_px(QUATREFOIL_PX, ox + math.floor(4.5 * s), oy + math.floor(8.5 * s), s,
-          gold, (0.70 + 0.20 * flare) * gk, BOW_WINE)
-      end
-    end
-    x0 = x1
-  end
-  GLASS_B[1], GLASS_B[2], GLASS_B[3] = c1[1] * 0.55 + 0.45, c1[2] * 0.55 + 0.45, c1[3] * 0.55 + 0.45
-  local by0 = y + h - border_h - 1
-  love.graphics.setColor(0, 0, 0, 0.55 * a)
-  love.graphics.rectangle("fill", x + 1, by0 - 1, w - 2, 1)
-  local cell = u * 8
-  local bx, ci = x + 1, 0
-  while bx < x + w - 1 do
-    local cw = math.min(cell, x + w - 1 - bx)
-    if ci % 2 == 0 then
-      love.graphics.setColor(gold[1], gold[2], gold[3], 0.40 * gk)
-    else
-      love.graphics.setColor(GLASS_B[1], GLASS_B[2], GLASS_B[3], (0.50 + 0.15 * flare) * gk)
-    end
-    love.graphics.rectangle("fill", bx, by0, cw - 1, border_h)
-    bx = bx + cell
-    ci = ci + 1
-  end
-  local uh = math.floor(u / 2)
-  for i = 1, n - 1 do
-    local mx = x + math.floor(i * w / n)
-    love.graphics.setColor(0, 0, 0, 0.55 * a)
-    love.graphics.rectangle("fill", mx - uh - 1, y + 2, 1, h - 3)
-    love.graphics.rectangle("fill", mx - uh + u, y + 2, 1, h - 3)
-    love.graphics.setColor(gold[1], gold[2], gold[3], E.A_ACCENT * a)
-    love.graphics.rectangle("fill", mx - uh, y + 2, u, h - 3)
-    love.graphics.setColor(gold[1], gold[2], gold[3], 0.80 * a)
-    love.graphics.rectangle("fill", mx - 1, y + 1, 2, 2)
-    love.graphics.rectangle("fill", mx - 1, y + h - 3, 2, 2)
-  end
-  love.graphics.setColor(0, 0, 0, 0.50 * a)
-  love.graphics.setLineWidth(1)
-  love.graphics.rectangle("line", x, y + 1, w, h - 1)
-  love.graphics.setColor(gold[1], gold[2], gold[3], E.A_ACCENT * a)
-  love.graphics.rectangle("fill", x, y + h - 1, w, 1)
-end
 
 -- alphas stay in the wash band so body text reads over it
-function Prims.rose_medallion(cx, cy, r, u, gold, c1, c2, a, pulse)
-  if r < u * 14 then return end
-  pulse = pulse or 0.5
-  local s = math.max(1, math.floor(r * 2 / 15 + 0.5))
-  draw_px(ROSE_PX, math.floor(cx + 0.5), math.floor(cy + 0.5), s, c1, (0.07 + 0.02 * pulse) * a, c2, gold)
-end
 
 function Prims.cornice_crenel(x, y, w, u, bg, gold, a)
   local ch = u * 4
@@ -860,29 +675,6 @@ function Prims.cornice_crenel(x, y, w, u, bg, gold, a)
 end
 
 -- pitch matches cornice_crenel
-function Prims.bottom_dags(x, y, w, u, bg, gold, a)
-  local pitch = u * 12
-  local dw = u * 6
-  local n = math.floor(w / pitch)
-  if n < 2 then return end
-  local x0 = x + math.floor((w - (n - 1) * pitch - dw) / 2)
-  local ga = Prims.EVIL.A_STRUCT * a
-  for i = 0, n - 1 do
-    local dx2 = x0 + i * pitch
-    love.graphics.setColor(bg[1], bg[2], bg[3], 0.97 * a)
-    love.graphics.rectangle("fill", dx2, y, dw, u * 2)
-    love.graphics.rectangle("fill", dx2 + u, y + u * 2, dw - u * 2, u * 2)
-    love.graphics.rectangle("fill", dx2 + u * 2, y + u * 4, dw - u * 4, u)
-    love.graphics.setColor(gold[1], gold[2], gold[3], ga)
-    love.graphics.rectangle("fill", dx2, y + u * 2 - 1, u, 1)
-    love.graphics.rectangle("fill", dx2 + dw - u, y + u * 2 - 1, u, 1)
-    love.graphics.rectangle("fill", dx2 + u, y + u * 4 - 1, u, 1)
-    love.graphics.rectangle("fill", dx2 + dw - u * 2, y + u * 4 - 1, u, 1)
-    love.graphics.rectangle("fill", dx2 + u * 2, y + u * 5 - 1, dw - u * 4, 1)
-    love.graphics.setColor(0, 0, 0, 0.25 * a)
-    love.graphics.rectangle("fill", dx2, y, dw, 1)
-  end
-end
 
 function Prims.ogive_top(x, y, w, u, gold, a, pulse)
   pulse = pulse or 0.5
@@ -912,19 +704,6 @@ function Prims.ogive_top(x, y, w, u, gold, a, pulse)
   Prims.draw_diamond(x + half, y - u * 3, u, gold, (E.A_ACCENT + E.PULSE_AMP * pulse) * a)
 end
 
-function Prims.pilaster(x, y0, y1, u, gold, frd, a)
-  if y1 - y0 < u * 20 then return end
-  x, y0, y1 = math.floor(x + 0.5), math.floor(y0 + 0.5), math.floor(y1 + 0.5)
-  local E = Prims.EVIL
-  love.graphics.setColor(gold[1], gold[2], gold[3], E.A_HAIR * a)
-  love.graphics.rectangle("fill", x - 1, y0 + u * 3, 1, y1 - y0 - u * 5)
-  love.graphics.setColor(frd[1], frd[2], frd[3], 0.50 * a)
-  love.graphics.rectangle("fill", x + 1, y0 + u * 3, 1, y1 - y0 - u * 5)
-  love.graphics.setColor(gold[1], gold[2], gold[3], E.A_STRUCT * a)
-  love.graphics.rectangle("fill", x - u, y0, u * 2, u)
-  love.graphics.rectangle("fill", x - u * 2, y0 + u, u * 4, u * 2)
-  love.graphics.rectangle("fill", x - u * 2, y1 - u * 2, u * 4, u * 2)
-end
 
 function Prims.chains(x, y0, y1, u, gold, a, sway)
   sway = sway or 0
