@@ -43,7 +43,7 @@ local function handle_paste_seed(data)
     if G then
       G.run_setup_seed = true
       G.setup_seed = seed_val
-      G.NEURO.seed_pasted = seed_val
+      if G.NEURO then G.NEURO.seed_pasted = seed_val end
       G.CLIPBOARD = seed_val
     end
     if love and love.system and love.system.setClipboardText then

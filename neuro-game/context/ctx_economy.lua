@@ -86,7 +86,10 @@ end
 
 local function safe_spend_keep_interest()
   local dollars = tonumber(G and G.GAME and G.GAME.dollars or 0) or 0
-  return math.max(0, dollars - calc_interest(dollars) * 5)
+  if no_interest() then return math.max(0, dollars) end
+  local cap = (G and G.GAME and G.GAME.interest_cap) or 25
+  local reserve = math.max(0, math.min(math.floor(dollars / 5), cap / 5)) * 5
+  return math.max(0, dollars - reserve)
 end
 
 local function interest_amount() return (G and G.GAME and G.GAME.interest_amount) or 1 end

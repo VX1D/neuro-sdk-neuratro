@@ -115,6 +115,13 @@ function Dispatcher.record_tx(id, ok, message, name)
   tx_store(id, ok, message, name)
 end
 
+function Dispatcher.reset_tx()
+  for k in pairs(tx_settled) do tx_settled[k] = nil end
+  for i = #tx_settled_order, 1, -1 do tx_settled_order[i] = nil end
+  _last_reregister_at = nil
+  _last_reregister_sig = nil
+end
+
 local function session_matches(bridge, msg)
   if not bridge or not bridge.session_id then
     return true

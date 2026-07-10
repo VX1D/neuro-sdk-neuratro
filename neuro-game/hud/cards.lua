@@ -331,8 +331,8 @@ local function draw_card_mini_approx(card, x, y, h, a)
     w = px * scale
 
     local qk = akey .. "_" .. center.pos.x .. "_" .. center.pos.y
-    local q, q_failed = cached_quad(qk, center.pos.x * px, center.pos.y * py, px, py, atlas.image)
-    if q_failed and not drew_base_for_enhanced then draw_mini_fallback(card, x, y, w, h, a); return w end
+    local q = cached_quad(qk, center.pos.x * px, center.pos.y * py, px, py, atlas.image)
+    if not q and not drew_base_for_enhanced then draw_mini_fallback(card, x, y, w, h, a); return w end
 
     if q then
       love.graphics.setColor(1, 1, 1, (drew_base_for_enhanced and 0.82 or 1) * a)

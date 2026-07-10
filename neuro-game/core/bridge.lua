@@ -275,6 +275,11 @@ function Bridge:send_startup()
     self:write_file(self.outbox_file, "")
   end
 
+  do
+    local ok_disp, Dispatcher = pcall(require, "core.dispatcher")
+    if ok_disp and Dispatcher and Dispatcher.reset_tx then pcall(Dispatcher.reset_tx) end
+  end
+
   self:send({ command = "startup", session_id = self.session_id, game = self.game })
 end
 
