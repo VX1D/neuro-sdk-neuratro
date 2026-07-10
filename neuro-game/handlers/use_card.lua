@@ -155,7 +155,12 @@ local function handle_use_card(data)
               end
             end
             -- do NOT clear the hand highlight here: use_consumeable's deferred events (card.lua:1429) still index G.hand.highlighted[i]; clearing early nil-indexes every frame and freezes E_MANAGER
-            pcall(fn, { config = { ref_table = card }, UIBox = mock_UIBox })
+            local ok_pick = pcall(fn, { config = { ref_table = card }, UIBox = mock_UIBox })
+            if not ok_pick then
+              ForceHelpers.correct_optimistic("use_card", "Booster pack pick failed to execute.", data._action_id,
+                "Your booster pick did not go through; the pack is unchanged.")
+              return true
+            end
             if pack_snapshot and pack_snapshot.options and #pack_snapshot.options >= 2 then
               queue_pick_showcase("booster_choice", 0, pack_snapshot)
             else
@@ -189,7 +194,9 @@ local function handle_use_card(data)
         end
         local ok_pick = fn and pcall(fn, { config = { ref_table = card }, UIBox = mock_UIBox })
         if not ok_pick then
-          ForceHelpers.correct_optimistic("use_card", "Booster pack pick failed to execute.", data._action_id)
+          ForceHelpers.correct_optimistic("use_card", "Booster pack pick failed to execute.", data._action_id,
+            "Your booster pick did not go through; the pack is unchanged.")
+          return
         elseif pack_snapshot and pack_snapshot.options and #pack_snapshot.options >= 2 then
           queue_pick_showcase("booster_choice", 0, pack_snapshot)
         else

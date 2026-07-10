@@ -130,6 +130,10 @@ function Context.get_scoring_explanation(sel)
     "=== BASE HAND VALUES ===",
   }
 
+  if DebuffFacts.flint_active() then
+    table.insert(explanation, "(The Flint is active: these base chips/mult are already HALVED.)")
+  end
+
   for _, h in ipairs(HandFacts.levels()) do
     table.insert(explanation, string.format("%s: Chips=%s, Mult=%s (Level %d)",
       h.name, Utils.fmt_num(h.chips), Utils.fmt_num(h.mult), h.level))
