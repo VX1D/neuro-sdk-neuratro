@@ -1,14 +1,14 @@
 local BridgeInit = {}
 
-local NeuroBridge = require "core.bridge"
-local NeuroState = require "core.state"
-local NeuroDispatcher = require "core.dispatcher"
-local NeuroActions = require "core.actions"
-local NeuroFilter = require "core.filtered"
-local Palette = require "render.palette"
-local DebugStats = require "render.debug_stats"
-local Paths = require "core.mod_paths"
-local Utils = require "util.utils"
+local NeuroBridge = require("core.bridge")
+local NeuroState = require("core.state")
+local NeuroDispatcher = require("core.dispatcher")
+local NeuroActions = require("core.actions")
+local NeuroFilter = require("core.filtered")
+local Palette = require("render.palette")
+local DebugStats = require("render.debug_stats")
+local Paths = require("core.mod_paths")
+local Utils = require("util.utils")
 local dotenv = require("util.dotenv")
 
 local neuro_now = Utils.now
@@ -240,7 +240,7 @@ local function hook_seeded_unlocks()
 end
 
 local function hook_game_over_screen()
-  if not (G and G.NEURO) then return end
+  if not Utils.neuro_ready() then return end
   if G.NEURO.game_over_hooked then return end
   if not _G.create_UIBox_game_over then return end
   G.NEURO.game_over_hooked = true

@@ -1,5 +1,5 @@
 local State = {}
-local Utils = require "util.utils"
+local Utils = require("util.utils")
 local CardUtil = require("facts.card_util")
 local CtxEconomy = require("context.ctx_economy")
 local CtxHelpers = require("context.ctx_helpers")

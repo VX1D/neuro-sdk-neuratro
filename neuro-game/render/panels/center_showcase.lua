@@ -1,6 +1,9 @@
-local H = require "render.hud_shared"
+local H = require("render.hud_shared")
 local Prims, S, Motion = H.Prims, H.S, H.Motion
+local round = Prims.round
+local clamp01 = Prims.clamp01
 local set_col = H.set_col
+local shadow_text = H.shadow_text
 local smoothstep01 = H.smoothstep01
 local draw_card_mini = H.draw_card_mini
 local caps_label, print_tracked = H.caps_label, H.print_tracked
@@ -63,7 +66,7 @@ local function draw_center_showcase(ctx)
     love.graphics.rectangle("fill", sx, sy, sc_w, sh2, scrad, scrad)
     local sc_th = math.min(sh2, fh + U * 3)
     if persona_evil then
-      local sc_flare = math.max(0, math.min(1, (now - sc_st) / 0.45))
+      local sc_flare = clamp01((now - sc_st) / 0.45)
       Prims.gothic_frame(sx, sy, sc_w, sh2, U, GOLD, FRD, a, 0, pulse)
       Prims.evil_frame_deco(sx, sy, sc_w, sh2, U, sc_th, GOLD, pg, pulse, now, Motion.reduced, 0.32, a, sc_flare)
       Prims.ember_bloom(sx + 6 + math.floor(mini_h * 0.375), sy + math.floor(sh2 / 2), mini_h * 0.7, U,
@@ -109,7 +112,7 @@ local function draw_center_showcase(ctx)
     local yy = sy + U
     if persona_evil and not Motion.reduced and sc_appear < 1 then
       love.graphics.setFont(font)
-      local gj = math.max(1, math.floor(U * (1 - sc_appear) + 0.5))
+      local gj = math.max(1, round(U * (1 - sc_appear)))
       love.graphics.setColor(0.95, 0.10, 0.16, 0.5 * a)
       print_tracked(showcase_label or "NEW CARD", text_x - gj, yy, TRACK_SM, font)
       love.graphics.setColor(0.12, 0.80, 0.90, 0.4 * a)
@@ -143,10 +146,7 @@ local function draw_center_showcase(ctx)
     if n_fx > 0 then
       if panel_font_small then love.graphics.setFont(panel_font_small) end
       for i = 1, n_fx do
-        love.graphics.setColor(0, 0, 0, 0.30 * a)
-        love.graphics.print(fx_lines[i], text_x + 1, yy + 1)
-        set_col(sc_pg, 0.92 * a)
-        love.graphics.print(fx_lines[i], text_x, yy)
+        shadow_text(fx_lines[i], text_x, yy, sc_pg, 0.92 * a, 0.30 * a)
         yy = yy + sfh + 1
       end
       yy = yy + 2

@@ -1,7 +1,7 @@
-local H = require "render.hud_shared"
-local Palette = require "render.palette"
-local Staging = require "core.staging"
-local DebugStats = require "render.debug_stats"
+local H = require("render.hud_shared")
+local Palette = require("render.palette")
+local Staging = require("core.staging")
+local DebugStats = require("render.debug_stats")
 local set_col, shadow_text = H.set_col, H.shadow_text
 
 local M = {}

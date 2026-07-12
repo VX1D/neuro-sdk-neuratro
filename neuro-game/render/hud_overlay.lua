@@ -1,22 +1,23 @@
 local HUD = {}
 
-local Palette = require "render.palette"
-local CardUtil = require "facts.card_util"
-local Tuning = require "core.tuning"
-local Utils = require "util.utils"
-local Staging = require "core.staging"
-local CtxEconomy = require "context.ctx_economy"
+local Palette = require("render.palette")
+local CardUtil = require("facts.card_util")
+local Tuning = require("core.tuning")
+local Utils = require("util.utils")
+local Staging = require("core.staging")
+local CtxEconomy = require("context.ctx_economy")
 local S = require("hud.state")
-local Paths = require "core.mod_paths"
+local Paths = require("core.mod_paths")
 local NeuroAnim = require("render.neuro-anim")
 
-local Prims = require "hud.prims"
-local TextColors = require "hud.text_colors"
-local Assets = require "hud.assets"
-local Emotes = require "hud.emotes"
-local Showcase = require "hud.showcase"
-local Cards = require "hud.cards"
-local Vouchers = require "hud.vouchers"
+local Prims = require("hud.prims")
+local round = Prims.round
+local TextColors = require("hud.text_colors")
+local Assets = require("hud.assets")
+local Emotes = require("hud.emotes")
+local Showcase = require("hud.showcase")
+local Cards = require("hud.cards")
+local Vouchers = require("hud.vouchers")
 local Motion = Prims.Motion
 local DEFAULT_MOTION = Prims.DEFAULT_MOTION
 local smoothstep01 = Prims.smoothstep01
@@ -70,14 +71,18 @@ local JOKER_SHOWCASE_FADE_OUT = Showcase.JOKER_SHOWCASE_FADE_OUT
 local update_buy_showcase = Showcase.update_buy
 local card_set_label = Showcase.card_set_label
 local update_joker_showcase = Showcase.update_joker
+local MONEY_COUNT_DUR = Showcase.MONEY_COUNT_DURATION
+local PANEL_REBUILD_INTERVAL = 0.15
 
 local joker_fx = CardUtil.joker_fx
 
-local Rows = require "hud.rows"
+local Rows = require("hud.rows")
 
 local F = { font = nil, pal = nil, p = nil, pg = nil, persona_evil = false }
 local ROW_METRICS = { carousel_pad = 0 }
 local CTX = { theme = {}, motion = {}, metrics = {}, data = {}, draw = {} }
+local VOUCHER_CTX = {}
+local _voucher_err_last = nil
 
 local function cache_put(map, keys, key, val)
   map[key] = val
@@ -165,8 +170,9 @@ local function draw_colored_desc(text, x, y, alpha, f)
 end
 
 local function showcase_type_colors(label, card, persona_evil)
-  local set = card and card.config and card.config.center and card.config.center.set or ""
-  local key = card and card.config and card.config.center and card.config.center.key or ""
+  local ctr = CardUtil.center(card)
+  local set = ctr and ctr.set or ""
+  local key = ctr and ctr.key or ""
   local slo = set:lower(); local klo = key:lower()
   local is_evil = persona_evil; if is_evil == nil then is_evil = F.persona_evil end
 
@@ -199,11 +205,11 @@ local function row_h(r) return Rows.height(r, ROW_METRICS) end
 -- entry) so the hot draw path doesn't allocate two closures every frame. Single-threaded.
 local _rp_s, _lp_s = 1, 1
 local function rn(v)
-  local r = math.floor(v * _rp_s + 0.5)
+  local r = round(v * _rp_s)
   return r < 1 and 1 or r
 end
 local function ln(v)
-  local r = math.floor(v * _lp_s + 0.5)
+  local r = round(v * _lp_s)
   return r < 1 and 1 or r
 end
 
@@ -478,7 +484,6 @@ local function draw_neuro_indicator()
       logo_w = logo:getWidth() * logo_scale
     end
 
-    local panel_rows = {}
     local sn = G.NEURO.state or ""
 
     local ORANGE  = _pal.D_ORANGE
@@ -489,7 +494,7 @@ local function draw_neuro_indicator()
     local GOLD    = _pal.D_GOLD
 
     local now_rows = neuro_now()
-    if S.ov.built_sn ~= sn or (now_rows - S.ov.built_at) >= 0.15 then
+    if S.ov.built_sn ~= sn or (now_rows - S.ov.built_at) >= PANEL_REBUILD_INTERVAL then
       for k in pairs(S.ov.panel) do S.ov.panel[k] = nil end
       for k in pairs(S.ov.shop) do S.ov.shop[k] = nil end
       for k in pairs(S.ov.pack) do S.ov.pack[k] = nil end
@@ -497,12 +502,11 @@ local function draw_neuro_indicator()
       S.ov.built_at = now_rows
       S.ov.built_sn = sn
     end
-    panel_rows = S.ov.panel
+    local panel_rows = S.ov.panel
     local shop_rows = S.ov.shop
     local pack_rows = S.ov.pack
 
     do
-      local MONEY_COUNT_DUR = 0.35
       local money_now = (G.GAME and G.GAME.dollars) or 0
       if S.ov.money_target == nil then
         S.ov.money_target = money_now
@@ -516,7 +520,7 @@ local function draw_neuro_indicator()
       local from, to = S.ov.money_from or money_now, S.ov.money_target
       S.ov.money_disp = from + (to - from) * ease_out_cubic01(mt)
       if panel_rows[1] and panel_rows[1].kind == "header" then
-        panel_rows[1].text = string.format("$%d", math.floor(S.ov.money_disp + 0.5))
+        panel_rows[1].text = string.format("$%d", round(S.ov.money_disp))
       end
     end
 
@@ -710,7 +714,7 @@ local function draw_neuro_indicator()
       local ph_spd = ph_diff > 0 and PANEL_H_GROW_SPEED or PANEL_H_LERP_SPEED
       S.panel_h_current = S.panel_h_current + ph_diff * math.min(1, ph_spd * dt)
     end
-    total_h = math.floor(S.panel_h_current + 0.5)
+    total_h = round(S.panel_h_current)
 
     local ctx = CTX
     local th = ctx.theme
@@ -753,7 +757,7 @@ local function draw_neuro_indicator()
 
     if S.right_panel_slide_frac > 0 then
       love.graphics.push()
-      love.graphics.translate(math.floor((pw_total + 20) * S.right_panel_slide_frac + 0.5), 0)
+      love.graphics.translate(round((pw_total + 20) * S.right_panel_slide_frac), 0)
     end
     draw_rp_frame(ctx)
 
@@ -764,19 +768,23 @@ local function draw_neuro_indicator()
     draw_rp_footer(ctx)
     if S.right_panel_slide_frac > 0 then love.graphics.pop() end
     -- owned-voucher ledger drawer, below the right panel (after the panel's slide pop so it doesn't ride it)
-    local vok, verr = pcall(Vouchers.draw, {
-      now = now, p_x = p_x, p_y = p_y, panel_h = total_h, pw = pw_total,
-      sw = sw, sh = sh, rn = rn, pal = _pal, pulse = pulse,
-      font = rfont, font_small = rfont_small, trunc = trunc,
-      jokers_on_screen = jokers_on_screen,
-    })
+    local vctx = VOUCHER_CTX
+    vctx.now, vctx.p_x, vctx.p_y, vctx.panel_h, vctx.pw = now, p_x, p_y, total_h, pw_total
+    vctx.sw, vctx.sh, vctx.rn, vctx.pal, vctx.pulse = sw, sh, rn, _pal, pulse
+    vctx.font, vctx.font_small, vctx.trunc = rfont, rfont_small, trunc
+    vctx.jokers_on_screen = jokers_on_screen
+    local vok, verr = pcall(Vouchers.draw, vctx)
     if not vok then
       -- drawer pushed+scissored before it threw; restore graphics state here or it leaks every frame
       love.graphics.setScissor()
       pcall(love.graphics.pop)
       love.graphics.setColor(1, 1, 1, 1)
       love.graphics.setLineWidth(1)
-      neuro_log("VOUCHER DRAWER ERROR:", verr)
+      local vmsg = tostring(verr)
+      if vmsg ~= _voucher_err_last then
+        _voucher_err_last = vmsg
+        print("[neuro-game] VOUCHER DRAWER ERROR: " .. vmsg)
+      end
     end
   end
 

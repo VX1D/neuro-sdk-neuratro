@@ -25,7 +25,7 @@ local function jokers_section()
       name,
       compact_text(effect_str, 80),
       joker_tags(card),
-      "$" .. tostring(card.sell_cost or 0),
+      Utils.money(card.sell_cost),
     }
     lines[#lines + 1] = table.concat(row, ",")
   end
@@ -102,7 +102,7 @@ local function playbook_section(include_full_desc)
       name,
       compact_text(effect_str, 80),
       joker_tags(card),
-      "$" .. tostring(card.sell_cost or 0),
+      Utils.money(card.sell_cost),
     }
     if include_full_desc then
       row[#row + 1] = compact_text(card_description_full(card, 320), 320)

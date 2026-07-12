@@ -1,12 +1,12 @@
 -- On-demand verbose info actions; keep separate from the per-turn surface (context_compact.lua)
 local Context = {}
-local Utils = require "util.utils"
-local Scoring = require "util.scoring"
-local CardUtil = require "facts.card_util"
-local CtxEconomy = require "context.ctx_economy"
-local HandFacts = require "facts.hand_facts"
-local DebuffFacts = require "facts.debuff_facts"
-local CtxHelpers = require "context.ctx_helpers"
+local Utils = require("util.utils")
+local Scoring = require("util.scoring")
+local CardUtil = require("facts.card_util")
+local CtxEconomy = require("context.ctx_economy")
+local HandFacts = require("facts.hand_facts")
+local DebuffFacts = require("facts.debuff_facts")
+local CtxHelpers = require("context.ctx_helpers")
 local safe_name_or = Utils.safe_name_or
 
 local function safe_description(loc_txt, card, max_len)
@@ -355,8 +355,8 @@ function Context.get_shop_context()
       local af = CtxEconomy.item_afford_status(card, "shop_jokers")
       local status
       if not af.afford then status = "Cannot afford ($" .. tostring(cost) .. ")"
-      elseif not af.has_space then status = "$" .. tostring(cost) .. " (no joker slot)"
-      else status = "$" .. tostring(cost) end
+      elseif not af.has_space then status = Utils.money(cost) .. " (no joker slot)"
+      else status = Utils.money(cost) end
 
       local effects = CtxHelpers.effect_parts(ability)
 
@@ -377,7 +377,7 @@ function Context.get_shop_context()
       local name = safe_name_or(card)
       local cost = card.cost or 0
       local can_afford = CtxEconomy.item_afford_status(card, "shop_vouchers").ok
-      local status = can_afford and "$" .. tostring(cost) or "Cannot afford ($" .. tostring(cost) .. ")"
+      local status = can_afford and Utils.money(cost) or ("Cannot afford (" .. Utils.money(cost) .. ")")
       local desc = Utils.card_description(card) or ""
       if desc ~= "" then
         table.insert(context, string.format("%d: %s [%s] - %s", i, name, status, desc))
@@ -395,7 +395,7 @@ function Context.get_shop_context()
       local name = safe_name_or(card)
       local cost = card.cost or 0
       local can_afford = CtxEconomy.item_afford_status(card, "shop_booster").ok
-      local status = can_afford and "$" .. tostring(cost) or "Cannot afford ($" .. tostring(cost) .. ")"
+      local status = can_afford and Utils.money(cost) or ("Cannot afford (" .. Utils.money(cost) .. ")")
       local desc = Utils.card_description(card) or ""
       local set = center.set or "Booster"
       if desc ~= "" then

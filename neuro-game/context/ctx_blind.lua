@@ -57,14 +57,14 @@ local function blind_debuff_line()
   if debuff.value then rules[#rules + 1] = "value=" .. tostring(debuff.value) end
   if debuff.nominal then rules[#rules + 1] = "nominal=" .. tostring(debuff.nominal) end
 
-  local bname = tostring(blind.name or "")
-  if bname == "The Pillar" then rules[#rules + 1] = "played_this_ante=Y" end
-  if bname == "The Eye" then rules[#rules + 1] = "repeat_hand_type=N" end
-  if bname == "The Mouth" then rules[#rules + 1] = "single_hand_type=Y" end
-  if bname == "The Ox" then
+  local blind_is = DebuffFacts.blind_is
+  if blind_is(blind, "bl_pillar") then rules[#rules + 1] = "played_this_ante=Y" end
+  if blind_is(blind, "bl_eye") then rules[#rules + 1] = "repeat_hand_type=N" end
+  if blind_is(blind, "bl_mouth") then rules[#rules + 1] = "single_hand_type=Y" end
+  if blind_is(blind, "bl_ox") then
     rules[#rules + 1] = "most_played=" .. tostring(DebuffFacts.most_played_hand() or "?")
   end
-  if bname == "The Eye" or bname == "The Mouth" then
+  if blind_is(blind, "bl_eye") or blind_is(blind, "bl_mouth") then
     local played = {}
     if G.GAME.hands then
       for hname, hd in pairs(G.GAME.hands) do

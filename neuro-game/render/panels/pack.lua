@@ -1,11 +1,20 @@
-local H = require "render.hud_shared"
+local H = require("render.hud_shared")
 local Prims, S, Motion = H.Prims, H.S, H.Motion
+local round = Prims.round
+local clamp, clamp01 = Prims.clamp, Prims.clamp01
 local set_col, shadow_text = H.set_col, H.shadow_text
 local caps_label, tracked_width = H.caps_label, H.tracked_width
 local draw_card_mini = H.draw_card_mini
 local PACK_CARD_APPEAR_D = H.PACK_CARD_APPEAR_D
 
 local function by_pack_index(a, b) return a.index < b.index end
+
+local _prev_pool, _disp_pool = {}, {}
+local function pooled(pool, n)
+  local t = pool[n]
+  if not t then t = {}; pool[n] = t end
+  return t
+end
 
 local function draw_pack_panel(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
@@ -62,13 +71,16 @@ local function draw_pack_panel(ctx)
         }
       end
     end
-    S.pack_prev_cards = {}
+    local prev = S.pack_prev_cards
+    if not prev then prev = {}; S.pack_prev_cards = prev end
+    local pn = 0
     for _, cd in ipairs(pack_rows.cards) do
-      S.pack_prev_cards[#S.pack_prev_cards + 1] = {
-        card = cd.card, name = cd.name, desc = cd.desc,
-        rc = cd.rc, index = cd.index,
-      }
+      pn = pn + 1
+      local t = pooled(_prev_pool, pn)
+      t.card, t.name, t.desc, t.rc, t.index = cd.card, cd.name, cd.desc, cd.rc, cd.index
+      prev[pn] = t
     end
+    for i = #prev, pn + 1, -1 do prev[i] = nil end
   end
 
   for k, v in pairs(S.pack_picked) do
@@ -85,38 +97,40 @@ local function draw_pack_panel(ctx)
     local slot_h = 190
     local small_f = panel_font_small or font
 
-    local display_cards = {}
+    local display_cards = S.pack_disp or {}
+    S.pack_disp = display_cards
+    local dn = 0
     if pack_has_cards then
       for _, cd in ipairs(pack_rows.cards) do
         local is_hl = G.NEURO.ai_highlighted and G.NEURO.ai_highlighted[cd.card]
-        display_cards[#display_cards + 1] = {
-          card = cd.card, name = cd.name, desc = cd.desc,
-          rc = cd.rc, index = cd.index,
-          state = is_hl and "highlighted" or "normal",
-          alpha = 1.0,
-        }
+        dn = dn + 1
+        local t = pooled(_disp_pool, dn)
+        t.card, t.name, t.desc, t.rc, t.index = cd.card, cd.name, cd.desc, cd.rc, cd.index
+        t.state, t.alpha, t.pick_elapsed = is_hl and "highlighted" or "normal", 1.0, nil
+        display_cards[dn] = t
       end
     end
     for _, pv in pairs(S.pack_picked) do
       local elapsed = now - pv.at
       local fade = math.max(0, 1 - elapsed / (pv.fade_dur or PICK_FADE_DUR))
       if fade > 0 then
-        display_cards[#display_cards + 1] = {
-          card = nil, name = pv.name, desc = pv.desc,
-          rc = pv.rc, index = pv.index,
-          state = "picked", alpha = fade,
-          pick_elapsed = elapsed,
-        }
+        dn = dn + 1
+        local t = pooled(_disp_pool, dn)
+        t.card, t.name, t.desc, t.rc, t.index = nil, pv.name, pv.desc, pv.rc, pv.index
+        t.state, t.alpha, t.pick_elapsed = "picked", fade, elapsed
+        display_cards[dn] = t
       end
     end
     if leaving then
       for _, ls in ipairs(S.pack_leave_snap or {}) do
-        display_cards[#display_cards + 1] = {
-          card = nil, name = ls.name, desc = nil,
-          rc = ls.rc, index = ls.index, state = "normal", alpha = 1.0,
-        }
+        dn = dn + 1
+        local t = pooled(_disp_pool, dn)
+        t.card, t.name, t.desc, t.rc, t.index = nil, ls.name, nil, ls.rc, ls.index
+        t.state, t.alpha, t.pick_elapsed = "normal", 1.0, nil
+        display_cards[dn] = t
       end
     end
+    for i = #display_cards, dn + 1, -1 do display_cards[i] = nil end
     table.sort(display_cards, by_pack_index)
 
     if not leaving and S.pack_initial_count == 0 and #display_cards > 0 then
@@ -133,7 +147,7 @@ local function draw_pack_panel(ctx)
       end
       S.pack_leave_n = n_cards
     end
-    local pk_w = math.min(sw - 40, math.max(500, n_cards * 155 + 20))
+    local pk_w = clamp(n_cards * 155 + 20, 500, sw - 40)
     local pk_x = math.floor((sw - pk_w) / 2)
     local pk_content_w = pk_w - pk_pad * 2
     local slot_w = (n_cards > 0) and math.max(1, math.floor((pk_content_w - (n_cards - 1) * slot_gap) / n_cards)) or pk_content_w
@@ -149,7 +163,7 @@ local function draw_pack_panel(ctx)
       { a = pk_in, rad = 9, title_h = title_h2, skip_body = true })
     if persona_evil then
       local pft = now - S.pack_appear_t
-      local flare = math.max(0, math.min(1, pft / 0.45))
+      local flare = clamp01(pft / 0.45)
       local cy0 = ctx.center_top_y
       H.evil_frame(pk_x, cy0, pk_w, pk_total_h, rn(1), title_h2, GOLD, pg, bg, pulse, now, pk_in, flare, 0.5)
       Prims.embers(pk_x + math.floor(pk_w / 2), cy0 + title_h2, math.floor(pk_w * 0.82), slot_h, rn(1),
@@ -301,7 +315,7 @@ local function draw_pack_panel(ctx)
             local char = math.min(1, pe / 0.26)
             if char > 0 and char < 1 then
               local ch = math.floor(sprite_h2 * char)
-              love.graphics.setColor(ORANGE[1], ORANGE[2], ORANGE[3], (0.7 + 0.3 * pulse) * ca)
+              set_col(ORANGE, (0.7 + 0.3 * pulse) * ca)
               love.graphics.rectangle("fill", sprite_x2, sprite_y2 + sprite_h2 - ch - 2, sprite_w2, 2)
             end
           elseif persona_neuro then
@@ -367,15 +381,15 @@ local function draw_pack_panel(ctx)
             local ease = 1 - (1 - brand_p) * (1 - brand_p)
             local ring_p = math.min(1, brand_p * 1.6)
             if ring_p < 1 then
-              local rr = math.floor(rn(9) * (2.3 - 1.3 * ring_p) + 0.5)
+              local rr = round(rn(9) * (2.3 - 1.3 * ring_p))
               local ra = (1 - ring_p) * 0.9 * ca
-              local bar = math.max(2, math.floor(rr * 0.7 + 0.5))
+              local bar = math.max(2, round(rr * 0.7))
               set_col(GOLD, ra)
               love.graphics.rectangle("fill", mcx - math.floor(bar / 2), mcy - rr, bar, 1)
               love.graphics.rectangle("fill", mcx - math.floor(bar / 2), mcy + rr - 1, bar, 1)
               love.graphics.rectangle("fill", mcx - rr, mcy - math.floor(bar / 2), 1, bar)
               love.graphics.rectangle("fill", mcx + rr - 1, mcy - math.floor(bar / 2), 1, bar)
-              local dk = math.floor(rr * 0.7071 + 0.5)
+              local dk = round(rr * 0.7071)
               love.graphics.rectangle("fill", mcx - dk - 1, mcy - dk - 1, 2, 2)
               love.graphics.rectangle("fill", mcx + dk - 1, mcy - dk - 1, 2, 2)
               love.graphics.rectangle("fill", mcx - dk - 1, mcy + dk - 1, 2, 2)
@@ -433,13 +447,13 @@ local function draw_pack_panel(ctx)
             local fl = math.sin(math.pi * (pe - 0.30) / 0.22)
             love.graphics.setColor(1, 1, 1, 0.5 * fl * ca)
             love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, 3, 3)
-            love.graphics.setColor(pg[1], pg[2], pg[3], 0.35 * fl * ca)
+            set_col(pg, 0.35 * fl * ca)
             love.graphics.rectangle("fill", slot_x - rn(2), sy_slot - rn(2), slot_w + rn(4), slot_h + rn(4), 4, 4)
             local burst = (pe - 0.30) / 0.22
             Prims.confetti_burst(mcx, mcy, burst, slot_w, U * 1.8, 0.6, pg, ACC, ca)
             Prims.confetti_burst(mcx, mcy, burst, slot_w * 0.8, U * 1.5, 1.7, pg, ACC, 0.9 * ca)
           end
-          local pop = math.min(1, math.max(0, (pe - 0.30) / 0.22))
+          local pop = clamp01((pe - 0.30) / 0.22)
           local bsc = 1 + 0.6 * math.sin(math.pi * pop)
           Prims.draw_bow(mcx, mcy, rn(2) * bsc, ACC, 0.95 * ca, pg)
         else

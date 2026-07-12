@@ -1,7 +1,7 @@
 local Assets = {}
 
 local S = require("hud.state")
-local Utils = require "util.utils"
+local Utils = require("util.utils")
 
 local neuro_log = Utils.neuro_log
 

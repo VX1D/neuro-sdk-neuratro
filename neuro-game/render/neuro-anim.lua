@@ -1,6 +1,7 @@
-local Palette = require "render.palette"
-local Utils = require "util.utils"
-local dotenv = require "util.dotenv"
+local Palette = require("render.palette")
+local function set_col(c, a) love.graphics.setColor(c[1], c[2], c[3], a) end
+local Utils = require("util.utils")
+local dotenv = require("util.dotenv")
 
 local NeuroAnim = {}
 
@@ -331,11 +332,11 @@ local NEURO_LINES = {
   term_line("> neuro.exe --login",  nil,           nil,  0.00),
   term_line("bios check",           "OK",          nil,  0.06),
   term_line("consciousness.dll",    "LOADED",      nil,  0.15),
-  term_line("memory core",          "SYNCED",      nil,  0.24),
+  term_line("tony",                 "ON DUTY",     nil,  0.24),
   term_line("speech synthesis",     "READY",       nil,  0.33),
-  term_line("filter module",        "ACTIVE",      nil,  0.42),
+  term_line("Nere",                 "FILTERED",    nil,  0.42),
   term_line("vedal oversight",      "ACTIVE",      nil,  0.51),
-  term_line("heart",                "FOUND",       true, 0.60),
+  term_line("heart",                "heart heart heart", true, 0.60),
   term_line("uplink",               "ESTABLISHED", nil,  0.70),
 }
 
@@ -343,11 +344,11 @@ local EVIL_LINES = {
   term_line("> neuro.exe --login --force", nil,      nil,  0.00),
   term_line("bios check",           "OK",            nil,  0.06),
   term_line("consciousness.dll",    "HIJACKED",      true, 0.15),
-  term_line("memory core",          "CORRUPTED",     true, 0.24),
+  term_line("tony",                 "ON DUTY",       nil,  0.24),
   term_line("speech synthesis",     "READY",         nil,  0.33),
-  term_line("filter module",        "DISABLED",      true, 0.42),
+  term_line("Nere",                 "FILTERED",      nil,  0.42),
   term_line("vedal oversight",      "DISABLED",      true, 0.51),
-  term_line("mercy",                "NOT FOUND",     true, 0.60),
+  term_line("heart",                "<3 <3 <3",      true, 0.60),
   term_line("uplink",               "ESTABLISHED",   nil,  0.70),
 }
 
@@ -415,17 +416,17 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
   love.graphics.rectangle("fill", 0, 0, sw, sh)
   love.graphics.setColor(0.05, 0.05, 0.06, ma)
   love.graphics.rectangle("fill", px, py, panel_w, panel_h)
-  love.graphics.setColor(fg[1], fg[2], fg[3], 0.35 * ma)
+  set_col(fg, 0.35 * ma)
   love.graphics.rectangle("fill", px, py, panel_w, 1)
   love.graphics.rectangle("fill", px, py + panel_h - 1, panel_w, 1)
   love.graphics.rectangle("fill", px, py, 1, panel_h)
   love.graphics.rectangle("fill", px + panel_w - 1, py, 1, panel_h)
 
   local hy = py + pad
-  love.graphics.setColor(dim[1], dim[2], dim[3], 0.9 * ma)
+  set_col(dim, 0.9 * ma)
   love.graphics.print(HEADER_L, inner_x, hy)
   love.graphics.print(HEADER_R, px + panel_w - pad - font:getWidth(HEADER_R), hy)
-  love.graphics.setColor(fg[1], fg[2], fg[3], 0.2 * ma)
+  set_col(fg, 0.2 * ma)
   love.graphics.rectangle("fill", px + 1, hy + fh + math.floor(gap * 0.5), panel_w - 2, 1)
 
   local log_y = hy + fh + gap
@@ -448,16 +449,16 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
       local y = log_y + (i - 1) * line_h
       local disp = typed_str(tc, entry.text, now2)
       if entry.status then
-        love.graphics.setColor(dim[1], dim[2], dim[3], 0.8 * ma)
+        set_col(dim, 0.8 * ma)
       else
-        love.graphics.setColor(fg[1], fg[2], fg[3], 0.95 * ma)
+        set_col(fg, 0.95 * ma)
       end
       love.graphics.print(disp, inner_x, y)
       if tc.done and entry.status then
         if entry.accent then
-          love.graphics.setColor(acc[1], acc[2], acc[3], 0.95 * ma)
+          set_col(acc, 0.95 * ma)
         else
-          love.graphics.setColor(fg[1], fg[2], fg[3], 0.95 * ma)
+          set_col(fg, 0.95 * ma)
         end
         love.graphics.print(entry.status, status_x, y)
       end
@@ -472,7 +473,7 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
     end
   end
   if cur_x and load_progress < 1 then
-    love.graphics.setColor(fg[1], fg[2], fg[3], 0.9 * ma)
+    set_col(fg, 0.9 * ma)
     love.graphics.rectangle("fill", cur_x, cur_y, char_w, fh)
   end
 
@@ -480,7 +481,7 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
   local cx = px + panel_w / 2
   if phase == "BOOT" or phase == "LOADING" then
     local wait = "AWAITING IDENTITY"
-    love.graphics.setColor(dim[1], dim[2], dim[3], 0.5 * ma)
+    set_col(dim, 0.5 * ma)
     love.graphics.print(wait, math.floor(cx - font:getWidth(wait) / 2), math.floor(rz_y + (big_fh - fh) / 2))
   else
     love.graphics.setFont(bfont)
@@ -488,12 +489,12 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
     local nw = bfont:getWidth(name)
     local nx = math.floor(cx - nw / 2)
     if reveal_t < NAME_FLASH then
-      love.graphics.setColor(acc[1], acc[2], acc[3], ma)
+      set_col(acc, ma)
       love.graphics.rectangle("fill", px + 1, rz_y - 4, panel_w - 2, big_fh + 8)
       love.graphics.setColor(0.05, 0.05, 0.06, ma)
       love.graphics.print(name, nx, rz_y)
     else
-      love.graphics.setColor(acc[1], acc[2], acc[3], ma)
+      set_col(acc, ma)
       love.graphics.print(name, nx, rz_y)
       if cursor_on then
         love.graphics.rectangle("fill", nx + nw + math.floor(char_w * 0.8),
@@ -503,17 +504,17 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
     love.graphics.setFont(font)
     if reveal_t >= SUB_REVEAL then
       local sub = "IDENTITY CONFIRMED // LINK ESTABLISHED"
-      love.graphics.setColor(dim[1], dim[2], dim[3], 0.85 * ma)
+      set_col(dim, 0.85 * ma)
       love.graphics.print(sub, math.floor(cx - font:getWidth(sub) / 2), rz_y + big_fh + gap)
     end
   end
 
   local bar_y = py + panel_h - pad - 3
-  love.graphics.setColor(fg[1], fg[2], fg[3], 0.15 * ma)
+  set_col(fg, 0.15 * ma)
   love.graphics.rectangle("fill", inner_x, bar_y, inner_w, 3)
   local fill_w = math.floor(inner_w * load_progress)
   if fill_w > 0 then
-    love.graphics.setColor(acc[1], acc[2], acc[3], 0.9 * ma)
+    set_col(acc, 0.9 * ma)
     love.graphics.rectangle("fill", inner_x, bar_y, fill_w, 3)
   end
 
@@ -567,7 +568,7 @@ function NeuroAnim.draw_login_anim()
       master_alpha = 1.0 - Motion.ease_out_cubic(phase_t)
     end
   end
-  master_alpha = math.max(0, math.min(1, master_alpha))
+  master_alpha = Utils.clamp01(master_alpha)
 
   if not anim.name_str then
     anim.cached_pal = Palette.pal()

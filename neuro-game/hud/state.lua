@@ -55,6 +55,7 @@ local S = {
   cons_cache_n = -1,
   buy_showcase = nil,
   pack_prev_cards = {},
+  pack_disp = {},
   pack_picked = {},
   pack_appear_t = 0,
   pack_last_sn = nil,

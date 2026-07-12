@@ -5,6 +5,8 @@ local DebugStats = require("render.debug_stats")
 local SelfTest = require("core.selftest")
 local Motion = require("render.neuro-anim").Motion
 local Prims = require("hud.prims")
+local set_col = Prims.set_col
+local round = Prims.round
 local clear_force_state = require("force.force_helpers").clear_force_state
 
 local Panel = {}
@@ -115,7 +117,7 @@ local function rebuild_rows()
 end
 
 local function hex2(v)
-  return string.format("%02X", math.floor(v * 255 + 0.5))
+  return string.format("%02X", round(v * 255))
 end
 
 local function rebuild_crows()
@@ -226,10 +228,10 @@ end
 local function draw_checkbox(x, y, size, on, a, ACC)
   love.graphics.setLineWidth(1)
   if on then
-    love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * a)
+    set_col(ACC, 0.95 * a)
     love.graphics.rectangle("fill", x + 2, y + 2, size - 4, size - 4)
   end
-  love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.90 * a)
+  set_col(ACC, 0.90 * a)
   love.graphics.rectangle("line", x, y, size, size)
 end
 
@@ -248,7 +250,7 @@ local function page1_adjust(i, dir, mult, now)
   else
     -- round to 1e-6 so repeated float nudges don't write crud (0.30000000000000004) to the saved env
     local nv = Tuning.get_raw(d.key) + d.step * dir * (mult or 1)
-    nv = math.floor(nv * 1e6 + 0.5) / 1e6
+    nv = round(nv * 1e6) / 1e6
     Tuning.set(d.key, nv)
   end
   vflash_at = now
@@ -658,7 +660,7 @@ function Panel.draw()
     pa = 1 - Motion.anim01(now - close_at, fade_d)
   end
   local ba = open and Motion.anim01(now - open_at - fade_d, fade_d) or pa
-  local rise = math.floor((1 - pa) * 2 * U + 0.5)
+  local rise = round((1 - pa) * 2 * U)
 
   love.graphics.setFont(font)
   local text_h = font:getHeight()
@@ -670,9 +672,9 @@ function Panel.draw()
     local by = U * 2
     love.graphics.setColor(0, 0, 0, 0.55 * ba)
     love.graphics.rectangle("fill", bx + 2, by + 2, bw, bh)
-    love.graphics.setColor(bg[1], bg[2], bg[3], 0.97 * ba)
+    set_col(bg, 0.97 * ba)
     love.graphics.rectangle("fill", bx, by, bw, bh)
-    love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * ba)
+    set_col(ACC, 0.95 * ba)
     love.graphics.setLineWidth(1)
     love.graphics.rectangle("line", bx, by, bw, bh)
     print_tracked(BADGE_TEXT, bx + GUT, by + U, 1, font)
@@ -723,9 +725,9 @@ function Panel.draw()
 
   love.graphics.setColor(0, 0, 0, 0.55 * pa)
   love.graphics.rectangle("fill", px + 2, py + 2, pw, ph)
-  love.graphics.setColor(bg[1], bg[2], bg[3], 0.97 * pa)
+  set_col(bg, 0.97 * pa)
   love.graphics.rectangle("fill", px, py, pw, ph)
-  love.graphics.setColor(FR[1], FR[2], FR[3], 0.90 * pa)
+  set_col(FR, 0.90 * pa)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", px, py, pw, ph)
 
@@ -748,17 +750,17 @@ function Panel.draw()
     HIT.t1_x, HIT.t1_w = tx - U, t1w
     local hov1 = open and in_rect(mx, my, HIT.t1_x, HIT.tab_y, t1w, tab_h)
     if hov1 and page ~= 1 then
-      love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.55 * pa)
+      set_col(FRD, 0.55 * pa)
       love.graphics.rectangle("fill", HIT.t1_x, HIT.tab_y, t1w, tab_h)
     end
     if page == 1 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+      set_col(ACC, 0.97 * pa)
     else
       love.graphics.setColor(1, 1, 1, (hov1 and 0.85 or 0.55) * pa)
     end
     print_tracked(TAB_1, tx, tab_y, 2, font)
     if page == 1 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * pa)
+      set_col(ACC, 0.95 * pa)
       love.graphics.rectangle("fill", HIT.t1_x, HIT.tab_y + tab_h, t1w, 2)
     end
     tx = tx + t1w + U
@@ -768,17 +770,17 @@ function Panel.draw()
     HIT.t2_x, HIT.t2_w = tx - U, t2w
     local hov2 = open and in_rect(mx, my, HIT.t2_x, HIT.tab_y, t2w, tab_h)
     if hov2 and page ~= 2 then
-      love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.55 * pa)
+      set_col(FRD, 0.55 * pa)
       love.graphics.rectangle("fill", HIT.t2_x, HIT.tab_y, t2w, tab_h)
     end
     if page == 2 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+      set_col(ACC, 0.97 * pa)
     else
       love.graphics.setColor(1, 1, 1, (hov2 and 0.85 or 0.55) * pa)
     end
     print_tracked(TAB_2, tx, tab_y, 2, font)
     if page == 2 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * pa)
+      set_col(ACC, 0.95 * pa)
       love.graphics.rectangle("fill", HIT.t2_x, HIT.tab_y + tab_h, t2w, 2)
     end
     tx = tx + t2w + U
@@ -789,17 +791,17 @@ function Panel.draw()
     HIT.t3_x, HIT.t3_w = tx - U, t3w
     local hov3 = open and in_rect(mx, my, HIT.t3_x, HIT.tab_y, t3w, tab_h)
     if hov3 and page ~= 3 then
-      love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.55 * pa)
+      set_col(FRD, 0.55 * pa)
       love.graphics.rectangle("fill", HIT.t3_x, HIT.tab_y, t3w, tab_h)
     end
     if page == 3 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+      set_col(ACC, 0.97 * pa)
     else
       love.graphics.setColor(1, 1, 1, (hov3 and 0.85 or 0.55) * pa)
     end
     print_tracked(TAB_3, tx, tab_y, 2, font)
     if page == 3 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * pa)
+      set_col(ACC, 0.95 * pa)
       love.graphics.rectangle("fill", HIT.t3_x, HIT.tab_y + tab_h, t3w, 2)
     end
     tx = tx + t3w + U * 2
@@ -814,9 +816,9 @@ function Panel.draw()
     HIT.pr_x, HIT.pr_w = HIT.cl_x - prw - U * 3, prw
     local hovp = open and in_rect(mx, my, HIT.pr_x, HIT.tab_y, prw, tab_h)
     if hovp then
-      love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.55 * pa)
+      set_col(FRD, 0.55 * pa)
       love.graphics.rectangle("fill", HIT.pr_x, HIT.tab_y, prw, tab_h)
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+      set_col(ACC, 0.97 * pa)
     else
       love.graphics.setColor(1, 1, 1, 0.55 * pa)
     end
@@ -824,9 +826,9 @@ function Panel.draw()
 
     local hovx = open and in_rect(mx, my, HIT.cl_x, HIT.cl_y, clw, tab_h)
     if hovx then
-      love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.55 * pa)
+      set_col(FRD, 0.55 * pa)
       love.graphics.rectangle("fill", HIT.cl_x, HIT.cl_y, clw, tab_h)
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+      set_col(ACC, 0.97 * pa)
     else
       love.graphics.setColor(1, 1, 1, 0.55 * pa)
     end
@@ -839,7 +841,7 @@ function Panel.draw()
         if age > SAVED_HOLD then
           fa = 0.90 * (1 - Motion.anim01(age - SAVED_HOLD, Motion.dur(Motion.SLOW)))
         end
-        love.graphics.setColor(ACC[1], ACC[2], ACC[3], fa * pa)
+        set_col(ACC, fa * pa)
         love.graphics.print(flash_text, HIT.cl_x - U * 2 - font:getWidth(flash_text), tab_y)
       else
         flash_text = nil
@@ -847,7 +849,7 @@ function Panel.draw()
     end
   end
 
-  love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * pa)
+  set_col(ACC, 0.95 * pa)
   love.graphics.rectangle("fill", px, py + title_h, pw, 2)
 
   local cy = py + title_h + 2 + U
@@ -857,7 +859,7 @@ function Panel.draw()
     HIT.rows[i] = y
     local hovered = mouse_in_panel and my >= y and my < y + row_h
     if hovered then
-      love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.45 * pa)
+      set_col(FRD, 0.45 * pa)
       love.graphics.rectangle("fill", px + 2, y - 1, pw - 4, row_h)
     end
     return hovered
@@ -870,9 +872,9 @@ function Panel.draw()
       local d = defs[i]
       if r.header then
         love.graphics.setFont(font_small)
-        love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.72 * pa)
+        set_col(ACC, 0.72 * pa)
         love.graphics.print(r.header, px + GUT, cy + (header_h - small_h) - 1)
-        love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.50 * pa)
+        set_col(FRD, 0.50 * pa)
         love.graphics.rectangle("fill", px + GUT, cy + header_h - 2, pw - GUT * 2, 1)
         love.graphics.setFont(font)
         cy = cy + header_h
@@ -880,7 +882,7 @@ function Panel.draw()
       local hovered = row_chrome(i, cy)
       local selected = i == sel
       if selected then
-        love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.90 * pa)
+        set_col(ACC, 0.90 * pa)
         love.graphics.rectangle("fill", px + U, cy, 2, text_h)
         love.graphics.setColor(1, 1, 1, 0.98 * pa)
       else
@@ -892,13 +894,13 @@ function Panel.draw()
         local la_hov = hovered and mx >= HIT.la_x and mx < HIT.la_x + HIT.arrow_w
         local ra_hov = hovered and mx >= HIT.ra_x and mx < HIT.ra_x + HIT.arrow_w
         if la_hov then
-          love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+          set_col(ACC, 0.97 * pa)
         else
           love.graphics.setColor(1, 1, 1, 0.45 * pa)
         end
         love.graphics.print("<", HIT.la_x + 2, cy)
         if ra_hov then
-          love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.97 * pa)
+          set_col(ACC, 0.97 * pa)
         else
           love.graphics.setColor(1, 1, 1, 0.45 * pa)
         end
@@ -930,7 +932,7 @@ function Panel.draw()
     end
 
     cy = cy + U
-    love.graphics.setColor(FRD[1], FRD[2], FRD[3], 0.90 * pa)
+    set_col(FRD, 0.90 * pa)
     love.graphics.rectangle("fill", px + U, cy, pw - U * 2, 1)
     cy = cy + U
 
@@ -938,15 +940,15 @@ function Panel.draw()
     row_chrome(st_i, cy)
     local st_sel = sel == st_i
     if st_sel then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.90 * pa)
+      set_col(ACC, 0.90 * pa)
       love.graphics.rectangle("fill", px + U, cy, 2, text_h)
     end
     if page == 3 then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], (st_sel and 0.97 or 0.62) * pa)
+      set_col(ACC, (st_sel and 0.97 or 0.62) * pa)
       love.graphics.print(RESET_RUNTIME_LABEL, px + GUT, cy)
     else
       if st_avail then
-        love.graphics.setColor(ACC[1], ACC[2], ACC[3], (st_sel and 0.97 or 0.85) * pa)
+        set_col(ACC, (st_sel and 0.97 or 0.85) * pa)
       else
         love.graphics.setColor(1, 1, 1, (st_sel and 0.55 or 0.40) * pa)
       end
@@ -984,7 +986,7 @@ function Panel.draw()
         love.graphics.setColor(rr, gg, bb, 1.0 * pa)
         love.graphics.rectangle("fill", sx, cy, sw_sz, sw_sz)
         local hov = mouse_in_panel and in_rect(mx, my, sx, cy, sw_sz, sw_sz)
-        love.graphics.setColor(FR[1], FR[2], FR[3], (hov and 0.97 or 0.55) * pa)
+        set_col(FR, (hov and 0.97 or 0.55) * pa)
         love.graphics.setLineWidth(1)
         love.graphics.rectangle("line", sx, cy, sw_sz, sw_sz)
       end
@@ -1001,7 +1003,7 @@ function Panel.draw()
       row_chrome(i, cy)
       local selected = i == sel
       if selected then
-        love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.90 * pa)
+        set_col(ACC, 0.90 * pa)
         love.graphics.rectangle("fill", px + U, cy, 2, text_h)
         love.graphics.setColor(1, 1, 1, 0.98 * pa)
       else
@@ -1024,7 +1026,7 @@ function Panel.draw()
         local vr, vg, vb, va
         if editing and ch == caret then
           vr, vg, vb, va = ACC[1], ACC[2], ACC[3], 0.98
-          love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.95 * pa)
+          set_col(ACC, 0.95 * pa)
           love.graphics.rectangle("fill", hx, cy + text_h, hexw, 2)
         elseif typing then
           vr, vg, vb, va = ACC[1], ACC[2], ACC[3], 0.90
@@ -1041,9 +1043,9 @@ function Panel.draw()
 
       local swx = hx + U * 2
       local c = r.color
-      love.graphics.setColor(c[1], c[2], c[3], 1.0 * pa)
+      set_col(c, 1.0 * pa)
       love.graphics.rectangle("fill", swx, cy + 1, 24, text_h - 2)
-      love.graphics.setColor(FR[1], FR[2], FR[3], 0.90 * pa)
+      set_col(FR, 0.90 * pa)
       love.graphics.rectangle("line", swx, cy + 1, 24, text_h - 2)
 
       love.graphics.setColor(1, 1, 1, 0.32 * pa)
@@ -1056,7 +1058,7 @@ function Panel.draw()
     local ra_sel = sel == ra_i
     local rr, rg, rb, ra2
     if ra_sel then
-      love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.90 * pa)
+      set_col(ACC, 0.90 * pa)
       love.graphics.rectangle("fill", px + U, cy, 2, text_h)
       rr, rg, rb, ra2 = ACC[1], ACC[2], ACC[3], 0.97
     else

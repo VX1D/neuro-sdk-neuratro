@@ -12,6 +12,12 @@ local function now_secs()
   return os.time()
 end
 
+local function write_and_close(f, data)
+  local ok = pcall(function() f:write(data); f:flush() end)
+  pcall(f.close, f)
+  return ok
+end
+
 local function path_join(dir, file)
   local sep = package.config:sub(1, 1)
   if dir:sub(-1) == sep then
@@ -150,9 +156,10 @@ function Bridge:write_file(file, data)
   if not f then
     return false
   end
-  f:write(data)
-  f:flush()
-  f:close()
+  if not write_and_close(f, data) then
+    os.remove(temp_path)
+    return false
+  end
   local ok = os.rename(temp_path, path)
   if not ok then
     -- never remove the destination first: a failed retry would leave it missing
@@ -161,10 +168,11 @@ function Bridge:write_file(file, data)
       os.remove(temp_path)   -- don't orphan the .tmp when both rename and fallback-open fail
       return false
     end
-    dst:write(data)
-    dst:flush()
-    dst:close()
+    local wok = write_and_close(dst, data)
     os.remove(temp_path)
+    if not wok then
+      return false
+    end
   end
   return true
 end
@@ -173,24 +181,24 @@ function Bridge:append_file(file, data)
   if not self.fs_dir then
     if love and love.filesystem then
       local info = love.filesystem.getInfo(file)
+      local ok
       if info then
-        love.filesystem.append(file, data)
+        ok = love.filesystem.append(file, data)
       else
-        love.filesystem.write(file, data)
+        ok = love.filesystem.write(file, data)
       end
+      return not not ok
     end
-    return
+    return false
   end
 
   local path = self:fs_path(file)
   local f = io.open(path, "ab")
-  if f then
-    f:write(data)
-    f:flush()
-    f:close()
-  else
+  if not f or not write_and_close(f, data) then
     Metrics.incr("ipc_append_fail")
+    return false
   end
+  return true
 end
 
 function Bridge:set_message_handler(fn)
@@ -224,13 +232,48 @@ function Bridge:_decorate(message)
   return message
 end
 
+local OUTBOX_BACKLOG_MAX = 256
+
+function Bridge:_outbox_push(line)
+  local bl = self._outbox_backlog
+  if not bl then bl = {}; self._outbox_backlog = bl end
+  bl[#bl + 1] = line
+  while #bl > OUTBOX_BACKLOG_MAX do
+    table.remove(bl, 1)
+    Metrics.incr("ipc_outbox_dropped")
+  end
+end
+
+function Bridge:_outbox_flush()
+  local bl = self._outbox_backlog
+  if not bl then return true end
+  while #bl > 0 do
+    if not self:append_file(self.outbox_file, bl[1]) then
+      return false
+    end
+    table.remove(bl, 1)
+  end
+  return true
+end
+
 function Bridge:send(message)
   if not self.enabled then
     return
   end
   message = self:_decorate(message)
-  local line = json.encode(message)
-  self:append_file(self.outbox_file, line .. "\n")
+  local line = json.encode(message) .. "\n"
+  if self:_outbox_flush() and self:append_file(self.outbox_file, line) then
+    if self._send_failed then
+      self._send_failed = nil
+      print("[neuro-game] IPC outbox recovered -- buffered results flushed")
+    end
+  else
+    self:_outbox_push(line)
+    if not self._send_failed then
+      self._send_failed = true
+      print("[neuro-game] IPC outbox append failed -- buffering (results delayed, not dropped)")
+    end
+  end
   Metrics.incr("ipc_send")
   Metrics.set("ipc_seq", self.seq)
 end
@@ -485,6 +528,9 @@ end
 local Tuning = require("core.tuning")
 
 function Bridge:update(_dt)
+  if self.enabled and self._outbox_backlog and #self._outbox_backlog > 0 then
+    self:_outbox_flush()
+  end
   local _np = now_secs()
   if (_np - (self._last_poll or 0)) >= 0.005 then
     self._last_poll = _np

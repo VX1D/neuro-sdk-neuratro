@@ -59,7 +59,7 @@ local function consumables_section()
     local sel = max_h and (tostring(min_h) .. "-" .. tostring(max_h)) or "-"
     -- ok=N can mean a full output slot, not just an unusable card
     local ok = CardUtil.consumable_usable_now(card) and "Y" or "N"
-    rows[#rows + 1] = { tostring(i), name, set, "$" .. tostring(card.sell_cost or 0), sel, ok, desc }
+    rows[#rows + 1] = { tostring(i), name, set, Utils.money(card.sell_cost), sel, ok, desc }
   end
   local chdr = "C[" .. CardUtil.slot_status_text(CardUtil.consumable_slot_status()) .. "]:i,n,t,$,sel,ok,d"
   return join_rows(chdr, rows)
@@ -160,7 +160,7 @@ local function stake_list_line()
 end
 
 local function game_over_section()
-  if not (G and G.GAME) then return nil end
+  if not Utils.game_ready() then return nil end
   local outcome = G.GAME.won and "WON" or "lost"
   local ante = G.GAME.round_resets and G.GAME.round_resets.ante or "?"
   local round = G.GAME.round or "?"
@@ -168,7 +168,7 @@ local function game_over_section()
 end
 
 local function run_section()
-  if not (G and G.GAME) then return nil end
+  if not Utils.game_ready() then return nil end
   local game = G.GAME
   local deck_name = "-"
   local _bobj = game.back or game.selected_back
@@ -221,7 +221,7 @@ local function deck_size_line()
 end
 
 local function action_memory_section(state_name)
-  if not (G and G.NEURO) then return nil end
+  if not Utils.neuro_ready() then return nil end
 
   local parts = {}
   local recent = G.NEURO.recent_actions

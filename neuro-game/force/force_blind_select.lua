@@ -18,7 +18,7 @@ local function build()
     local choices = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
     local boss_key = choices and choices.Boss
     local bdef = boss_key and G.P_BLINDS and G.P_BLINDS[boss_key]
-    if bdef and (bdef.name or boss_key) == "The Ox" then
+    if DebuffFacts.blind_is(bdef, "bl_ox") then
       ox_hint = "Boss The Ox: playing your most-played hand (" .. tostring(DebuffFacts.most_played_hand() or "?") .. ") sets your money to $0. "
     end
   end

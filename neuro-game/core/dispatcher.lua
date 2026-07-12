@@ -62,7 +62,6 @@ end
 local TX_CACHE_MAX = 256
 
 -- defer window protects a just-set deferred failure from a later success; divides by game speed (delays fire on the TOTAL clock)
-local _dotenv = require("util.dotenv")
 local _Tuning = require("core.tuning")
 local function defer_window()
   local sp = _Tuning.game_speed()
@@ -773,21 +772,32 @@ function Dispatcher.route_message(msg, bridge)
 
   if msg.command == "action" and msg.data then
     local id = msg.data.id
-    if replay_if_settled(bridge, id) then return end
+    local name = msg.data.name
+    local handled = false
+    local ok_route = xpcall(function()
+      if replay_if_settled(bridge, id) then handled = true; return end
 
-    -- operator pause (F8 panel): reject without settling the id so a post-resume retry runs normally
-    if G and G.NEURO and G.NEURO.llm_paused then
-      if bridge and bridge.send_action_result then
-        bridge:send_action_result(id, false, "Paused by operator — retry shortly.")
+      -- operator pause (F8 panel): reject without settling the id so a post-resume retry runs normally
+      if G and G.NEURO and G.NEURO.llm_paused then
+        if bridge and bridge.send_action_result then
+          bridge:send_action_result(id, false, "Paused by operator — retry shortly.")
+        end
+        handled = true; return
       end
-      return
-    end
 
-    local ok_stage, Staging = pcall(require, "core.staging")
-    if ok_stage and Staging and Staging.should_stage and Staging.should_stage(msg) then
-      Staging.queue(msg, bridge)
+      local ok_stage, Staging = pcall(require, "core.staging")
+      if ok_stage and Staging and Staging.should_stage and Staging.should_stage(msg) then
+        Staging.queue(msg, bridge)
+        handled = true
+      end
+    end, debug.traceback)
+    if not ok_route then
+      Metrics.incr("dispatch_route_throw")
+      pcall(send_result, bridge, id, false,
+        "Internal error while routing this action; the game state is unchanged -- choose again.", name)
       return
     end
+    if handled then return end
   end
 
   Dispatcher.handle_message(msg, bridge)
