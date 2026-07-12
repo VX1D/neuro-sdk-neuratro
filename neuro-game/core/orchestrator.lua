@@ -1,21 +1,21 @@
 local Orchestrator = {}
 
-local Utils = require "util.utils"
+local Utils = require("util.utils")
 local S = require("hud.state")
-local Tuning = require "core.tuning"
-local ContextCompact = require "context.context_compact"
-local CtxHand = require "context.ctx_hand"
-local Staging = require "core.staging"
+local Tuning = require("core.tuning")
+local ContextCompact = require("context.context_compact")
+local CtxHand = require("context.ctx_hand")
+local Staging = require("core.staging")
 -- core.selftest is loaded lazily below (only when a run is active or requested on boot), not required here
-local NeuroState = require "core.state"
-local StateKinds = require "core.state_kinds"
-local NeuroActions = require "core.actions"
-local NeuroDispatcher = require "core.dispatcher"
-local DebugStats = require "render.debug_stats"
-local HUD = require "render.hud_overlay"
-local BridgeInit = require "core.bridge_init"
-local ForceHelpers = require "force.force_helpers"
-local DeckNames = require "facts.deck_names"
+local NeuroState = require("core.state")
+local StateKinds = require("core.state_kinds")
+local NeuroActions = require("core.actions")
+local NeuroDispatcher = require("core.dispatcher")
+local DebugStats = require("render.debug_stats")
+local HUD = require("render.hud_overlay")
+local BridgeInit = require("core.bridge_init")
+local ForceHelpers = require("force.force_helpers")
+local DeckNames = require("facts.deck_names")
 local NeuroAnim = require("render.neuro-anim")
 local neuro_now = Utils.now
 
@@ -44,7 +44,7 @@ local function mark_force_dirty() Lifecycle.mark_force_dirty(false) end
 
 -- roster-only sig: re-sends gate on WHO you own + run economy, never on scaling ticks (live numbers ride volatile J rows)
 local function stable_content_sig()
-  if not (G and G.GAME) then return "-" end
+  if not Utils.game_ready() then return "-" end
   local p = {}
   local function roster(area)
     if not (area and area.cards) then return end
@@ -74,30 +74,30 @@ local function emit_level_delta()
   if not (G and G.GAME and G.GAME.hands and G.NEURO and G.NEURO.send_context) then return end
   local msg, cur = LevelDelta.compute(G.GAME.hands, G.NEURO.hand_level_snapshot)
   G.NEURO.hand_level_snapshot = cur
-  if msg then pcall(function() G.NEURO:send_context(msg, true) end) end
+  if msg then Utils.send_context(msg, true) end
 end
 
 local TokenLegends = require("facts.token_legends")
 local once_until = ForceHelpers.once_until
 -- retained context persists, so it need not be re-sent every turn
 local function emit_state_glossary(state_name)
-  if not (G and G.NEURO and G.NEURO.send_context) then return end
+  if not Utils.can_send() then return end
   local cat, text = TokenLegends.for_state(state_name)
   if not (cat and text) then return end
   local ante = (G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante) or 0
   -- shared token core rides its own once-per-ante message so state legends don't repeat it
   if once_until("gloss:common", ante) then
-    pcall(function() G.NEURO:send_context("GLOSS| " .. TokenLegends.COMMON, true) end)
+    Utils.send_context("GLOSS| " .. TokenLegends.COMMON, true)
   end
   if not once_until("gloss:" .. cat, ante) then return end
-  pcall(function() G.NEURO:send_context("GLOSS| " .. text, true) end)
+  Utils.send_context("GLOSS| " .. text, true)
 end
 
 -- stable only where jokers/vouchers inform decisions; skipping the rest avoids content flapping (ROUND_EVAL carries no JD)
 local STABLE_STATES = { SELECTING_HAND = true, SHOP = true, BLIND_SELECT = true }
 
 local function maybe_emit_stable_context(state_name)
-  if not (G and G.NEURO and G.NEURO.send_context) then return end
+  if not Utils.can_send() then return end
   if not (STABLE_STATES[state_name] or StateKinds.is_pack_state(state_name)) then return end
   -- level deltas ride their own message; must run before the sig gate
   emit_level_delta()
@@ -132,7 +132,7 @@ local function register_valid_actions(state_name)
 end
 
 local function neuro_can_act()
-  if not (G and G.NEURO) then return false end
+  if not Utils.neuro_ready() then return false end
   local now = neuro_now()
   if (now - S.state_changed_at) < Tuning.get("NEURO_STATE_COOLDOWN") then
     return false
@@ -221,7 +221,7 @@ function Orchestrator.update(dt, original_love_update)
   end)
 
   if not update_success then
-    local now = os.clock()
+    local now = neuro_now()
     local msg = tostring(update_err)
     if now > _game_err_cd or msg ~= _game_err_last_msg then
       print("[neuro-game] Warning: Game update error: " .. msg)
@@ -229,7 +229,7 @@ function Orchestrator.update(dt, original_love_update)
       _game_err_cd = now + 5
     end
   else
-    if _game_err_cd > 0 and os.clock() > _game_err_cd then
+    if _game_err_cd > 0 and neuro_now() > _game_err_cd then
       _game_err_cd = 0
       _game_err_last_msg = nil
     end

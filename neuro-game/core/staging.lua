@@ -1,11 +1,11 @@
 
 local Staging = {}
-local Utils = require "util.utils"
-local CardArea = require "facts.card_area_util"
-local CtxHelpers = require "context.ctx_helpers"
-local ForceHelpers = require "force.force_helpers"
+local Utils = require("util.utils")
+local CardArea = require("facts.card_area_util")
+local CtxHelpers = require("context.ctx_helpers")
+local ForceHelpers = require("force.force_helpers")
 
-local Tuning = require "core.tuning"
+local Tuning = require("core.tuning")
 
 local HOLD_ALL_SELECTED_BASE = 1.1
 local HOVER_DEFAULT_BASE     = 0.5
@@ -90,8 +90,8 @@ local function cancel_staged(reason, transient)
     pcall(bridge.send_action_result, bridge, id, false, reason or "Action cancelled")
     -- transient cancels are retryable; do not settle the id or a retry replays the cancellation
     if not transient then
-      local ok_d, D = pcall(require, "core.dispatcher")
-      if ok_d and D.record_tx then D.record_tx(id, false, reason or "Action cancelled") end
+      local D = Utils.lazy_require("core.dispatcher")
+      if D and D.record_tx then D.record_tx(id, false, reason or "Action cancelled") end
     end
   end
 
@@ -119,7 +119,7 @@ local function card_effect(card)
       if ab.extra.money then return "+$" .. ab.extra.money end
     end
   end
-  if card.cost and card.cost > 0 then return "$" .. card.cost end
+  if card.cost and card.cost > 0 then return Utils.money(card.cost) end
   return nil
 end
 
@@ -299,8 +299,8 @@ function Staging.queue(msg, bridge)
     local raw_id = msg.data and msg.data.id
     if raw_id ~= nil and bridge and bridge.send_action_result then
       bridge:send_action_result(raw_id, false, "Staging resolve failed: " .. tostring(cards))
-      local ok_d, D = pcall(require, "core.dispatcher")
-      if ok_d and D.record_tx then D.record_tx(raw_id, false, "Staging resolve failed") end
+      local D = Utils.lazy_require("core.dispatcher")
+      if D and D.record_tx then D.record_tx(raw_id, false, "Staging resolve failed") end
     end
     if G and G.NEURO then
       ForceHelpers.record_failure(msg.data and msg.data.name or "action", "the action could not be staged")
@@ -325,8 +325,8 @@ function Staging.queue(msg, bridge)
     phase = "HOVER",
     start = now(),
     state_at_queue = (function()
-      local ok_st, State = pcall(require, "core.state")
-      return (ok_st and State and State.get_state_name and State.get_state_name())
+      local State = Utils.lazy_require("core.state")
+      return (State and State.get_state_name and State.get_state_name())
         or (G and G.NEURO and G.NEURO.state) or nil
     end)(),
   }
@@ -357,8 +357,8 @@ function Staging.update()
     end
 
     -- compare LIVE state: the G.NEURO.state mirror lags Staging.update by a frame, so a staged action could execute in the new state
-    local ok_st, State = pcall(require, "core.state")
-    local live_state = ok_st and State and State.get_state_name and State.get_state_name()
+    local State = Utils.lazy_require("core.state")
+    local live_state = State and State.get_state_name and State.get_state_name()
     -- an unresolvable live_state (nil) must also cancel, not just a state mismatch
     if staged.state_at_queue and (not live_state or live_state ~= staged.state_at_queue) then
       cancel_staged("Action cancelled: game state changed", true)
@@ -455,9 +455,9 @@ function Staging.update()
 
   if not ok then
     local msg = tostring(err)
-    local clk = os.clock()
+    local clk = Utils.now()
     if clk > _upd_err_cd or msg ~= _upd_err_last then
-      print("[neuro-staging] update error: " .. msg)
+      print("[neuro-game] staging update error: " .. msg)
       _upd_err_last = msg
       _upd_err_cd = clk + 5
     end

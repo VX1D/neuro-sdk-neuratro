@@ -1,8 +1,8 @@
 local Emotes = {}
 
 local S = require("hud.state")
-local Paths = require "core.mod_paths"
-local Utils = require "util.utils"
+local Paths = require("core.mod_paths")
+local Utils = require("util.utils")
 
 local neuro_log = Utils.neuro_log
 
@@ -50,7 +50,7 @@ function Emotes.get(name)
       fps = tonumber(fps) or 10
     else
       fh, fw = sh, sh
-      n = math.max(1, math.floor(sw / sh))
+      n = (sh > 0) and math.max(1, math.floor(sw / sh)) or 1
       fps = 10
     end
     local quads = {}

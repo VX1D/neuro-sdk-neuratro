@@ -2,7 +2,7 @@ local Showcase = {}
 
 local S = require("hud.state")
 local StateKinds = require("core.state_kinds")
-local Prims = require "hud.prims"
+local Prims = require("hud.prims")
 local smoothstep01 = Prims.smoothstep01
 
 Showcase.FOOTER_SLOT_DURATION = 5.0
@@ -11,6 +11,7 @@ Showcase.JOKER_SHOWCASE_DURATION = 4.8
 Showcase.JOKER_SHOWCASE_FADE_IN = 0.30
 Showcase.JOKER_SHOWCASE_FADE_OUT = 0.55
 Showcase.BUY_SHOWCASE_DURATION = 1.8
+Showcase.MONEY_COUNT_DURATION = 0.35
 local BUY_SHOWCASE_DURATION = Showcase.BUY_SHOWCASE_DURATION
 local BUY_SHOWCASE_FADE_IN = 0.16
 local BUY_SHOWCASE_FADE_OUT = 0.30

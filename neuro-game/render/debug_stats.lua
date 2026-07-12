@@ -1,7 +1,9 @@
-local Palette = require "render.palette"
-local Utils = require "util.utils"
+local Palette = require("render.palette")
+local Utils = require("util.utils")
 local Motion = require("render.neuro-anim").Motion
-local Metrics = require "util.metrics"
+local Metrics = require("util.metrics")
+local Prims = require("hud.prims")
+local set_col, shadow_text = Prims.set_col, Prims.shadow_text
 
 local M = {}
 
@@ -11,7 +13,7 @@ local NPAGES = #PAGES
 local FRAME_CAP = 180
 local sf = string.format
 
-local PERF_LOG = require("core.config").bool("NEURO_PERF_LOG")
+local PERF_LOG = require("core.tuning").bool("NEURO_PERF_LOG")
 local PERF_LOG_CAP = 16 * 1024 * 1024  -- append-only jsonl grew ~2MB/h unbounded on long streams
 local _perf_bytes = 0
 local _perf_seeded = false
@@ -385,12 +387,12 @@ function M.draw()
   local acc = pal.ACCENT
   love.graphics.setColor(0, 0, 0, 0.55 * ga)
   love.graphics.rectangle("fill", x + 2, y + 2, w, h)
-  love.graphics.setColor(bgc[1], bgc[2], bgc[3], 0.90 * ga)
+  set_col(bgc, 0.90 * ga)
   love.graphics.rectangle("fill", x, y, w, h)
-  love.graphics.setColor(frc[1], frc[2], frc[3], 0.90 * ga)
+  set_col(frc, 0.90 * ga)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", x, y, w, h)
-  love.graphics.setColor(acc[1], acc[2], acc[3], 0.85 * ga)
+  set_col(acc, 0.85 * ga)
   love.graphics.rectangle("fill", x, y + pad + lh - 3, w, 2)
 
   local ty = y + pad
@@ -400,10 +402,7 @@ function M.draw()
     for j = 1, #segs do
       local s = segs[j]
       local c = s.c or pal.D_WHITE
-      love.graphics.setColor(0, 0, 0, 0.35 * ga)
-      love.graphics.print(s.t, tx + 1, ty + 1)
-      love.graphics.setColor(c[1], c[2], c[3], (c[4] or 1) * ga)
-      love.graphics.print(s.t, tx, ty)
+      shadow_text(s.t, tx, ty, c, (c[4] or 1) * ga, 0.35 * ga)
       tx = tx + use_font:getWidth(s.t)
     end
     ty = ty + lh

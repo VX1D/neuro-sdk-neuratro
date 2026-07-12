@@ -1,10 +1,10 @@
-local Palette  = require "render.palette"
-local Prims    = require "hud.prims"
-local Cards    = require "hud.cards"
-local CardUtil = require "facts.card_util"
-local Showcase = require "hud.showcase"
-local Utils    = require "util.utils"
-local S        = require "hud.state"
+local Palette  = require("render.palette")
+local Prims    = require("hud.prims")
+local Cards    = require("hud.cards")
+local CardUtil = require("facts.card_util")
+local Showcase = require("hud.showcase")
+local Utils    = require("util.utils")
+local S        = require("hud.state")
 
 local lg = love.graphics
 local Motion = Prims.Motion
@@ -34,17 +34,8 @@ local function persona(th)
   return th.persona_evil, th.persona_neuro
 end
 
-local function set_col(c, a)
-  lg.setColor(c[1], c[2], c[3], a)
-end
-
-local function shadow_text(txt, x, y, col, a, sh_a, off)
-  off = off or 1
-  lg.setColor(0, 0, 0, sh_a)
-  lg.print(txt, x + off, y + off)
-  lg.setColor(col[1], col[2], col[3], a)
-  lg.print(txt, x, y)
-end
+local set_col = Prims.set_col
+local shadow_text = Prims.shadow_text
 
 -- opts: { a, sh, rad, title_h, skip_body (neuro), glow (evil counter_glow) }; returns prad
 local function persona_frame(th, mo, x, y, w, h, u, opts)

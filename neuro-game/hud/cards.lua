@@ -2,10 +2,10 @@ local Cards = {}
 Cards._mini_edition_fail = 0
 Cards._mini_fallback = 0
 
-local Palette = require "render.palette"
-local Utils = require "util.utils"
+local Palette = require("render.palette")
+local Utils = require("util.utils")
 local S = require("hud.state")
-local Prims = require "hud.prims"
+local Prims = require("hud.prims")
 local smoothstep01 = Prims.smoothstep01
 
 local neuro_log = Utils.neuro_log
@@ -446,7 +446,7 @@ local function rarity_color(card)
   return nil
 end
 
-local ENABLE_AI_CARD_GLOW = require("core.config").bool("NEURO_AI_CARD_GLOW")
+local ENABLE_AI_CARD_GLOW = require("core.tuning").bool("NEURO_AI_CARD_GLOW")
 
 -- _gc carries the transform-push flag to the wrapper, which owns the matching pop
 local _gc = { pushed = false }

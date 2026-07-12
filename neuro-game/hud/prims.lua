@@ -1,4 +1,4 @@
-local Utils = require "util.utils"
+local Utils = require("util.utils")
 local dotenv = require("util.dotenv")
 local NeuroAnim = require("render.neuro-anim")
 
@@ -21,6 +21,27 @@ Prims.EVIL = {
 }
 
 Prims.now = Utils.now
+
+local floor = math.floor
+local function round(x) return floor(x + 0.5) end
+Prims.round = round
+
+local function set_col(c, a)
+  love.graphics.setColor(c[1], c[2], c[3], a)
+end
+Prims.set_col = set_col
+
+local function shadow_text(txt, x, y, col, a, sh_a, off)
+  off = off or 1
+  love.graphics.setColor(0, 0, 0, sh_a)
+  love.graphics.print(txt, x + off, y + off)
+  love.graphics.setColor(col[1], col[2], col[3], a)
+  love.graphics.print(txt, x, y)
+end
+Prims.shadow_text = shadow_text
+
+Prims.clamp = Utils.clamp
+Prims.clamp01 = Utils.clamp01
 
 function Prims.smoothstep01(f)
   if f < 0 then f = 0 elseif f > 1 then f = 1 end
@@ -274,8 +295,8 @@ local LINK_PX = parse_px({
 })
 
 local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
-  local x0 = math.floor(cx - pat.w * s / 2 + 0.5)
-  local y0 = math.floor(cy - pat.h * s / 2 + 0.5)
+  local x0 = round(cx - pat.w * s / 2)
+  local y0 = round(cy - pat.h * s / 2)
   if shadow then
     love.graphics.setColor(0, 0, 0, 0.55 * a)
     for i = 1, #pat, 3 do
@@ -291,15 +312,15 @@ local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
 end
 
 function Prims.draw_bow(cx, cy, u, col, a, col2)
-  draw_px(BOW_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), col, a, col2)
+  draw_px(BOW_PX, cx, cy, math.max(1, round(u * 1.5)), col, a, col2)
 end
 
 function Prims.draw_bow_mini(cx, cy, u, col, a, col2)
-  draw_px(BOW_HEAD_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), col, a, col2)
+  draw_px(BOW_HEAD_PX, cx, cy, math.max(1, round(u * 1.5)), col, a, col2)
 end
 
 function Prims.draw_heart(cx, cy, r, col, a)
-  draw_px(HEART_PX, cx, cy, math.max(1, math.floor(r / 3 + 0.5)), col, a)
+  draw_px(HEART_PX, cx, cy, math.max(1, round(r / 3)), col, a)
 end
 
 local BOW_WINE = { 0.45, 0.09, 0.13 }
@@ -311,31 +332,31 @@ local SEAL_HI = { 1, 0.92, 0.85 }
 
 
 function Prims.draw_dark_bow_mini(cx, cy, u, acc, a, gold, shadow, body)
-  draw_px(DARK_BOW_HEAD_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), body or BOW_WINE, a, acc, gold, shadow)
+  draw_px(DARK_BOW_HEAD_PX, cx, cy, math.max(1, round(u * 1.5)), body or BOW_WINE, a, acc, gold, shadow)
 end
 
 function Prims.draw_evil_heart(cx, cy, r, acc, a, gold, shadow)
-  draw_px(EVIL_HEART_PX, cx, cy, math.max(1, math.floor(r / 3 + 0.5)), acc, a, gold, nil, shadow)
+  draw_px(EVIL_HEART_PX, cx, cy, math.max(1, round(r / 3)), acc, a, gold, nil, shadow)
 end
 
 function Prims.draw_horns(cx, cy, r, acc, a, gold, shadow)
-  draw_px(HORNS_PX, cx, cy, math.max(1, math.floor(r / 3 + 0.5)), acc, a, gold, nil, shadow)
+  draw_px(HORNS_PX, cx, cy, math.max(1, round(r / 3)), acc, a, gold, nil, shadow)
 end
 
 function Prims.draw_skull(cx, cy, r, col, a, gold, shadow)
-  draw_px(SKULL_PX, cx, cy, math.max(1, math.floor(r / 3 + 0.5)), col, a, gold, SKULL_SOCK, shadow)
+  draw_px(SKULL_PX, cx, cy, math.max(1, round(r / 3)), col, a, gold, SKULL_SOCK, shadow)
 end
 
 function Prims.corner_brand(cx, cy, u, crimson, bone, a, shadow)
-  draw_px(BOW_SKULL_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), crimson, a, nil, bone, shadow)
+  draw_px(BOW_SKULL_PX, cx, cy, math.max(1, round(u * 1.5)), crimson, a, nil, bone, shadow)
 end
 
 function Prims.draw_glint(cx, cy, r, acc, a, gold, shadow)
-  draw_px(GLINT_PX, cx, cy, math.max(1, math.floor(r / 2 + 0.5)), acc, a, gold, nil, shadow)
+  draw_px(GLINT_PX, cx, cy, math.max(1, round(r / 2)), acc, a, gold, nil, shadow)
 end
 
 function Prims.draw_knife(cx, cy, u, gold, silver, a, shadow)
-  draw_px(KNIFE_PX, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), BOW_WINE, a, gold, silver, shadow)
+  draw_px(KNIFE_PX, cx, cy, math.max(1, round(u * 1.5)), BOW_WINE, a, gold, silver, shadow)
 end
 
 -- look: -1/0/1 glances the pupil left/center/right (blink wins); hold: never blink
@@ -344,11 +365,11 @@ function Prims.draw_evil_eye(cx, cy, u, acc, a, now, reduced, shadow, look, hold
   if not reduced and not hold and (now % 4.7) < 0.12 then pat = EYE_SHUT_PX
   elseif look and look < 0 then pat = EYE_L_PX
   elseif look and look > 0 then pat = EYE_R_PX end
-  draw_px(pat, cx, cy, math.max(1, math.floor(u * 1.5 + 0.5)), acc, a, EYE_PUPIL, nil, shadow)
+  draw_px(pat, cx, cy, math.max(1, round(u * 1.5)), acc, a, EYE_PUPIL, nil, shadow)
 end
 
 function Prims.draw_diamond(cx, cy, u, col, a, shadow)
-  draw_px(DIAMOND_PX, cx, cy, math.max(1, math.floor(u * 0.75 + 0.5)), col, a, nil, nil, shadow)
+  draw_px(DIAMOND_PX, cx, cy, math.max(1, round(u * 0.75)), col, a, nil, nil, shadow)
 end
 
 function Prims.gothic_frame(x, y, w, h, u, gold, frd, a, rad, pulse)
@@ -424,7 +445,7 @@ end
 function Prims.candle_finial(cx, base_y, u, gold, a, now, reduced, flare)
   a = a or 1
   flare = flare or 0
-  cx, base_y = math.floor(cx + 0.5), math.floor(base_y + 0.5)
+  cx, base_y = round(cx), round(base_y)
   local bw, bh = u * 4, u * 7
   love.graphics.setColor(0.46, 0.06, 0.09, 0.95 * a)
   love.graphics.rectangle("fill", cx - u * 2, base_y - bh, bw, bh)
@@ -441,7 +462,7 @@ function Prims.candle_finial(cx, base_y, u, gold, a, now, reduced, flare)
   local gr2 = math.floor(gr * 0.55)
   love.graphics.setColor(gold[1], gold[2], gold[3], (0.08 + 0.05 * flick + 0.10 * flare) * a)
   love.graphics.rectangle("fill", cx - gr2, fy - u * 4 - gr2, gr2 * 2, gr2 * 2)
-  local s = math.max(1, math.floor(u * (1 + 0.5 * flick + 0.8 * flare) + 0.5))
+  local s = math.max(1, round(u * (1 + 0.5 * flick + 0.8 * flare)))
   local pat = (flick > 0.5) and FLAME_A_PX or FLAME_B_PX
   draw_px(pat, cx, fy - s * 2, s, gold, (0.85 + 0.10 * flick) * a, nil, FLAME_HOT)
 end
@@ -463,7 +484,7 @@ function Prims.ash_motes(x, y, w, h, u, now, reduced, a, n)
     else
       love.graphics.setColor(0.70, 0.18, 0.16, aa)
     end
-    love.graphics.rectangle("fill", math.floor(mx + 0.5), math.floor(my + 0.5), sz, sz)
+    love.graphics.rectangle("fill", round(mx), round(my), sz, sz)
   end
 end
 
@@ -474,21 +495,22 @@ function Prims.seal_after(end_x, cy, u, gold, a, pulse, r)
   return cx + r
 end
 
+local EMBER_BLOOM_RINGS = { { 1, 0.05 }, { 0.62, 0.08 }, { 0.34, 0.13 } }
 function Prims.ember_bloom(cx, cy, r, u, t01, gold, a, reduced)
   if reduced or t01 <= 0 or t01 >= 1 then return end
   a = a or 1
   local env = math.sin(math.pi * t01)
-  cx, cy = math.floor(cx + 0.5), math.floor(cy + 0.5)
-  for _, rf in ipairs({ { 1, 0.05 }, { 0.62, 0.08 }, { 0.34, 0.13 } }) do
-    local rr = math.floor(r * rf[1] + 0.5)
+  cx, cy = round(cx), round(cy)
+  for _, rf in ipairs(EMBER_BLOOM_RINGS) do
+    local rr = round(r * rf[1])
     love.graphics.setColor(gold[1], gold[2], gold[3], rf[2] * env * a)
     love.graphics.rectangle("fill", cx - rr, cy - rr, rr * 2, rr * 2)
   end
   local rise = Prims.ease_out_cubic01(t01)
   for ei = 1, 5 do
     local xr = math.sin(ei * 12.9898)
-    local ex = math.floor(cx + xr * r * 0.7 + math.sin(t01 * 5 + ei * 1.7) * u * 2 + 0.5)
-    local ey = math.floor(cy - rise * (r * (0.7 + 0.3 * math.abs(math.sin(ei * 78.233)))) + 0.5)
+    local ex = round(cx + xr * r * 0.7 + math.sin(t01 * 5 + ei * 1.7) * u * 2)
+    local ey = round(cy - rise * (r * (0.7 + 0.3 * math.abs(math.sin(ei * 78.233)))))
     local gg = 0.62 - 0.40 * rise
     love.graphics.setColor(1, gg, 0.16, (1 - t01) * 0.85 * a)
     love.graphics.rectangle("fill", ex, ey, (ei % 3 == 0) and u * 2 or u, (ei % 3 == 0) and u * 2 or u)
@@ -573,10 +595,10 @@ end
 
 function Prims.wax_seal(cx, cy, r, _u, gold, a, pulse, drip)
   pulse = pulse or 0.5
-  cx, cy = math.floor(cx + 0.5), math.floor(cy + 0.5)
-  local s = math.max(1, math.floor(r * 2 / 9 + 0.5))
+  cx, cy = round(cx), round(cy)
+  local s = math.max(1, round(r * 2 / 9))
   if drip then
-    local dl = math.floor(s * (2 + 2 * pulse) + 0.5)
+    local dl = round(s * (2 + 2 * pulse))
     love.graphics.setColor(0.29, 0.030, 0.055, 0.95 * a)
     love.graphics.rectangle("fill", cx + s, cy + s * 4, s, dl)
     love.graphics.rectangle("fill", cx + s, cy + s * 4 + dl, s, s)
@@ -645,7 +667,7 @@ function Prims.tag_string(x, y, w, u, r, g, b, a)
 end
 function Prims.quatrefoil(cx, cy, r, gold, a, pulse)
   pulse = pulse or 0.5
-  local s = math.max(1, math.floor(r * 2 / 9 + 0.5))
+  local s = math.max(1, round(r * 2 / 9))
   draw_px(QUATREFOIL_PX, cx, cy, s, gold, (0.80 + Prims.EVIL.PULSE_AMP * pulse) * a, BOW_WINE)
 end
 
@@ -678,7 +700,7 @@ end
 
 function Prims.ogive_top(x, y, w, u, gold, a, pulse)
   pulse = pulse or 0.5
-  x, y, w = math.floor(x + 0.5), math.floor(y + 0.5), math.floor(w + 0.5)
+  x, y, w = round(x), round(y), round(w)
   local E = Prims.EVIL
   local rise = math.min(u * 8, math.floor(w * 0.35))
   local steps = 4
@@ -707,23 +729,23 @@ end
 
 function Prims.chains(x, y0, y1, u, gold, a, sway)
   sway = sway or 0
-  local s = math.max(1, math.floor(u / 2 + 0.5))
+  local s = math.max(1, round(u / 2))
   local lh = s * 4   -- link is 5 tall; stride 4 overlaps 1px so links interlock
   local n = math.max(2, math.floor((y1 - y0) / lh))
   local la = 0.60 * a
   for i = 0, n - 1 do
     local t = i / n
-    local lx = math.floor(x + sway * t + 0.5)
-    local ly = math.floor(y0 + lh * i + 0.5)
+    local lx = round(x + sway * t)
+    local ly = round(y0 + lh * i)
     draw_px(LINK_PX, lx, ly + s * 2, s, gold, la)
   end
   love.graphics.setColor(gold[1], gold[2], gold[3], 0.80 * a)
-  love.graphics.rectangle("fill", math.floor(x + 0.5) - 1, math.floor(y0 + 0.5) - 1, 2, 2)
-  love.graphics.rectangle("fill", math.floor(x + sway + 0.5) - 1, math.floor(y1 + 0.5) - 1, 2, 2)
+  love.graphics.rectangle("fill", round(x) - 1, round(y0) - 1, 2, 2)
+  love.graphics.rectangle("fill", round(x + sway) - 1, round(y1) - 1, 2, 2)
 end
 
 function Prims.draw_sparkle(cx, cy, r, col, a)
-  draw_px(SPARK_PX, cx, cy, math.max(1, math.floor(r / 2 + 0.5)), col, a)
+  draw_px(SPARK_PX, cx, cy, math.max(1, round(r / 2)), col, a)
 end
 
 function Prims.embers(x, y, w, h, u, now, reduced, a, n)

@@ -1,7 +1,7 @@
 local ContextCompact = {}
-local Metrics = require "util.metrics"
-local GameFacts = require "facts.game_facts"
-local Utils = require "util.utils"
+local Metrics = require("util.metrics")
+local GameFacts = require("facts.game_facts")
+local Utils = require("util.utils")
 local safe_name = Utils.safe_name
 local flatten_description = Utils.flatten_description
 
@@ -9,12 +9,7 @@ local _gf = nil
 
 local CtxHelpers = require("context.ctx_helpers")
 
-local function to_set(list)
-  local out = {}
-  if not list then return out end
-  for _, key in ipairs(list) do out[key] = true end
-  return out
-end
+local to_set = Utils.list_to_set
 
 local has_action = CtxHelpers.has_action
 

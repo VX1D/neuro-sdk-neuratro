@@ -167,7 +167,7 @@ end
 
 local _ui_text_cache = setmetatable({}, { __mode = "k" })
 
-Utils.DEBUG = require("core.config").bool("NEURO_DEBUG")
+Utils.DEBUG = require("core.tuning").bool("NEURO_DEBUG")
 function Utils.neuro_log(...)
   if Utils.DEBUG then print("[neuro-game]", ...) end
 end
@@ -652,6 +652,32 @@ end
 Utils.strip_loc_tags = strip_loc_tags
 Utils.normalize_spaces = normalize_spaces
 function Utils.clean_plain(s) return normalize_spaces(strip_loc_tags(s)) end
+
+function Utils.money(n)
+  return "$" .. tostring(n or 0)
+end
+
+function Utils.clamp(v, lo, hi)
+  if v < lo then return lo elseif v > hi then return hi end
+  return v
+end
+function Utils.clamp01(v)
+  if v < 0 then return 0 elseif v > 1 then return 1 end
+  return v
+end
+
+function Utils.lazy_require(name)
+  local ok, mod = pcall(require, name)
+  return ok and mod or nil
+end
+
+function Utils.game_ready() return G and G.GAME end
+function Utils.neuro_ready() return G and G.NEURO end
+function Utils.can_send() return G and G.NEURO and G.NEURO.send_context end
+function Utils.send_context(msg, silent)
+  if not (G and G.NEURO and G.NEURO.send_context) then return end
+  pcall(function() G.NEURO:send_context(msg, silent) end)
+end
 
 -- %d wraps chips/scores >2^63 to INT64_MIN; exact int below 1e15 (double-precise), scientific above
 function Utils.fmt_num(n)

@@ -26,12 +26,12 @@ do
   end
 end
 
-local NeuroActions = require "core.actions"
-local NeuroDispatcher = require "core.dispatcher"
-local PersonaPalette = require "render.persona_palette"
-local HUD = require "render.hud_overlay"
-local Orchestrator = require "core.orchestrator"
-local trace = require "core.trace"
+local NeuroActions = require("core.actions")
+local NeuroDispatcher = require("core.dispatcher")
+local PersonaPalette = require("render.persona_palette")
+local HUD = require("render.hud_overlay")
+local Orchestrator = require("core.orchestrator")
+local trace = require("core.trace")
 local DebugStats, StagingDebug, TuningPanel
 local function _get_debug()
   if not DebugStats then
@@ -51,12 +51,12 @@ G.NEURO.actions = NeuroActions
 G.NEURO.dispatcher = NeuroDispatcher
 G.NEURO.ai_highlighted = G.NEURO.ai_highlighted or setmetatable({}, {__mode = "k"})
 
-local _NEURO_DEBUG = require("core.config").bool("NEURO_DEBUG")
+local _NEURO_DEBUG = require("core.tuning").bool("NEURO_DEBUG")
 local function neuro_log(...)
   if _NEURO_DEBUG then print("[neuro-game]", ...) end
 end
 
-local _overlay_dev = require("core.config").bool("NEURO_OVERLAY_DEV")
+local _overlay_dev = require("core.tuning").bool("NEURO_OVERLAY_DEV")
 local _overlay_isolate = _overlay_dev
 local DevScenario = _overlay_dev and require("hud.dev_scenario") or nil
 local _reload_err = nil

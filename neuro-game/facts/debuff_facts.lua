@@ -19,6 +19,19 @@ function M.blind_debuff(blind)
   return (type(blind) == "table" and type(blind.debuff) == "table") and blind.debuff or {}
 end
 
+local BOSS_NAMES = {
+  bl_ox = "The Ox", bl_eye = "The Eye", bl_mouth = "The Mouth",
+  bl_pillar = "The Pillar", bl_flint = "The Flint",
+  bl_serpent = "The Serpent", bl_arm = "The Arm",
+  bl_final_leaf = "Verdant Leaf", bl_final_bell = "Cerulean Bell",
+}
+local function blind_is(b, key)
+  if type(b) ~= "table" then return false end
+  if b.key == key then return true end
+  return b.name == BOSS_NAMES[key]
+end
+M.blind_is = blind_is
+
 local function loc_hand(name)
   if not name then return name end
   local loc = rawget(_G, "localize")
@@ -86,7 +99,7 @@ function M.blind_effect_text(key, blind_def)
   blind_def = blind_def or (G and G.P_BLINDS and key and G.P_BLINDS[key])
   if type(blind_def) ~= "table" then return "" end
   local vars = blind_def.vars
-  if blind_def.name == "The Ox" then
+  if blind_is(blind_def, "bl_ox") then
     local mp = M.most_played_hand()
     if mp then vars = { loc_hand(mp) } end
   end
@@ -107,23 +120,25 @@ end
 -- var order from Tag:get_uibox_table (tag.lua:570-585); also handles not-yet-created tags
 local function tag_vars(def, tag)
   local name = (tag and tag.name) or (def and def.name) or ""
+  local key = (tag and tag.key) or (def and def.key)
   local cfg = (tag and tag.config) or (def and def.config) or {}
-  if name == "Investment Tag" then return { cfg.dollars }
-  elseif name == "Handy Tag" then
+  local function is(k, nm) return key == k or name == nm end
+  if is("tag_investment", "Investment Tag") then return { cfg.dollars }
+  elseif is("tag_handy", "Handy Tag") then
     local d = cfg.dollars_per_hand
     return { d, d and d * ((G and G.GAME and G.GAME.hands_played) or 0) }
-  elseif name == "Garbage Tag" then
+  elseif is("tag_garbage", "Garbage Tag") then
     local d = cfg.dollars_per_discard
     return { d, d and d * ((G and G.GAME and G.GAME.unused_discards) or 0) }
-  elseif name == "Juggle Tag" then return { cfg.h_size }
-  elseif name == "Top-up Tag" then return { cfg.spawn_jokers }
-  elseif name == "Skip Tag" then
+  elseif is("tag_juggle", "Juggle Tag") then return { cfg.h_size }
+  elseif is("tag_top_up", "Top-up Tag") then return { cfg.spawn_jokers }
+  elseif is("tag_skip", "Skip Tag") then
     local d = cfg.skip_bonus
     return { d, d and d * (((G and G.GAME and G.GAME.skips) or 0) + 1) }
-  elseif name == "Orbital Tag" then
+  elseif is("tag_orbital", "Orbital Tag") then
     local oh = tag and tag.ability and tag.ability.orbital_hand
     return { oh and loc_hand(oh) or "[Poker Hand]", cfg.levels }
-  elseif name == "Economy Tag" then return { cfg.max }
+  elseif is("tag_economy", "Economy Tag") then return { cfg.max }
   end
   return {}
 end
@@ -203,7 +218,7 @@ end
 function M.has_hand_restriction()
   local b = G and G.GAME and G.GAME.blind
   if not (type(b) == "table" and not b.disabled) then return false end
-  if b.name == "The Eye" or b.name == "The Mouth" then return true end
+  if blind_is(b, "bl_eye") or blind_is(b, "bl_mouth") then return true end
   local d = b.debuff
   if type(d) == "table" and (tonumber(d.h_size_ge) or tonumber(d.h_size_le) or d.hand) then return true end
   local obj = b.config and b.config.blind
@@ -236,21 +251,21 @@ function M.boss_blocks_handname(handname)
   if not (type(b) == "table" and not b.disabled) or type(handname) ~= "string" then return false end
   local d = b.debuff
   if type(d) == "table" and d.hand and d.hand == handname then return true end
-  if b.name == "The Eye" and type(b.hands) == "table" and b.hands[handname] then return true end
-  if b.name == "The Mouth" and b.only_hand and b.only_hand ~= handname then return true end
+  if blind_is(b, "bl_eye") and type(b.hands) == "table" and b.hands[handname] then return true end
+  if blind_is(b, "bl_mouth") and b.only_hand and b.only_hand ~= handname then return true end
   return false
 end
 
 function M.boss_hand_restriction_note()
   local b = G and G.GAME and G.GAME.blind
   if not (type(b) == "table" and not b.disabled) then return nil end
-  if b.name == "The Mouth" then
+  if blind_is(b, "bl_mouth") then
     if b.only_hand then
       return "Boss (The Mouth): only " .. loc_hand(b.only_hand)
         .. " scores the rest of this round; every other hand type is debuffed to 0."
     end
     return "Boss (The Mouth): the first hand type you play locks every later hand this round to that same type (others score 0)."
-  elseif b.name == "The Eye" then
+  elseif blind_is(b, "bl_eye") then
     local used = {}
     if type(b.hands) == "table" then
       for hn, v in pairs(b.hands) do if v then used[#used + 1] = loc_hand(hn) end end
@@ -282,14 +297,13 @@ end
 function M.boss_play_note()
   local b = G and G.GAME and G.GAME.blind
   if not (type(b) == "table" and not b.disabled) then return nil end
-  local name = b.name
-  if name == "The Serpent" then
+  if blind_is(b, "bl_serpent") then
     return "Boss (The Serpent): after each play or discard you draw at most 3 cards (capped by remaining deck; hand size is ignored)."
-  elseif name == "The Arm" then
+  elseif blind_is(b, "bl_arm") then
     return "Boss (The Arm): each hand you play permanently lowers that hand type's level by 1, but never below level 1 (the Ready levels shown drop as you replay a type)."
-  elseif name == "Verdant Leaf" then
+  elseif blind_is(b, "bl_final_leaf") then
     return "Boss (Verdant Leaf): every card is debuffed (scores 0) until you SELL a joker -- sell one to lift it."
-  elseif name == "Cerulean Bell" then
+  elseif blind_is(b, "bl_final_bell") then
     local i = M.forced_selection_index()
     if i then
       return string.format("Boss (Cerulean Bell): card %d is force-selected (LOCK) and will always be part of the hand you play or discard -- include index %d in your selection.", i, i)
@@ -301,7 +315,7 @@ end
 
 function M.flint_active()
   local b = G and G.GAME and G.GAME.blind
-  return not not (b and not b.disabled and b.in_blind and b.name == "The Flint")
+  return not not (b and not b.disabled and b.in_blind and blind_is(b, "bl_flint"))
 end
 
 function M.flint_halve(chips, mult)

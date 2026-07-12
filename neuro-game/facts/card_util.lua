@@ -4,6 +4,15 @@ local function pack_area()
   return G and (G.pack_cards or G.booster_pack)
 end
 
+local function center_of(card)
+  return card and card.config and card.config.center or nil
+end
+
+local function center_key(card)
+  local c = card and card.config and card.config.center
+  return c and c.key
+end
+
 local function card_set(card)
   local ability = card and card.ability
   local center = card and card.config and card.config.center
@@ -91,7 +100,7 @@ local NAMED_HAND_TARGET = {
   c_aura = { min = 1, max = 1 },
 }
 local function named_hand_target(card)
-  local key = card and card.config and card.config.center and card.config.center.key
+  local key = center_key(card)
   return key and NAMED_HAND_TARGET[key] or nil
 end
 
@@ -214,7 +223,7 @@ local RARITY_NAMES = { [1] = "Common", [2] = "Uncommon", [3] = "Rare", [4] = "Le
 -- key-based, not name matching (which mislabels localized/renamed jokers)
 local COPY_JOKER_KEYS = { j_blueprint = "blueprint", j_brainstorm = "brainstorm" }
 local function copy_joker_kind(card)
-  local key = card and card.config and card.config.center and card.config.center.key
+  local key = center_key(card)
   return key and COPY_JOKER_KEYS[key] or nil
 end
 local function is_copy_joker(card)
@@ -264,7 +273,7 @@ local function enhancement_key(card)
   if type(card) ~= "table" then return nil end
   local ab = card.ability
   if ab and ab.enhancement and ENHANCEMENTS[ab.enhancement] then return ab.enhancement end
-  local key = card.config and card.config.center and card.config.center.key
+  local key = center_key(card)
   if key and ENHANCEMENTS[key] then return key end
   return nil
 end
@@ -317,7 +326,7 @@ local function card_modifier_desc(card)
 end
 
 local function joker_template_ability(c)
-  local key = c and c.config and c.config.center and c.config.center.key
+  local key = center_key(c)
   local center = key and G and G.P_CENTERS and G.P_CENTERS[key]
   if not center then return {} end
   if type(center.ability) == "table" then return center.ability end
@@ -424,5 +433,6 @@ M.enhancement_short = enhancement_short
 M.seal_name = seal_name
 M.seal_short = seal_short
 M.card_modifier_desc = card_modifier_desc
+M.center = center_of
 
 return M

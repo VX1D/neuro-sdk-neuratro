@@ -22,6 +22,7 @@ run() {  # run <label> <cmd...>
 echo "== neuro-game offline suite =="
 run loadcheck     "$LUAJIT" tests/run_loadcheck.lua
 run render_ctx    "$LUAJIT" tests/run_render_smoke.lua
+run login_anim    "$LUAJIT" tests/run_login_anim.lua
 run deadlock      "$LUAJIT" tests/run_deadlock.lua
 run gameover_synth "$LUAJIT" tests/run_gameover_synth.lua
 run roundtrip     "$LUAJIT" tests/run_roundtrip.lua

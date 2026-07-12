@@ -1,5 +1,7 @@
-local H = require "render.hud_shared"
+local H = require("render.hud_shared")
 local Prims, S, Motion, Utils = H.Prims, H.S, H.Motion, H.Utils
+local round = Prims.round
+local clamp = Prims.clamp
 local set_col, shadow_text = H.set_col, H.shadow_text
 local smoothstep01 = H.smoothstep01
 local draw_card_mini, rarity_color, joker_fx = H.draw_card_mini, H.rarity_color, H.joker_fx
@@ -155,10 +157,10 @@ local function draw_rp_header(ctx)
     if persona_evil then
       for di = 0, 2 do
         local et = Motion.reduced and 0.5 or ((now * 1.2 + di * 0.33) % 1)
-        local ey3 = math.floor(sl_y + r_small_text_h / 2 - 1 - (Motion.reduced and 0 or et * 3) + 0.5)
+        local ey3 = round(sl_y + r_small_text_h / 2 - 1 - (Motion.reduced and 0 or et * 3))
         local fa = Motion.reduced and 0.6 or ((1 - et) * (0.35 + 0.55 * Prims.candle01(now + di * 1.7)))
         love.graphics.setColor(1, 0.62 - 0.35 * et, 0.16, fa * sl_in)
-        love.graphics.rectangle("fill", math.floor(dot_x + di * dot_gap - 1 + 0.5), ey3, 3, 3)
+        love.graphics.rectangle("fill", round(dot_x + di * dot_gap - 1), ey3, 3, 3)
       end
     else
       for di = 0, 2 do
@@ -361,7 +363,7 @@ local function draw_desc_carousel(P)
 
         local mk_pop = (not Motion.reduced and n > 1 and phase < 0.15) and 1.3 or 1
         local dot_y  = bar_y + rn(10)
-        local dot_sp = math.max(2, math.min(10, math.floor((content_w - 4) / math.max(1, n))))
+        local dot_sp = clamp(math.floor((content_w - 4) / math.max(1, n)), 2, 10)
         local total_dots_w = (n - 1) * dot_sp
         local dot_x0 = rx + p_w / 2 - total_dots_w / 2
         for di = 0, n - 1 do
@@ -372,7 +374,7 @@ local function draw_desc_carousel(P)
             elseif persona_evil then
               Prims.draw_evil_heart(dx, dot_y, rn(3) * mk_pop, ACC, 0.95, GOLD, true)
             else
-              local ds2 = math.floor(2 * mk_pop + 0.5)
+              local ds2 = round(2 * mk_pop)
               set_col(ACC, 0.90)
               love.graphics.rectangle("fill", dx - ds2, dot_y - ds2, ds2 * 2, ds2 * 2)
             end
@@ -441,7 +443,7 @@ local function draw_rp_rows(ctx)
     local rx = p_x
     local rows_y0 = cy
     local row_sdx = S.right_panel_slide_frac > 0
-      and math.floor((pw_total + 20) * S.right_panel_slide_frac + 0.5) or 0
+      and round((pw_total + 20) * S.right_panel_slide_frac) or 0
     love.graphics.setScissor(p_x + row_sdx - 2, p_y,
       pw_total + 4, math.max(0, math.min(clip_y, sh) - p_y))
     for c = 2, n_cols do

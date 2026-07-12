@@ -1,11 +1,15 @@
 local S = require("hud.state")
 local Prims = require("hud.prims")
+local clamp = Prims.clamp
+local round = Prims.round
 local Cards = require("hud.cards")
 local Utils = require("util.utils")
 local Palette = require("render.palette")
 local StateKinds = require("core.state_kinds")
 local DebuffFacts = require("facts.debuff_facts")
 local HudShared = require("render.hud_shared")
+local set_col = HudShared.set_col
+local shadow_text = HudShared.shadow_text
 
 local Motion = Prims.Motion
 local smoothstep01 = Prims.smoothstep01
@@ -137,14 +141,7 @@ local function draw_effect_segments(fit, tx, ey, a)
   local cx = tx
   for i = 1, fit.n, 3 do
     local str, gold, w = fit[i], fit[i + 1], fit[i + 2]
-    love.graphics.setColor(0, 0, 0, 0.4 * a)
-    love.graphics.print(str, cx + 1, ey + 1)
-    if gold then
-      love.graphics.setColor(_MONEY[1], _MONEY[2], _MONEY[3], 0.95 * a)
-    else
-      love.graphics.setColor(_DIM[1], _DIM[2], _DIM[3], 0.88 * a)
-    end
-    love.graphics.print(str, cx, ey)
+    shadow_text(str, cx, ey, gold and _MONEY or _DIM, (gold and 0.95 or 0.88) * a, 0.4 * a)
     cx = cx + w
   end
 end
@@ -312,9 +309,9 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
   x = x + ox
 
   if glow > 0 then
-    love.graphics.setColor(_GOLD[1], _GOLD[2], _GOLD[3], 0.10 * glow * ga)
+    set_col(_GOLD, 0.10 * glow * ga)
     love.graphics.rectangle("fill", x - rn(3), y + 1, w + rn(6), h - 2, rn(3), rn(3))
-    love.graphics.setColor(_GOLD[1], _GOLD[2], _GOLD[3], 0.55 * glow * ga)
+    set_col(_GOLD, 0.55 * glow * ga)
     love.graphics.setLineWidth(1)
     love.graphics.rectangle("line", x - rn(3), y + 1, w + rn(6), h - 2, rn(3), rn(3))
   end
@@ -324,7 +321,7 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
 
   local inset = rn(5)
   local art_h = h - inset * 2
-  local art_w = math.floor(art_h * (71 / 95) + 0.5)
+  local art_w = round(art_h * (71 / 95))
   local ay = y + inset
   love.graphics.setColor(0, 0, 0, 0.35 * a)
   love.graphics.rectangle("fill", x - 1, ay - 1, art_w + 2, art_h + 2, 2, 2)
@@ -337,7 +334,7 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
     if wcard then pcall(Cards.draw_card_mini, wcard, x, ay, art_h) end
   end
   if t2 then
-    love.graphics.setColor(_GOLD[1], _GOLD[2], _GOLD[3], 0.30 * a)
+    set_col(_GOLD, 0.30 * a)
     love.graphics.setLineWidth(1)
     love.graphics.rectangle("line", x - 1, ay - 1, art_w + 2, art_h + 2, 2, 2)
   end
@@ -351,9 +348,9 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
     local by = y + rn(5)
     love.graphics.setColor(0, 0, 0, 0.5 * a)
     love.graphics.rectangle("fill", bx + 1, by + 1, bw, bh)
-    love.graphics.setColor(_BG[1], _BG[2], _BG[3], 0.97 * a)
+    set_col(_BG, 0.97 * a)
     love.graphics.rectangle("fill", bx, by, bw, bh)
-    love.graphics.setColor(_GOLD[1], _GOLD[2], _GOLD[3], 0.90 * a)
+    set_col(_GOLD, 0.90 * a)
     love.graphics.setLineWidth(1)
     love.graphics.rectangle("line", bx, by, bw, bh)
     love.graphics.setFont(fs)
@@ -365,10 +362,7 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
   love.graphics.setFont(fs)
   local ny = y + rn(6)
   local name = ctx.trunc(voucher_name(key), tw, fs)
-  love.graphics.setColor(0, 0, 0, 0.5 * a)
-  love.graphics.print(name, tx + 1, ny + 1)
-  love.graphics.setColor(_WHITE[1], _WHITE[2], _WHITE[3], 0.96 * a)
-  love.graphics.print(name, tx, ny)
+  shadow_text(name, tx, ny, _WHITE, 0.96 * a, 0.5 * a)
   local ey = ny + fs_h + rn(3)
   local segs = effect_segments(key)
   if segs then
@@ -377,10 +371,7 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
     local fx = voucher_effect(key)
     if fx ~= "" then
       local fxt = ctx.trunc(fx, tw, fs)
-      love.graphics.setColor(0, 0, 0, 0.4 * a)
-      love.graphics.print(fxt, tx + 1, ey + 1)
-      love.graphics.setColor(_DIM[1], _DIM[2], _DIM[3], 0.88 * a)
-      love.graphics.print(fxt, tx, ey)
+      shadow_text(fxt, tx, ey, _DIM, 0.88 * a, 0.4 * a)
     end
   end
 
@@ -391,7 +382,7 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
       love.graphics.intersectScissor(x, y - _SLIDE, w, h)
       local bw2, sl = rn(SWEEP_W), rn(SWEEP_SLANT)
       local bx2 = x - bw2 - sl + (w + 2 * (bw2 + sl)) * st
-      love.graphics.setColor(_WHITE[1], _WHITE[2], _WHITE[3], 0.16 * a * math.sin(math.pi * st))
+      set_col(_WHITE, 0.16 * a * math.sin(math.pi * st))
       love.graphics.polygon("fill", bx2, y + h, bx2 + sl, y, bx2 + sl + bw2, y, bx2 + bw2, y + h)
       if sx1 then love.graphics.setScissor(sx1, sy1, sw1, sh1) else love.graphics.setScissor() end
     end
@@ -406,13 +397,13 @@ local function draw_connection(rn, x, ty, pb_y, ga, evil)
 
   if py - pb_y > rn(2) then
     if evil then
-      love.graphics.setColor(wire[1], wire[2], wire[3], 0.60 * ga)
+      set_col(wire, 0.60 * ga)
       love.graphics.setLineWidth(math.max(1, rn(2)))
       love.graphics.line(x, pb_y, x, py)
       local my = math.floor((pb_y + py) / 2)
       Prims.draw_diamond(x, my, rn(1), wire, 0.85 * ga)
     else
-      love.graphics.setColor(_GOLD[1], _GOLD[2], _GOLD[3], 0.70 * ga)
+      set_col(_GOLD, 0.70 * ga)
       love.graphics.setLineWidth(math.max(1, rn(2)))
       love.graphics.line(x, pb_y, x, py)
       love.graphics.setColor(1, 1, 1, 0.12 * ga)
@@ -423,12 +414,12 @@ local function draw_connection(rn, x, ty, pb_y, ga, evil)
 
   love.graphics.setColor(0, 0, 0, 0.4 * ga)
   love.graphics.rectangle("fill", x - rn(4) + 1, py + 1, rn(8), ph, rn(2), rn(2))
-  love.graphics.setColor(wire[1], wire[2], wire[3], (0.80 + 0.10 * _PULSE) * ga)
+  set_col(wire, (0.80 + 0.10 * _PULSE) * ga)
   love.graphics.rectangle("fill", x - rn(4), py, rn(8), ph, rn(2), rn(2))
 
-  love.graphics.setColor(_BG[1], _BG[2], _BG[3], 0.97 * ga)
+  set_col(_BG, 0.97 * ga)
   love.graphics.rectangle("fill", x - rn(6), plate_y, rn(12), rn(5), rn(2), rn(2))
-  love.graphics.setColor(_FR[1], _FR[2], _FR[3], 0.95 * ga)
+  set_col(_FR, 0.95 * ga)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", x - rn(6), plate_y, rn(12), rn(5), rn(2), rn(2))
 end
@@ -504,8 +495,8 @@ function Vouchers.draw(ctx)
     love.graphics.setColor(1, 1, 1, 0.05 * ga)
     love.graphics.rectangle("fill", tray_x + rad, ty + 1, tray_w - rad * 2, 1)
   end
-  love.graphics.setColor(_FR[1], _FR[2], _FR[3], 0.95 * ga)
-  love.graphics.setLineWidth(math.min(2, math.max(1, rn(2))))
+  set_col(_FR, 0.95 * ga)
+  love.graphics.setLineWidth(clamp(rn(2), 1, 2))
   love.graphics.rectangle("line", tray_x, ty, tray_w, body_h, rad, rad)
   love.graphics.setLineWidth(1)
   if evil and body_h > rn(20) then
@@ -540,7 +531,7 @@ function Vouchers.draw(ctx)
   local title_x = tray_x + pad + rn(12)
   love.graphics.setColor(0, 0, 0, 0.5 * ga)
   print_tracked("VOUCHERS", title_x + 1, hy + 1, TRACK_SM, fs)
-  love.graphics.setColor(_ACC[1], _ACC[2], _ACC[3], 0.95 * ga)
+  set_col(_ACC, 0.95 * ga)
   local title_end = print_tracked("VOUCHERS", title_x, hy, TRACK_SM, fs)
 
   local cnt = n > VIS and (tostring(S.voucher_rot_idx) .. "/" .. n) or tostring(n)
@@ -550,7 +541,7 @@ function Vouchers.draw(ctx)
   end
   local cw = fs:getWidth(cnt)
   local cx = tray_x + tray_w - pad - cw
-  local cy = hy - math.floor(rn(3) * k + 0.5)
+  local cy = hy - round(rn(3) * k)
   love.graphics.setColor(0, 0, 0, 0.5 * ga)
   love.graphics.print(cnt, cx + 1, cy + 1)
   love.graphics.setColor(
@@ -560,7 +551,7 @@ function Vouchers.draw(ctx)
   love.graphics.print(cnt, cx, cy)
 
   local ly = hy + math.floor(fs_h / 2)
-  love.graphics.setColor(_GOLD[1], _GOLD[2], _GOLD[3], 0.35 * ga)
+  set_col(_GOLD, 0.35 * ga)
   local lw1 = (title_x - rn(5)) - (tray_x + pad)
   if lw1 >= rn(4) then love.graphics.rectangle("fill", tray_x + pad, ly, lw1, 1) end
   local rx1 = title_end + rn(5)
@@ -574,7 +565,7 @@ function Vouchers.draw(ctx)
     love.graphics.setColor(shr, shg, shb, (0.85 + 0.10 * ap) * ga)
     love.graphics.rectangle("fill", tray_x + rn(6), ty + header_h - 2, tray_w - rn(12), 2)
   else
-    love.graphics.setColor(_ACC[1], _ACC[2], _ACC[3], (0.80 + 0.15 * ap) * ga)
+    set_col(_ACC, (0.80 + 0.15 * ap) * ga)
     love.graphics.rectangle("fill", tray_x + rn(6), ty + header_h - 2, tray_w - rn(12), 2)
   end
   local mx2 = tray_x + math.floor(tray_w / 2)
@@ -609,7 +600,7 @@ function Vouchers.draw(ctx)
       local rx = tray_x + pad
       local ry = gy + j * row_h - off
       if j > 0 then
-        love.graphics.setColor(_FRD[1], _FRD[2], _FRD[3], 0.55 * ga)
+        set_col(_FRD, 0.55 * ga)
         love.graphics.setLineWidth(1)
         love.graphics.line(tray_x + pad, ry, tray_x + tray_w - pad, ry)
       end

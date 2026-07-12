@@ -1,5 +1,6 @@
-local H = require "render.hud_shared"
+local H = require("render.hud_shared")
 local Prims, S, Motion = H.Prims, H.S, H.Motion
+local round = Prims.round
 local set_col = H.set_col
 local caps_label, print_tracked = H.caps_label, H.print_tracked
 local draw_card_mini, rarity_color = H.draw_card_mini, H.rarity_color
@@ -109,7 +110,7 @@ local function draw_buy_toast(ctx)
           Prims.draw_skull(bt_tx + U, bt_ty + math.floor(text_h / 2), U * 1.5, WHITE, 0.95 * ba, GOLD, false)
           lbl_x = bt_tx + U * 3
           if not Motion.reduced and elapsed >= 0 and elapsed < 0.4 then
-            local gj = math.max(1, math.floor(U * (1 - elapsed / 0.4) + 0.5))
+            local gj = math.max(1, round(U * (1 - elapsed / 0.4)))
             love.graphics.setFont(font)
             love.graphics.setColor(0.95, 0.10, 0.16, 0.5 * ba)
             print_tracked(bt_label, lbl_x - gj, bt_ty, TRACK_SM, font)

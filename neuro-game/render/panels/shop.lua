@@ -1,12 +1,13 @@
-local H = require "render.hud_shared"
+local H = require("render.hud_shared")
 local Prims, S, Motion = H.Prims, H.S, H.Motion
+local round = Prims.round
 local set_col, shadow_text = H.set_col, H.shadow_text
 local tracked_width, caps_label = H.tracked_width, H.caps_label
 local draw_card_mini = H.draw_card_mini
 local card_edition_tag, draw_animated_edition = H.card_edition_tag, H.draw_animated_edition
 local SHOP_SLIDE_IN_PX = H.SHOP_SLIDE_IN_PX
 local buy_flare01 = H.buy_flare01
-local Rows = require "hud.rows"
+local Rows = require("hud.rows")
 
 -- Reused per-frame so the shop draw path doesn't allocate a metrics table + row_h closure
 -- every frame. Single-threaded; all fields are rewritten at draw entry before use.
@@ -20,7 +21,7 @@ local function draw_shop_panel(ctx)
   local persona_evil, persona_neuro = H.persona(th)
   local pk, font, lfont, lfont_small = th.pk, th.font, th.lfont, th.lfont_small
   local ln, lp_sh, sh, U, GUT, ACCENT_W, TRACK = me.ln, me.lp_sh, me.sh, me.U, me.GUT, me.ACCENT_W, me.TRACK
-  local p_y, _content_w, _line_h, _small_line_h, card_line_h, sep_h = me.p_y, me.content_w, me.line_h, me.small_line_h, me.card_line_h, me.sep_h
+  local p_y, card_line_h, sep_h = me.p_y, me.card_line_h, me.sep_h
   local shop_rows = da.shop_rows
   local trunc, wrapped_lines, draw_colored_desc = dr.trunc, dr.wrapped_lines, dr.draw_colored_desc
   local shop_visible = #shop_rows > 0
@@ -89,7 +90,7 @@ local function draw_shop_panel(ctx)
     end
     local lp_w_total = lp_w * lp_cols
 
-    local lp_dx = -math.floor((lp_w_total + 20) * S.left_panel_slide_frac + (1 - shop_in) * SHOP_SLIDE_IN_PX + 0.5)
+    local lp_dx = -round((lp_w_total + 20) * S.left_panel_slide_frac + (1 - shop_in) * SHOP_SLIDE_IN_PX)
     local lp_pushed = S.left_panel_slide_frac > 0 or shop_in < 1
     if lp_pushed then
       love.graphics.push()
@@ -179,7 +180,7 @@ local function draw_shop_panel(ctx)
           local stab = 0
           if S.rr_stab_at and not Motion.reduced then
             local st2 = (now - S.rr_stab_at) / 0.25
-            if st2 >= 0 and st2 < 1 then stab = math.floor(math.sin(math.pi * st2) * 3 + 0.5) end
+            if st2 >= 0 and st2 < 1 then stab = round(math.sin(math.pi * st2) * 3) end
           end
           Prims.draw_knife(r_x - ln(7), r_cy + stab, ln(1), GOLD, WHITE, 0.9 * sa, true)
         elseif persona_neuro then
