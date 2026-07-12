@@ -1214,33 +1214,35 @@ end
 do
   local prev_settings = G.SETTINGS
   G.SETTINGS = { GAMESPEED = 1 }
-  Tuning.reset("NEURO_CD_OVERRIDE")
+  Tuning.reset("NEURO_AUTO_TUNE")
   Tuning.reset("NEURO_CD_PRESET")
   Tuning.reset("NEURO_COOLDOWN_SCALE")
   local base = Tuning.get_raw("NEURO_GLOBAL_COOLDOWN")
   check("cdpreset: no-op at GAMESPEED 1 (auto)", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base) < 1e-9)
 
   G.SETTINGS.GAMESPEED = 4
-  check("cdpreset: auto divides by live GAMESPEED", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base * 0.25) < 1e-9)
+  check("cdpreset: auto applies 4x stream factor 0.5", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base * 0.5) < 1e-9)
   check("cdpreset: event delay never scaled",
     math.abs(Tuning.get("NEURO_SHOP_BUY_DELAY") - Tuning.get_raw("NEURO_SHOP_BUY_DELAY")) < 1e-9)
 
-  Tuning.set("NEURO_CD_OVERRIDE", "on")
-  check("cdpreset: override on = manual (no scaling) at GAMESPEED 4", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base) < 1e-9)
-  Tuning.set("NEURO_CD_OVERRIDE", "off")
+  Tuning.set("NEURO_AUTO_TUNE", "off")
+  check("cdpreset: auto-tune off = our values (no scaling) at GAMESPEED 4", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base) < 1e-9)
+  Tuning.set("NEURO_AUTO_TUNE", "on")
 
   G.SETTINGS.GAMESPEED = 1
   Tuning.set("NEURO_CD_PRESET", "4x")
-  check("cdpreset: pinned 4x scales regardless of native speed", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base * 0.25) < 1e-9)
+  check("cdpreset: pinned 4x applies stream factor regardless of native speed", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base * 0.5) < 1e-9)
+  Tuning.set("NEURO_CD_PRESET", "2x")
+  check("cdpreset: pinned 2x applies 2x stream factor 0.7", math.abs(Tuning.get("NEURO_GLOBAL_COOLDOWN") - base * 0.7) < 1e-9)
   Tuning.set("NEURO_CD_PRESET", "auto")
 
   G.SETTINGS.GAMESPEED = 0.5
   Tuning.set("NEURO_FORCE_STALL_SECONDS", 12)
-  check("cdpreset: watchdog stretches with gates at GAMESPEED 0.5", Tuning.force_stall_seconds() == 24)
+  check("cdpreset: watchdog stretches with 0.5x gates (12 * 1.5)", math.abs(Tuning.force_stall_seconds() - 18) < 1e-9)
 
   G.SETTINGS.GAMESPEED = 99
   check("cdpreset: GAMESPEED clamps to 4", Tuning.game_speed() == 4)
-  Tuning.reset("NEURO_CD_OVERRIDE")
+  Tuning.reset("NEURO_AUTO_TUNE")
   Tuning.reset("NEURO_CD_PRESET")
   Tuning.reset("NEURO_FORCE_STALL_SECONDS")
   G.SETTINGS = prev_settings
@@ -1325,6 +1327,7 @@ do
   check("panel: swallows own keys while open", P.keypressed("down") == true)
   check("panel: leaves other keys alone", P.keypressed("f9") == false)
   local d2 = defs[2]
+  P.reveal(d2.key)
   local before = Tuning.get(d2.key)
   P.keypressed("right")
   check("panel: right adjusts selected by step", math.abs(Tuning.get(d2.key) - math.min(d2.max, before + d2.step)) < 1e-9)
@@ -1377,7 +1380,7 @@ do
   local orig_smn = DS.set_mode_name
   DS.set_mode_name = function(name) applied[#applied + 1] = name end
   P.toggle()
-  for _ = 2, sel_idx do P.keypressed("down") end
+  P.reveal("NEURO_DEBUG_OVERLAY")
   P.keypressed("right")
   P.keypressed("right")
   P.keypressed("right")
@@ -2244,7 +2247,7 @@ do
   local H = Panel._test.hit
   local defs = Tn.entries()
   check("mouse: layout valid after draw", H.valid == true and H.pw == 520)
-  check("mouse: hitbox rows == defs + action row", H.n == #defs + 1)
+  check("mouse: hitbox rows == visible items", H.n == #Panel._test.rows())
   check("mouse: row 3 resolves at its own y", Panel._test.row_at(H.px + 10, H.rows[3] + 2) == 3)
   check("mouse: title area resolves no row", Panel._test.row_at(H.px + 10, H.py + 1) == nil)
   check("mouse: outside panel x resolves nil", Panel._test.row_at(H.px - 5, H.rows[3] + 2) == nil)
@@ -2254,7 +2257,7 @@ do
 
   local orig_speed = Tn.get("NEURO_SPEED_MULT")
   Tn.set("NEURO_SPEED_MULT", 2.0)
-  love.mouse.getPosition = function() return H.px + 10, H.rows[1] + 2 end
+  love.mouse.getPosition = function() return H.px + 10, H.rows[2] + 2 end
   check("wheel: consumed over panel", Panel.wheelmoved(0, 1) == true)
   check("wheel: adjust clamps at max", Tn.get("NEURO_SPEED_MULT") == 2.0)
   Panel.wheelmoved(0, -1)
@@ -2322,11 +2325,11 @@ do
   check("mouse: header tab switches to RUNTIME", (Panel._test.state()) == 3)
   Panel.draw()
   local rdefs = Tn.runtime_entries()
-  check("runtime: hitbox rows == runtime defs + action row", H.n == #rdefs + 1)
+  check("runtime: hitbox rows == visible items", H.n == #Panel._test.rows())
   local glow_i
   for i, d in ipairs(rdefs) do if d.key == "NEURO_AI_CARD_GLOW" then glow_i = i end end
   local glow_before = Tn.get_raw("NEURO_AI_CARD_GLOW")
-  love.mouse.getPosition = function() return H.px + 10, H.rows[glow_i] + 2 end
+  love.mouse.getPosition = function() return H.px + 10, H.rows[glow_i + 1] + 2 end
   Panel.wheelmoved(0, 1)
   check("runtime: editable enum row toggles via wheel", Tn.get_raw("NEURO_AI_CARD_GLOW") ~= glow_before)
   Tn.set("NEURO_AI_CARD_GLOW", glow_before)

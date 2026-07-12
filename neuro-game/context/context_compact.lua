@@ -1,5 +1,6 @@
 local ContextCompact = {}
 local Metrics = require("util.metrics")
+local Tuning = require("core.tuning")
 local GameFacts = require("facts.game_facts")
 local Utils = require("util.utils")
 local safe_name = Utils.safe_name
@@ -198,7 +199,6 @@ end
 local _ctx_cache = nil
 local _ctx_cache_key = nil
 local _ctx_cache_at = 0
-local CTX_CACHE_TTL = 0.20
 local _last_joker_sig_force = nil
 local now_time = Utils.now
 
@@ -355,7 +355,7 @@ function ContextCompact.build(state_name, allowed_actions, opts)
   }, "|")
 
   local t = now_time()
-  if not opts.no_cache and _ctx_cache and _ctx_cache_key == cache_key and (t - _ctx_cache_at) < CTX_CACHE_TTL then
+  if not opts.no_cache and _ctx_cache and _ctx_cache_key == cache_key and (t - _ctx_cache_at) < Tuning.get("NEURO_CTX_CACHE_TTL") then
     Metrics.incr("ctx_cache_hit")
     Metrics.time_end("ctx_build")
     return _ctx_cache

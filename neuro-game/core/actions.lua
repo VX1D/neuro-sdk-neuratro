@@ -319,6 +319,7 @@ local STATE_ACTIONS = {
     "skip_blind",
     "reroll_boss",
     "sell_card",
+    "set_joker_order",
     "use_card",
     "get_poker_hand_information",
     "joker_info",

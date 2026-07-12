@@ -65,7 +65,7 @@ end
 local _Tuning = require("core.tuning")
 local function defer_window()
   local sp = _Tuning.game_speed()
-  return math.max(3,
+  return math.max(_Tuning.get("NEURO_DEFER_WINDOW_MIN"),
     _Tuning.get("NEURO_SHOP_BUY_DELAY") / sp + 1,
     _Tuning.get("NEURO_PACK_PICK_DELAY") / sp + 1)
 end
@@ -382,7 +382,7 @@ local function raw_handle_message(msg, bridge)
     local valid_action_names = Actions.get_valid_actions_for_state(state_name)
     -- throttle only repeat re-syncs with the same state and validity; a real state or validity change must always pass or stale actions stay registered
     local reregister_sig = state_name .. "|" .. table.concat(valid_action_names, ",")
-    if _last_reregister_at and (now - _last_reregister_at) < 2.0 and reregister_sig == _last_reregister_sig then
+    if _last_reregister_at and (now - _last_reregister_at) < _Tuning.get("NEURO_REREGISTER_THROTTLE") and reregister_sig == _last_reregister_sig then
       return
     end
     _last_reregister_at = now
@@ -505,6 +505,7 @@ local function raw_handle_message(msg, bridge)
     -- cannot send a second result; log and move on (exec crash, not a param error)
     Metrics.time_end("action_exec")
     Metrics.incr("action_fail")
+    require("core.task_mode").on_action(name, false)
     if G and G.NEURO then
       ForceHelpers.rearm()
       ForceHelpers.record_failure(name, "internal error during execution")
@@ -527,6 +528,7 @@ local function raw_handle_message(msg, bridge)
   Metrics.time_end("action_exec")
   Metrics.incr("action_ok")
   Enforce.post_action(bridge, true)
+  require("core.task_mode").on_action(name, true)
   if not (G and G.NEURO) then
     return
   end
