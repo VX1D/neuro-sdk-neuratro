@@ -1,5 +1,6 @@
 local Palette = require("render.palette")
-local function set_col(c, a) love.graphics.setColor(c[1], c[2], c[3], a) end
+local gfx = require("render.gfx")
+local set_col = gfx.set_col
 local Utils = require("util.utils")
 local dotenv = require("util.dotenv")
 
@@ -568,7 +569,7 @@ function NeuroAnim.draw_login_anim()
       master_alpha = 1.0 - Motion.ease_out_cubic(phase_t)
     end
   end
-  master_alpha = Utils.clamp01(master_alpha)
+  master_alpha = gfx.clamp01(master_alpha)
 
   if not anim.name_str then
     anim.cached_pal = Palette.pal()

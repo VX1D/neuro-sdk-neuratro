@@ -1,12 +1,3 @@
--- Login-animation smoke: drives NeuroAnim.draw_login_anim() through every phase under a
--- graphics stub that actually returns a usable font, so the real draw path (set_col, shadow,
--- typed lines, name reveal, progress bar) executes. A self-recursive helper (e.g. a file-local
--- set_col whose body calls itself) stack-overflows here; any crash in the login path fails the
--- suite. render_smoke does NOT cover this path (it swallows graphics-stub errors), so this is the
--- guard that would have caught the neuro-anim.lua set_col recursion.
---
--- luajit tests/run_login_anim.lua   (exit 0 = login draw path intact)
-
 package.path = "./?.lua;;" .. package.path
 
 local FONT = {
@@ -40,7 +31,6 @@ local LINES = {
 }
 
 local fails = 0
--- cover BOOT / LOADING / CONNECTED / FADE_OUT plus the pre-reveal name flash and post-reveal subtitle
 local phases = { 0.10, 1.00, 2.20, 2.60, 3.50, 4.40 }
 for _, t in ipairs(phases) do
   G.NEURO.login_anim = {
@@ -55,7 +45,6 @@ for _, t in ipairs(phases) do
   end
 end
 
--- also exercise the un-cached entry (forces Palette.pal()/persona() + name resolution)
 G.NEURO.persona = "evil"
 G.NEURO.login_anim = { start = 0, name = "Evil Neuro" }
 G.TIMERS.REAL = 2.20

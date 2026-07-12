@@ -202,6 +202,126 @@ local CTX_CACHE_TTL = 0.20
 local _last_joker_sig_force = nil
 local now_time = Utils.now
 
+local function assemble_selecting_hand(sections, ctx)
+  local has_filters, action_set, include_full_jokers, opts = ctx.has_filters, ctx.action_set, ctx.include_full_jokers, ctx.opts
+  sections[#sections + 1] = blind_line()
+  sections[#sections + 1] = blind_debuff_line()
+  sections[#sections + 1] = last_play_section(ctx.state_name)
+  sections[#sections + 1] = deck_size_line()
+  sections[#sections + 1] = play_area_section()
+  if ctx.include_stable then sections[#sections + 1] = vouchers_section() end
+  sections[#sections + 1] = tags_section()
+  sections[#sections + 1] = hand_limits_section()
+  sections[#sections + 1] = hand_section()
+  if (not has_filters) or has_action(action_set, "play_hand") or has_action(action_set, "discard_hand")
+    or has_action(action_set, "joker_info") or has_action(action_set, "quick_status") then
+    append_joker_sections(sections, include_full_jokers, opts)
+  end
+  if (not has_filters) or has_action(action_set, "hand_levels_info") or has_action(action_set, "get_poker_hand_information")
+    or has_action(action_set, "play_hand") or has_action(action_set, "discard_hand") then
+    sections[#sections + 1] = levels_section()
+  end
+  append_consumables(sections, has_filters, action_set)
+  sections[#sections + 1] = deck_cards_section()
+end
+
+local function assemble_shop(sections, ctx)
+  local has_filters, action_set, include_full_jokers, opts = ctx.has_filters, ctx.action_set, ctx.include_full_jokers, ctx.opts
+  if ctx.include_stable then sections[#sections + 1] = vouchers_section() end
+  sections[#sections + 1] = tags_section()
+  sections[#sections + 1] = shop_section()
+  if (not has_filters) or has_action(action_set, "buy_from_shop") or has_action(action_set, "sell_card")
+    or has_action(action_set, "set_joker_order") or has_action(action_set, "joker_info") then
+    append_joker_sections(sections, include_full_jokers, opts)
+  end
+  append_consumables(sections, has_filters, action_set)
+  if (not has_filters) or has_action(action_set, "use_card") then
+    sections[#sections + 1] = hand_section()
+  end
+  local shop_wants_levels = false
+  local sj = G and G.shop_jokers and G.shop_jokers.cards
+  if sj then
+    local CU = require("facts.card_util")
+    for _, c in ipairs(sj) do
+      if CU.card_set(c) == "Planet" then shop_wants_levels = true break end
+    end
+  end
+  if not shop_wants_levels then
+    local ok_sc, Scoring = pcall(require, "util.scoring")
+    if ok_sc and Scoring and Scoring.joker_summary then
+      local ok_sum, agg = pcall(Scoring.joker_summary)
+      if ok_sum and agg and agg.cond_by_type and next(agg.cond_by_type) then shop_wants_levels = true end
+    end
+  end
+  if shop_wants_levels then sections[#sections + 1] = levels_section() end
+end
+
+local function assemble_blind_select(sections, ctx)
+  local has_filters, action_set, include_full_jokers, opts = ctx.has_filters, ctx.action_set, ctx.include_full_jokers, ctx.opts
+  if ctx.include_stable then sections[#sections + 1] = vouchers_section() end
+  sections[#sections + 1] = tags_section()
+  sections[#sections + 1] = blind_select_section()
+  if (not has_filters) or has_action(action_set, "joker_info") or has_action(action_set, "sell_card")
+    or has_action(action_set, "set_joker_order") then
+    append_joker_sections(sections, include_full_jokers, opts)
+  end
+  append_consumables(sections, has_filters, action_set)
+end
+
+local function assemble_round_eval(sections, ctx)
+  sections[#sections + 1] = round_eval_section()
+  sections[#sections + 1] = last_play_section(ctx.state_name)
+end
+
+local function assemble_pack(sections, ctx)
+  local state_name, has_filters, action_set, include_full_jokers, opts = ctx.state_name, ctx.has_filters, ctx.action_set, ctx.include_full_jokers, ctx.opts
+  sections[#sections + 1] = pack_section(state_name)
+  if (not has_filters) or has_action(action_set, "joker_info") or has_action(action_set, "sell_card")
+    or has_action(action_set, "set_joker_order") then
+    append_joker_sections(sections, include_full_jokers, opts)
+  end
+  append_consumables(sections, has_filters, action_set)
+  if state_name == "TAROT_PACK" or state_name == "SPECTRAL_PACK" then
+    sections[#sections + 1] = hand_section()
+  end
+  if state_name == "PLANET_PACK" then
+    sections[#sections + 1] = levels_section()
+  end
+  if state_name == "STANDARD_PACK" then
+    sections[#sections + 1] = hand_section()
+    sections[#sections + 1] = deck_cards_section()
+  end
+  if state_name == "SMODS_BOOSTER_OPENED" then
+    local CU = require("facts.card_util")
+    local bp = CU.pack_area()
+    local has_planet, has_playing, has_hand_target = false, false, false
+    if bp and bp.cards then
+      for _, card in ipairs(bp.cards) do
+        local set = CU.card_set(card)
+        if set == "Planet" then has_planet = true end
+        if set == "Tarot" or set == "Spectral" then has_hand_target = true end
+        if card and card.base and card.base.suit and card.base.value then has_playing = true end
+      end
+    end
+    if has_hand_target then sections[#sections + 1] = hand_section() end
+    if has_planet then sections[#sections + 1] = levels_section() end
+    if has_playing then sections[#sections + 1] = deck_cards_section() end
+  end
+end
+
+local STATE_ASSEMBLERS = {
+  SELECTING_HAND = assemble_selecting_hand,
+  SHOP = assemble_shop,
+  BLIND_SELECT = assemble_blind_select,
+  ROUND_EVAL = assemble_round_eval,
+  TAROT_PACK = assemble_pack,
+  PLANET_PACK = assemble_pack,
+  SPECTRAL_PACK = assemble_pack,
+  STANDARD_PACK = assemble_pack,
+  BUFFOON_PACK = assemble_pack,
+  SMODS_BOOSTER_OPENED = assemble_pack,
+}
+
 function ContextCompact.build(state_name, allowed_actions, opts)
   opts = opts or {}
   _gf = GameFacts.build()
@@ -277,109 +397,17 @@ function ContextCompact.build(state_name, allowed_actions, opts)
     sections[#sections + 1] = game_over_section()
   end
 
-  if state_name == "SELECTING_HAND" then
-    sections[#sections + 1] = blind_line()
-    sections[#sections + 1] = blind_debuff_line()
-    sections[#sections + 1] = last_play_section(state_name)
-    sections[#sections + 1] = deck_size_line()
-    sections[#sections + 1] = play_area_section()
-    if include_stable then sections[#sections + 1] = vouchers_section() end
-    sections[#sections + 1] = tags_section()
-    sections[#sections + 1] = hand_limits_section()
-    sections[#sections + 1] = hand_section()
-    if (not has_filters) or has_action(action_set, "play_hand") or has_action(action_set, "discard_hand")
-      or has_action(action_set, "joker_info") or has_action(action_set, "quick_status") then
-      append_joker_sections(sections, include_full_jokers, opts)
-    end
-    if (not has_filters) or has_action(action_set, "hand_levels_info") or has_action(action_set, "get_poker_hand_information")
-      or has_action(action_set, "play_hand") or has_action(action_set, "discard_hand") then
-      sections[#sections + 1] = levels_section()
-    end
-    append_consumables(sections, has_filters, action_set)
-    sections[#sections + 1] = deck_cards_section()
-
-  elseif state_name == "SHOP" then
-    if include_stable then sections[#sections + 1] = vouchers_section() end
-    sections[#sections + 1] = tags_section()
-    sections[#sections + 1] = shop_section()
-    if (not has_filters) or has_action(action_set, "buy_from_shop") or has_action(action_set, "sell_card")
-      or has_action(action_set, "set_joker_order") or has_action(action_set, "joker_info") then
-      append_joker_sections(sections, include_full_jokers, opts)
-    end
-    append_consumables(sections, has_filters, action_set)
-    if (not has_filters) or has_action(action_set, "use_card") then
-      sections[#sections + 1] = hand_section()
-    end
-    local shop_wants_levels = false
-    local sj = G and G.shop_jokers and G.shop_jokers.cards
-    if sj then
-      local CU = require("facts.card_util")
-      for _, c in ipairs(sj) do
-        if CU.card_set(c) == "Planet" then shop_wants_levels = true break end
-      end
-    end
-    if not shop_wants_levels then
-      local ok_sc, Scoring = pcall(require, "util.scoring")
-      if ok_sc and Scoring and Scoring.joker_summary then
-        local ok_sum, agg = pcall(Scoring.joker_summary)
-        if ok_sum and agg and agg.cond_by_type and next(agg.cond_by_type) then shop_wants_levels = true end
-      end
-    end
-    if shop_wants_levels then sections[#sections + 1] = levels_section() end
-
-  elseif state_name == "BLIND_SELECT" then
-    if include_stable then sections[#sections + 1] = vouchers_section() end
-    sections[#sections + 1] = tags_section()
-    sections[#sections + 1] = blind_select_section()
-    if (not has_filters) or has_action(action_set, "joker_info") or has_action(action_set, "sell_card")
-      or has_action(action_set, "set_joker_order") then
-      append_joker_sections(sections, include_full_jokers, opts)
-    end
-    append_consumables(sections, has_filters, action_set)
-
-  elseif state_name == "ROUND_EVAL" then
-    sections[#sections + 1] = round_eval_section()
-    sections[#sections + 1] = last_play_section(state_name)
-
-  elseif state_name == "TAROT_PACK" or state_name == "PLANET_PACK" or
-         state_name == "SPECTRAL_PACK" or state_name == "STANDARD_PACK" or
-         state_name == "BUFFOON_PACK" or state_name == "SMODS_BOOSTER_OPENED" or
-         (state_name and state_name:find("_PACK$")) then
-    sections[#sections + 1] = pack_section(state_name)
-    if (not has_filters) or has_action(action_set, "joker_info") or has_action(action_set, "sell_card")
-      or has_action(action_set, "set_joker_order") then
-      append_joker_sections(sections, include_full_jokers, opts)
-    end
-    append_consumables(sections, has_filters, action_set)
-    if state_name == "TAROT_PACK" or state_name == "SPECTRAL_PACK" then
-      sections[#sections + 1] = hand_section()
-    end
-    if state_name == "PLANET_PACK" then
-      sections[#sections + 1] = levels_section()
-    end
-    if state_name == "STANDARD_PACK" then
-      sections[#sections + 1] = hand_section()
-      sections[#sections + 1] = deck_cards_section()
-    end
-    -- under SMODS all packs arrive as SMODS_BOOSTER_OPENED; branches above never fire live, so detect kind from cards
-    if state_name == "SMODS_BOOSTER_OPENED" then
-      local CU = require("facts.card_util")
-      local bp = CU.pack_area()
-      local has_planet, has_playing, has_hand_target = false, false, false
-      if bp and bp.cards then
-        for _, card in ipairs(bp.cards) do
-          local set = CU.card_set(card)
-          if set == "Planet" then has_planet = true end
-          -- only Tarot/Spectral packs deal into G.hand; H: for other sets would be stale
-          if set == "Tarot" or set == "Spectral" then has_hand_target = true end
-          if card and card.base and card.base.suit and card.base.value then has_playing = true end
-        end
-      end
-      if has_hand_target then sections[#sections + 1] = hand_section() end
-      if has_planet then sections[#sections + 1] = levels_section() end
-      if has_playing then sections[#sections + 1] = deck_cards_section() end
-    end
-
+  local assembler = STATE_ASSEMBLERS[state_name]
+  if not assembler and state_name and state_name:find("_PACK$") then assembler = assemble_pack end
+  if assembler then
+    assembler(sections, {
+      state_name = state_name,
+      has_filters = has_filters,
+      action_set = action_set,
+      include_stable = include_stable,
+      include_full_jokers = include_full_jokers,
+      opts = opts,
+    })
   end
 
   local output = {}

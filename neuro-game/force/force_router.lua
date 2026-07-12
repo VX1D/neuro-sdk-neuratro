@@ -43,8 +43,7 @@ function M.get_force_for_state(state_name)
     return MenuFlow.run_setup()
   end
 
-  -- GAME_OVER must not hit the generic overlay intercept: it shadows the dedicated handler and soft-loops on exit_overlay_menu
-  if state_name ~= "GAME_OVER" and Actions.is_action_valid("exit_overlay_menu") then
+  if not StateKinds.is_progression_overlay() and Actions.is_action_valid("exit_overlay_menu") then
     local overlay_actions = { "exit_overlay_menu" }
     if (state_name == "MENU" or state_name == "SPLASH")
         and Actions.is_action_valid("setup_run") then

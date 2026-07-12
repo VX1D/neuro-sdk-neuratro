@@ -3,6 +3,8 @@ local Actions = require("core.actions")
 local Enforce = require("core.enforce")
 local Utils = require("util.utils")
 local Metrics = require("util.metrics")
+local TxCache = require("core.tx_cache")
+local Staging = require("core.staging")
 local safe_name_or = Utils.safe_name_or
 
 local Dispatcher = {}
@@ -59,8 +61,6 @@ do
   end
 end
 
-local TX_CACHE_MAX = 256
-
 -- defer window protects a just-set deferred failure from a later success; divides by game speed (delays fire on the TOTAL clock)
 local _Tuning = require("core.tuning")
 local function defer_window()
@@ -69,54 +69,23 @@ local function defer_window()
     _Tuning.get("NEURO_SHOP_BUY_DELAY") / sp + 1,
     _Tuning.get("NEURO_PACK_PICK_DELAY") / sp + 1)
 end
-local tx_settled = {}
-local tx_settled_order = {}
 local _last_reregister_at = nil
 local _last_reregister_sig = nil
 
-local function tx_key(action_id)
-  if action_id == nil then return nil end
-  return tostring(action_id)
-end
-
-local function tx_get(action_id)
-  local k = tx_key(action_id)
-  if not k then return nil end
-  return tx_settled[k]
-end
-
 local function replay_if_settled(bridge, id)
-  local prior = tx_get(id)
+  local prior = TxCache.get(id)
   if not prior then return false end
   if bridge then bridge:send_action_result(id, prior.ok, prior.message) end
   return true
 end
 
-local function tx_store(action_id, ok, message, name)
-  local k = tx_key(action_id)
-  if not k then return end
-  if not tx_settled[k] then
-    tx_settled_order[#tx_settled_order + 1] = k
-  end
-  tx_settled[k] = {
-    ok = not not ok,
-    message = message,
-    name = name,
-  }
-  while #tx_settled_order > TX_CACHE_MAX do
-    local drop = table.remove(tx_settled_order, 1)
-    tx_settled[drop] = nil
-  end
-end
-
 -- let staging record its own results in the shared idempotency cache so a retry short-circuits instead of re-executing
 function Dispatcher.record_tx(id, ok, message, name)
-  tx_store(id, ok, message, name)
+  TxCache.store(id, ok, message, name)
 end
 
 function Dispatcher.reset_tx()
-  for k in pairs(tx_settled) do tx_settled[k] = nil end
-  for i = #tx_settled_order, 1, -1 do tx_settled_order[i] = nil end
+  TxCache.reset()
   _last_reregister_at = nil
   _last_reregister_sig = nil
 end
@@ -183,12 +152,9 @@ local function send_result(bridge, id, ok, message, name, opts)
   end
   -- transient rejections are retryable; caching one replays the stale "please wait" on a same-id retry
   if not opts.transient then
-    tx_store(id, ok, enhanced_message, name)
+    TxCache.store(id, ok, enhanced_message, name)
     do
-      local ok_stage, Staging = pcall(require, "core.staging")
-      if ok_stage and Staging and Staging.mark_settled then
-        pcall(Staging.mark_settled, id, ok)
-      end
+      pcall(Staging.mark_settled, id, ok)
     end
   end
   if ok then
@@ -227,133 +193,10 @@ local HandHandlers = require("handlers.hand_handlers")
 local handle_play_hand = HandHandlers.handle_play_hand
 local handle_discard_hand = HandHandlers.handle_discard_hand
 
-local function handle_select_blind(data)
-  local blind = data.blind
-  if not G or not G.P_BLINDS then
-    return nil, "Game is not ready yet."
-  end
-  local sel_key = Actions.get_selectable_blind_key()   -- "Small"/"Big"/"Boss" or nil
-  local function is_selectable(key)
-    return sel_key == key
-  end
-  local current = sel_key and sel_key:lower() or nil
-
-  if current and blind ~= current then
-    return nil, string.format("'%s' is not selectable right now. Currently selectable: %s — use select_blind with blind='%s'.", tostring(blind), current, current)
-  end
-
-  if blind == "small" then
-    if not is_selectable("Small") then
-      return nil, "Small blind is not available right now. Current selectable: " .. tostring(current or "none") .. "."
-    end
-    local small_key = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
-      and G.GAME.round_resets.blind_choices.Small
-    local bl_small = (small_key and G.P_BLINDS[small_key]) or G.P_BLINDS.bl_small
-    if not bl_small then
-      return nil, "Small blind definition not found."
-    end
-    local blind_name = bl_small.name or "Small Blind"
-    return function()
-      local fn = G.FUNCS and G.FUNCS.select_blind
-      if fn then fn({ config = { ref_table = bl_small }, UIBox = mock_UIBox }) end
-      return "Selected: " .. blind_name
-    end
-  elseif blind == "big" then
-    if not is_selectable("Big") then
-      return nil, "Big blind is not available right now. Current selectable: " .. tostring(current or "none") .. "."
-    end
-    local big_key = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
-      and G.GAME.round_resets.blind_choices.Big
-    local bl_big = (big_key and G.P_BLINDS[big_key]) or G.P_BLINDS.bl_big
-    if not bl_big then
-      return nil, "Big blind definition not found."
-    end
-    local blind_name = bl_big.name or "Big Blind"
-    return function()
-      local fn = G.FUNCS and G.FUNCS.select_blind
-      if fn then fn({ config = { ref_table = bl_big }, UIBox = mock_UIBox }) end
-      return "Selected: " .. blind_name
-    end
-  elseif blind == "boss" then
-    if not is_selectable("Boss") then
-      return nil, "Boss blind is not available right now. Current selectable: " .. tostring(current or "none") .. "."
-    end
-    local boss_key = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices and
-      G.GAME.round_resets.blind_choices.Boss
-    local boss = boss_key and G.P_BLINDS[boss_key] or nil
-    if boss then
-      local boss_name = boss.name or "Boss Blind"
-      return function()
-        local fn = G.FUNCS and G.FUNCS.select_blind
-        if fn then fn({ config = { ref_table = boss }, UIBox = mock_UIBox }) end
-        return "Selected: " .. boss_name
-      end
-    end
-    return nil, "Boss blind definition not found."
-  end
-  return nil, "Blind must be one of: small, big, boss. Currently selectable: " .. tostring(current or "none") .. "."
-end
-
-local function handle_set_joker_order(data)
-  if not G or not G.jokers or not G.jokers.cards then
-    return nil, "Jokers are not available yet."
-  end
-  local from_idx = data.from_index
-  local to_idx = data.to_index
-  if not from_idx or not to_idx then
-    return nil, "Both from_index and to_index are required."
-  end
-  local njok = #G.jokers.cards
-  local ok_from, err_from = CardArea.validate_index(from_idx, njok, "from_index", "jokers")
-  if not ok_from then return nil, err_from end
-  local ok_to, err_to = CardArea.validate_index(to_idx, njok, "to_index", "jokers")
-  if not ok_to then return nil, err_to end
-  if from_idx == to_idx then
-    return nil, "from_index and to_index are the same."
-  end
-  return function()
-    local card = G.jokers.cards[from_idx]
-    local card_name = safe_name_or(card)
-    table.remove(G.jokers.cards, from_idx)
-    table.insert(G.jokers.cards, to_idx, card)
-    if G.jokers.set_ranks then G.jokers:set_ranks() end
-    if G.jokers.align_cards then G.jokers:align_cards() end
-    return string.format("Moved %s from position %d to %d", card_name, from_idx, to_idx)
-  end
-end
-
-local function handle_skip_blind(_data)
-  if not (G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states) then
-    return nil, "Blind selection is not ready yet."
-  end
-
-  local on_deck = Actions.get_selectable_blind_key()
-
-  if on_deck == "Boss" then
-    return nil, "Skipping boss blind is not supported. Select the boss blind instead."
-  end
-  if on_deck ~= "Small" and on_deck ~= "Big" then
-    return nil, "No skippable blind is currently selectable."
-  end
-
-  local opt = G.blind_select_opts and G.blind_select_opts[string.lower(on_deck)]
-  if not (opt and type(opt.get_UIE_by_ID) == "function") then
-    return nil, "Blind UI option is unavailable; cannot skip right now."
-  end
-
-  local tag = opt:get_UIE_by_ID("tag_container")
-  if not (tag and tag.config and tag.config.ref_table) then
-    return nil, "Skip reward tag is unavailable; cannot skip right now."
-  end
-
-  return function()
-    local before = G.GAME and G.GAME.blind_on_deck or on_deck
-    local fn = G.FUNCS and G.FUNCS.skip_blind
-    if fn then fn({ UIBox = opt, config = {} }) end
-    local after = G.GAME and G.GAME.blind_on_deck or before
-    return string.format("Skipped %s blind. Next selectable: %s", tostring(before), tostring(after))
-  end
-end
+local BoardHandlers = require("handlers.board_handlers")
+local handle_select_blind = BoardHandlers.handle_select_blind
+local handle_set_joker_order = BoardHandlers.handle_set_joker_order
+local handle_skip_blind = BoardHandlers.handle_skip_blind
 
 local PARAM_VALIDATORS = {
   choose_persona = function(data)
@@ -569,15 +412,7 @@ local function raw_handle_message(msg, bridge)
   local name = msg.data.name
   -- hook so a deferred failure (buy/use ~2.2s later) drops its own optimistic ok=true so a retry re-executes
   if G and G.NEURO and not G.NEURO.invalidate_tx then
-    G.NEURO.invalidate_tx = function(aid)
-      if aid == nil then return end
-      local k = tostring(aid)
-      tx_settled[k] = nil
-      -- also drop from the LRU order list, else phantom keys count toward the cap and shrink the cache
-      for i = #tx_settled_order, 1, -1 do
-        if tx_settled_order[i] == k then table.remove(tx_settled_order, i); break end
-      end
-    end
+    G.NEURO.invalidate_tx = TxCache.invalidate
   end
 
   if replay_if_settled(bridge, id) then return end
@@ -671,8 +506,7 @@ local function raw_handle_message(msg, bridge)
     Metrics.time_end("action_exec")
     Metrics.incr("action_fail")
     if G and G.NEURO then
-      G.NEURO.force_dirty = true
-      G.NEURO.last_force_fingerprint = nil
+      ForceHelpers.rearm()
       ForceHelpers.record_failure(name, "internal error during execution")
       -- drop the optimistic ok=true from the tx cache so a resend re-executes instead of replaying a success for a crashed action
       if G.NEURO.invalidate_tx then G.NEURO.invalidate_tx(id) end
@@ -696,12 +530,10 @@ local function raw_handle_message(msg, bridge)
   if not (G and G.NEURO) then
     return
   end
-  if G.NEURO.force_inflight then
-    G.NEURO.force_last_result = "answered"
-  end
+  ForceHelpers.mark_answered()
   G.NEURO.last_action_name = name
   if name == "exit_overlay_menu" then
-    G.NEURO.last_force_fingerprint = nil
+    ForceHelpers.drop_fingerprint()
   end
   local current_state = G.NEURO.state or ""
   if current_state == "SHOP" then
@@ -721,7 +553,7 @@ local function raw_handle_message(msg, bridge)
     if G.NEURO.force_inflight then
       -- clear inflight and fingerprint so a preview answering outside the force set does not strand it until the stall watchdog
       if Dispatcher.NON_PROGRESS_FORCE_ACTIONS[name] then
-        G.NEURO.last_force_fingerprint = nil
+        ForceHelpers.drop_fingerprint()
       end
       clear_force_inflight()
     end
@@ -785,8 +617,7 @@ function Dispatcher.route_message(msg, bridge)
         handled = true; return
       end
 
-      local ok_stage, Staging = pcall(require, "core.staging")
-      if ok_stage and Staging and Staging.should_stage and Staging.should_stage(msg) then
+      if Staging.should_stage(msg) then
         Staging.queue(msg, bridge)
         handled = true
       end

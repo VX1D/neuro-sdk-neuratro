@@ -400,6 +400,24 @@ local draw_pack_panel = require("render.panels.pack").draw
 local draw_buy_toast = require("render.panels.buy_toast").draw
 local _rp = require("render.panels.right_panel")
 local draw_rp_frame, draw_rp_header, draw_rp_rows, draw_rp_footer = _rp.frame, _rp.header, _rp.rows, _rp.footer
+local function update_money_counter(now, panel_rows)
+  local money_now = (G.GAME and G.GAME.dollars) or 0
+  if S.ov.money_target == nil then
+    S.ov.money_target = money_now
+    S.ov.money_disp = money_now
+  elseif money_now ~= S.ov.money_target then
+    S.ov.money_from = S.ov.money_disp or money_now
+    S.ov.money_target = money_now
+    S.ov.money_start_at = now
+  end
+  local mt = math.min(1, (now - S.ov.money_start_at) / MONEY_COUNT_DUR)
+  local from, to = S.ov.money_from or money_now, S.ov.money_target
+  S.ov.money_disp = from + (to - from) * ease_out_cubic01(mt)
+  if panel_rows[1] and panel_rows[1].kind == "header" then
+    panel_rows[1].text = string.format("$%d", round(S.ov.money_disp))
+  end
+end
+
 local function draw_neuro_indicator()
   if not G then return end
 
@@ -506,23 +524,7 @@ local function draw_neuro_indicator()
     local shop_rows = S.ov.shop
     local pack_rows = S.ov.pack
 
-    do
-      local money_now = (G.GAME and G.GAME.dollars) or 0
-      if S.ov.money_target == nil then
-        S.ov.money_target = money_now
-        S.ov.money_disp = money_now
-      elseif money_now ~= S.ov.money_target then
-        S.ov.money_from = S.ov.money_disp or money_now
-        S.ov.money_target = money_now
-        S.ov.money_start_at = now
-      end
-      local mt = math.min(1, (now - S.ov.money_start_at) / MONEY_COUNT_DUR)
-      local from, to = S.ov.money_from or money_now, S.ov.money_target
-      S.ov.money_disp = from + (to - from) * ease_out_cubic01(mt)
-      if panel_rows[1] and panel_rows[1].kind == "header" then
-        panel_rows[1].text = string.format("$%d", round(S.ov.money_disp))
-      end
-    end
+    update_money_counter(now, panel_rows)
 
     local p_w = rn(320)
     local p_pad_x = rn(GUT)

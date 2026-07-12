@@ -34,8 +34,9 @@ local function persona(th)
   return th.persona_evil, th.persona_neuro
 end
 
-local set_col = Prims.set_col
-local shadow_text = Prims.shadow_text
+local gfx = require("render.gfx")
+local set_col = gfx.set_col
+local shadow_text = gfx.shadow_text
 
 -- opts: { a, sh, rad, title_h, skip_body (neuro), glow (evil counter_glow) }; returns prad
 local function persona_frame(th, mo, x, y, w, h, u, opts)

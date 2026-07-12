@@ -85,5 +85,58 @@ do
   check("unlock popup at GAME_OVER is forced dismissable through hold/recovery", has_exit)
 end
 
+local StateKinds = require("core.state_kinds")
+local function overlay_with(ids)
+  return { get_UIE_by_ID = function(_, id) return ids[id] and {} or nil end }
+end
+
+do
+  _G.G = { STATE = STATES.GAME_OVER, STATES = STATES, GAME = { round_resets = { ante = 3 } },
+    OVERLAY_MENU = overlay_with({}), NEURO = { enabled = true, persona = "evil",
+    dispatcher = Dispatcher, actions = Actions }, FUNCS = {} }
+  local f = Dispatcher.get_force_for_state("GAME_OVER")
+  local has_exit = false
+  for _, a in ipairs((f or {}).actions or {}) do if a == "exit_overlay_menu" then has_exit = true end end
+  print("[STACK] non-unlock notification over GAME_OVER -> forces exit_overlay_menu=" .. tostring(has_exit))
+  check("stacked non-unlock overlay at GAME_OVER is forced dismissable", has_exit)
+end
+
+do
+  _G.G = { STATE = STATES.GAME_OVER, STATES = STATES, GAME = { won = false, round_resets = { ante = 3 } },
+    OVERLAY_MENU = overlay_with({ from_game_over = true }), NEURO = { enabled = true, persona = "evil",
+    dispatcher = Dispatcher, actions = Actions }, FUNCS = {} }
+  local f = Dispatcher.get_force_for_state("GAME_OVER")
+  local has_exit, has_setup = false, false
+  for _, a in ipairs((f or {}).actions or {}) do
+    if a == "exit_overlay_menu" then has_exit = true end
+    if a == "setup_run" then has_setup = true end
+  end
+  print("[PROG] game-over progression screen -> NOT dismissed via exit_overlay_menu=" .. tostring(not has_exit))
+  check("game-over progression screen is not force-dismissed (no soft-loop)", not has_exit)
+  check("game-over progression screen offers setup_run (no soft-hang)", has_setup)
+end
+
+do
+  _G.G = { STATE = STATES.SHOP, STATES = STATES, GAME = { won = true, round_resets = { ante = 8 } },
+    OVERLAY_MENU = overlay_with({ from_game_won = true }), NEURO = { enabled = true, persona = "evil",
+    dispatcher = Dispatcher, actions = Actions }, FUNCS = {} }
+  local f = Dispatcher.get_force_for_state("SHOP")
+  local has_exit = false
+  for _, a in ipairs((f or {}).actions or {}) do if a == "exit_overlay_menu" then has_exit = true end end
+  print("[WIN] win overlay at non-GAME_OVER state -> forces exit_overlay_menu=" .. tostring(has_exit))
+  check("win screen forces exit_overlay_menu", has_exit)
+end
+
+check("is_progression_overlay: game-over screen", (function()
+  _G.G = { OVERLAY_MENU = overlay_with({ from_game_over = true }) }; return StateKinds.is_progression_overlay() end)())
+check("is_progression_overlay: win screen NOT progression", (function()
+  _G.G = { OVERLAY_MENU = overlay_with({ from_game_won = true }) }; return not StateKinds.is_progression_overlay() end)())
+check("is_progression_overlay: run-setup screen", (function()
+  _G.G = { OVERLAY_MENU = overlay_with({ run_setup_seed = true }) }; return StateKinds.is_progression_overlay() end)())
+check("is_progression_overlay: plain notification is NOT progression", (function()
+  _G.G = { OVERLAY_MENU = overlay_with({}) }; return not StateKinds.is_progression_overlay() end)())
+check("is_progression_overlay: no overlay is NOT progression", (function()
+  _G.G = { OVERLAY_MENU = nil }; return not StateKinds.is_progression_overlay() end)())
+
 print(string.format("GAMEOVER_SYNTH_FAILS=%d (0 = clean)", fails))
 os.exit(fails == 0 and 0 or 1)

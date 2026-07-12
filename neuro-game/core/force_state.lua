@@ -39,6 +39,55 @@ function M.clear_force_state()
   G.NEURO.force_sent_at = nil
 end
 
+function M.is_inflight()
+  return not not (G and G.NEURO and G.NEURO.force_inflight)
+end
+
+function M.drop_fingerprint()
+  if G and G.NEURO then G.NEURO.last_force_fingerprint = nil end
+end
+
+function M.arm(state, action_names, action_set, fingerprint, now)
+  if not (G and G.NEURO) or G.NEURO.force_inflight then return false end
+  G.NEURO.force_last_result = "pending"
+  G.NEURO.force_state = state
+  G.NEURO.force_inflight = true
+  G.NEURO.force_sent_at = now
+  G.NEURO.force_action_names = action_names
+  G.NEURO.force_action_set = action_set
+  G.NEURO.last_force_fingerprint = fingerprint
+  return true
+end
+
+function M.supersede()
+  if not (G and G.NEURO) then return end
+  G.NEURO.force_last_result = "superseded"
+  M.clear_force_state()
+  Lifecycle.mark_force_dirty()
+end
+
+function M.stall()
+  if not (G and G.NEURO) then return end
+  if G.NEURO.force_inflight then
+    G.NEURO.force_last_result = "stall"
+    M.clear_force_state()
+  end
+  G.NEURO.last_force_fingerprint = nil
+  Lifecycle.mark_force_dirty()
+end
+
+function M.mark_answered()
+  if G and G.NEURO and G.NEURO.force_inflight then
+    G.NEURO.force_last_result = "answered"
+  end
+end
+
+function M.rearm()
+  if not (G and G.NEURO) then return end
+  G.NEURO.force_dirty = true
+  G.NEURO.last_force_fingerprint = nil
+end
+
 function M.snapshot_once_serials()
   if not (G and G.NEURO) then return nil end
   if type(G.NEURO.once_serials) ~= "table" then return nil end

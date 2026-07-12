@@ -4,6 +4,7 @@ local Utils = require("util.utils")
 local CardArea = require("facts.card_area_util")
 local CtxHelpers = require("context.ctx_helpers")
 local ForceHelpers = require("force.force_helpers")
+local TxCache = require("core.tx_cache")
 
 local Tuning = require("core.tuning")
 
@@ -36,6 +37,7 @@ local INFO_ACTIONS = { choose_persona = true }
 for k in pairs(Actions.INFO_ACTIONS or {}) do INFO_ACTIONS[k] = true end
 
 local staged = nil
+local _executor = nil
 local post_until = 0
 local overlay_text = nil
 local clear_hovers
@@ -90,8 +92,7 @@ local function cancel_staged(reason, transient)
     pcall(bridge.send_action_result, bridge, id, false, reason or "Action cancelled")
     -- transient cancels are retryable; do not settle the id or a retry replays the cancellation
     if not transient then
-      local D = Utils.lazy_require("core.dispatcher")
-      if D and D.record_tx then D.record_tx(id, false, reason or "Action cancelled") end
+      TxCache.store(id, false, reason or "Action cancelled")
     end
   end
 
@@ -283,6 +284,8 @@ function Staging.should_stage(msg)
   return true
 end
 
+function Staging.set_executor(fn) _executor = fn end
+
 function Staging.queue(msg, bridge)
   local id = msg_action_id(msg)
   if id and pending_ids[id] then
@@ -299,8 +302,7 @@ function Staging.queue(msg, bridge)
     local raw_id = msg.data and msg.data.id
     if raw_id ~= nil and bridge and bridge.send_action_result then
       bridge:send_action_result(raw_id, false, "Staging resolve failed: " .. tostring(cards))
-      local D = Utils.lazy_require("core.dispatcher")
-      if D and D.record_tx then D.record_tx(raw_id, false, "Staging resolve failed") end
+      TxCache.store(raw_id, false, "Staging resolve failed")
     end
     if G and G.NEURO then
       ForceHelpers.record_failure(msg.data and msg.data.name or "action", "the action could not be staged")
@@ -424,8 +426,8 @@ function Staging.update()
         ForceHelpers.set_action_phase("executing", t)
       end
 
-      local NeuroDispatcher = require("core.dispatcher")
-      local ok_exec, exec_err = pcall(NeuroDispatcher.handle_message, staged.msg, staged.bridge)
+      local exec = _executor or require("core.dispatcher").handle_message
+      local ok_exec, exec_err = pcall(exec, staged.msg, staged.bridge)
       if not ok_exec then
         local id = staged.msg and staged.msg.data and staged.msg.data.id
         if id ~= nil then
@@ -433,7 +435,7 @@ function Staging.update()
         end
         if id and staged.bridge and staged.bridge.send_action_result then
           pcall(staged.bridge.send_action_result, staged.bridge, id, false, "Staged action failed: " .. tostring(exec_err))
-          if NeuroDispatcher and NeuroDispatcher.record_tx then NeuroDispatcher.record_tx(id, false, "Staged action failed") end
+          TxCache.store(id, false, "Staged action failed")
         end
         if G and G.NEURO then
           ForceHelpers.set_action_phase("failed", t)

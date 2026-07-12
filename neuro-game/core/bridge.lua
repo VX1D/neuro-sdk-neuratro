@@ -1,6 +1,7 @@
 local json = require("util.neuro_json")
 local dotenv = require("util.dotenv")
 local Metrics = require("util.metrics")
+local Protocol = require("core.bridge_protocol")
 
 local Bridge = {}
 Bridge.__index = Bridge
@@ -323,7 +324,7 @@ function Bridge:send_startup()
     if ok_disp and Dispatcher and Dispatcher.reset_tx then pcall(Dispatcher.reset_tx) end
   end
 
-  self:send({ command = "startup", session_id = self.session_id, game = self.game })
+  self:send(Protocol.startup(self.session_id, self.game))
 end
 
 function Bridge:send_context(message, silent)
@@ -341,10 +342,7 @@ function Bridge:send_context(message, silent)
   if not silent then
     self.last_context_spoken = true
   end
-  self:send({
-    command = "context",
-    data = { message = message, silent = silent }
-  })
+  self:send(Protocol.context(message, silent))
 end
 
 -- order-insensitive signature so a schema/description change under the same action name still re-registers
@@ -379,41 +377,23 @@ function Bridge:register_actions(actions)
     if cur_sig[n] == nil or cur_sig[n] ~= oldsig then stale[#stale + 1] = n end
   end
   if #stale > 0 then
-    self:send({
-      command = "actions/unregister",
-      data = { action_names = stale }
-    })
+    self:send(Protocol.unregister(stale))
   end
 
   self._last_register_key = key
   self._registered_set = name_set
   self._registered_sigs = cur_sig
-  self:send({
-    command = "actions/register",
-    data = { actions = copy_actions_for_json(actions) }
-  })
+  self:send(Protocol.register(copy_actions_for_json(actions)))
 end
 
 function Bridge:force_actions(state, query, action_names, opts)
   if self.llm_paused then return end
   opts = opts or {}
-  self:send({
-    command = "actions/force",
-    data = {
-      state = state or "",
-      query = query or "",
-      ephemeral_context = opts.ephemeral_context,
-      priority = opts.priority,
-      action_names = action_names or {}
-    }
-  })
+  self:send(Protocol.force(state, query, action_names, opts))
 end
 
 function Bridge:send_action_result(id, success, message)
-  self:send({
-    command = "action/result",
-    data = { id = id, success = not not success, message = message }
-  })
+  self:send(Protocol.result(id, success, message))
 end
 
 function Bridge:write_state(state)

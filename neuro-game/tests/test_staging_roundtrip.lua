@@ -200,9 +200,20 @@ function M.run()
     if #bridge.results ~= 1 then fail(string.format("G: want 1 result, got %d", #bridge.results)) end
   end
 
+  do
+    fresh(Dispatcher, Actions, "SELECTING_HAND")
+    local msg = { command = "action", data = { id = "stg-H", name = "play_hand",
+      data = '{"indices":[1,2]}' } }
+    local bridge = make_bridge()
+    Staging.queue(msg, bridge)
+    drive(Staging, bridge)
+    if #bridge.results ~= 1 then fail(string.format("H: want 1 result, got %d", #bridge.results))
+    elseif bridge.results[1].ok ~= true then fail("H: staged action failed with no executor wired (fallback broken)") end
+  end
+
   print("====================================================")
   if #fails == 0 then
-    print("==== staging-roundtrip: 7/7 cases PASS, 0 FAIL ====")
+    print("==== staging-roundtrip: 8/8 cases PASS, 0 FAIL ====")
   else
     print(string.format("==== staging-roundtrip: %d FAIL ====", #fails))
     for _, f in ipairs(fails) do print("  FAIL " .. f) end

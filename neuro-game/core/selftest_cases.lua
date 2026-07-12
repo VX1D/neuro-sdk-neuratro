@@ -1544,6 +1544,55 @@ function M.build()
     end,
   })
   add({
+    name = "overlay/unlock_dismiss", timeout_s = 20, standalone = true,
+    setup = function(ctx)
+      if G.OVERLAY_MENU and G.FUNCS and G.FUNCS.exit_overlay_menu then pcall(G.FUNCS.exit_overlay_menu) end
+      local center = G.P_CENTERS and G.P_CENTERS["j_joker"]
+      if not center and G.P_CENTERS then
+        for k, v in pairs(G.P_CENTERS) do if type(k) == "string" and k:sub(1, 2) == "j_" then center = v; break end end
+      end
+      if not (center and type(create_UIBox_card_unlock) == "function") then ctx.skip = "no joker center / unlock UI builder"; return end
+      local ok = pcall(function() G.FUNCS.overlay_menu({ definition = create_UIBox_card_unlock(center) }) end)
+      if not (ok and G.OVERLAY_MENU) then ctx.skip = "could not create real unlock overlay"; return end
+      ctx.bridge = { results = {},
+        send_action_result = function(self, id, ok2, m) self.results[#self.results + 1] = { id = id, ok = ok2, msg = m } end,
+        send_context = function() end, register_actions = function() end,
+        force_actions = function() end, send = function() end }
+    end,
+    act = function() end,
+    wait_for = function(ctx)
+      if ctx.skip then return true end
+      local now = love.timer.getTime()
+      ctx.t0 = ctx.t0 or now
+      if now - ctx.t0 < 2.2 then return false end
+      if not ctx.queued then
+        local FR = require("force.force_router")
+        local f = FR.get_force_for_state(require("core.state").get_state_name())
+        ctx.routed = false
+        for _, a in ipairs((f or {}).actions or {}) do if a == "exit_overlay_menu" then ctx.routed = true end end
+        ctx.unlock_marked = G.OVERLAY_MENU ~= nil and G.OVERLAY_MENU.joker_unlock_table ~= nil
+        local S = require("core.staging")
+        local msg = { command = "action", data = { id = "selftest-overlay-dismiss", name = "exit_overlay_menu", data = {} } }
+        ctx.staged = S.should_stage(msg)
+        S.queue(msg, ctx.bridge)
+        ctx.queued = true
+      end
+      require("core.staging").update()
+      return not require("core.staging").is_busy()
+    end,
+    assert = function(ctx)
+      if ctx.skip then return true, ctx.skip end
+      if not ctx.unlock_marked then return false, "real unlock overlay never set joker_unlock_table (not the unlock popup)" end
+      if not ctx.routed then return false, "force_router did not offer exit_overlay_menu with the unlock popup up" end
+      if not ctx.staged then return false, "exit_overlay_menu did not stage" end
+      if G.OVERLAY_MENU ~= nil then return false, "unlock popup still open after staged exit_overlay_menu (dismiss failed)" end
+      local r = ctx.bridge.results
+      if #r ~= 1 then return false, string.format("want exactly 1 result, got %d", #r) end
+      if r[1].ok ~= true then return false, "dismiss result not ok=true: " .. tostring(r[1].msg) end
+      return true, "REAL joker-unlock popup induced -> joker_unlock_table set -> staged exit_overlay_menu -> continue_unlock dismissed it"
+    end,
+  })
+  add({
     name = "force/round_eval_static", timeout_s = 6,
     setup = function() end, act = function() end, wait_for = function() return true end,
     assert = function()
