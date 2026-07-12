@@ -25,17 +25,25 @@ function M.mark_force_dirty(drop_fingerprint)
   G.NEURO.force_dirty_at = Utils.now()
 end
 
+local RUN_SCOPED_NIL = {
+  "force_state", "force_action_names", "force_action_set",
+  "force_sent_at", "force_dirty_at", "force_last_result",
+  "action_phase", "action_phase_at",
+  "action_history", "recent_actions", "once_serials", "hand_level_snapshot",
+  "last_failed_action", "last_failed_reason", "last_failed_at",
+  "last_action_at", "last_action_name", "last_play",
+  "shop_reroll_count", "reserved_dollars", "purchase_showcase_queue",
+  "stable_ctx_sig", "stable_refresh_due", "stable_sig_cheap",
+}
+
 function M.reset_run_state()
   if not Utils.neuro_ready() then return end
-  G.NEURO.action_history      = nil
-  G.NEURO.recent_actions      = nil
-  G.NEURO.once_serials        = nil
-  G.NEURO.hand_level_snapshot = nil
-  G.NEURO.last_failed_action  = nil
-  G.NEURO.last_failed_reason  = nil
-  G.NEURO.last_failed_at      = nil
-  G.NEURO.shop_reroll_count   = nil
-  G.NEURO.state_enter_serial  = 0
+  local N = G.NEURO
+  for i = 1, #RUN_SCOPED_NIL do N[RUN_SCOPED_NIL[i]] = nil end
+  N.force_inflight     = false
+  N.force_dirty        = false
+  N.reforce_count      = 0
+  N.state_enter_serial = 0
 end
 
 return M

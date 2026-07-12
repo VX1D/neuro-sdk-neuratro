@@ -344,21 +344,28 @@ function M.start(opts)
       for name in pairs(SCAFFOLD) do
         if not present[name] then trace("filter WARNING: scaffold case '%s' not found (state threading may break)", name) end
       end
-      for _, c in ipairs(S.cases) do
-        local keep = SCAFFOLD[c.name] or false
-        if not keep then
-          for _, p in ipairs(pats) do
-            if tostring(c.name):find(p, 1, true) then keep = true; break end
-          end
+      local function matches(c)
+        for _, p in ipairs(pats) do
+          if tostring(c.name):find(p, 1, true) then return true end
         end
+        return false
+      end
+      local needs_scaffold = false
+      for _, c in ipairs(S.cases) do
+        if not SCAFFOLD[c.name] and matches(c) and not c.standalone then needs_scaffold = true; break end
+      end
+      for _, c in ipairs(S.cases) do
+        local keep = (SCAFFOLD[c.name] and needs_scaffold) or false
+        if not keep and matches(c) then keep = true end
         if keep then kept[#kept + 1] = c end
       end
       if #kept > 0 then
         S.cases = kept
+        if not needs_scaffold then sandbox = false; S.sandbox = false end
       else
         trace("filter WARNING: '%s' matched no cases -- running the FULL suite", tostring(filt))
       end
-      trace("filter '%s' -> %d/%d cases", tostring(filt), #S.cases, total0)
+      trace("filter '%s' -> %d/%d cases (scaffold=%s)", tostring(filt), #S.cases, total0, tostring(needs_scaffold))
     end
   end
   S.opts.gamespeed = opts.gamespeed or (sandbox and 4 or nil)

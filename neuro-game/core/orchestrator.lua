@@ -2,6 +2,7 @@ local Orchestrator = {}
 
 local Utils = require("util.utils")
 local S = require("hud.state")
+local Showcase = require("hud.showcase")
 local Tuning = require("core.tuning")
 local ContextCompact = require("context.context_compact")
 local CtxHand = require("context.ctx_hand")
@@ -18,6 +19,8 @@ local ForceHelpers = require("force.force_helpers")
 local DeckNames = require("facts.deck_names")
 local NeuroAnim = require("render.neuro-anim")
 local neuro_now = Utils.now
+
+Staging.set_executor(NeuroDispatcher.handle_message)
 
 local bridge_attempted = false
 local last_neuro_error = nil
@@ -93,6 +96,11 @@ local function emit_state_glossary(state_name)
   Utils.send_context("GLOSS| " .. text, true)
 end
 
+local force_arm = require("force.force_helpers").arm
+local force_supersede = require("force.force_helpers").supersede
+local force_stall = require("force.force_helpers").stall
+local force_drop_fp = require("force.force_helpers").drop_fingerprint
+
 -- stable only where jokers/vouchers inform decisions; skipping the rest avoids content flapping (ROUND_EVAL carries no JD)
 local STABLE_STATES = { SELECTING_HAND = true, SHOP = true, BLIND_SELECT = true }
 
@@ -115,7 +123,7 @@ local function maybe_emit_stable_context(state_name)
     G.NEURO.stable_ctx_sig = stable
     G.NEURO.stable_refresh_due = false
     G.NEURO:send_context(stable, true)
-    G.NEURO.last_force_fingerprint = nil
+    force_drop_fp()
   end
 end
 
@@ -148,7 +156,6 @@ local function neuro_can_act()
   return true
 end
 
-local clear_force_state = require("force.force_helpers").clear_force_state
 local force_is_stale = require("force.force_helpers").force_is_stale
 local snapshot_once_serials = require("force.force_helpers").snapshot_once_serials
 local restore_once_serials = require("force.force_helpers").restore_once_serials
@@ -284,12 +291,7 @@ function Orchestrator.update(dt, original_love_update)
         if state_changed then
           Staging.on_state_change()
           -- drop active showcase/spotlight on state change so it cannot bleed into next state (leak/race)
-          S.joker_showcase = nil
-          S.joker_showcase_q = {}
-          S.pack_gained_q = {}
-          if G.NEURO then G.NEURO.purchase_showcase_queue = {} end
-          S.buy_showcase = nil
-          S.pack_card_indices = {}
+          Showcase.on_state_change()
           if NeuroAnim and NeuroAnim.on_state_enter then
             pcall(NeuroAnim.on_state_enter, state_name)
           end
@@ -308,7 +310,7 @@ function Orchestrator.update(dt, original_love_update)
           end
           Lifecycle.clear_failure()
           G.NEURO.state = state_name
-          G.NEURO.last_force_fingerprint = nil
+          force_drop_fp()
           if state_name == "SELECTING_HAND" and (prev_state == "SPLASH" or prev_state == "MENU" or prev_state == "RUN_SETUP") then
             ContextCompact.invalidate_cache()
             G.NEURO.rules_sent = nil
@@ -362,9 +364,7 @@ function Orchestrator.update(dt, original_love_update)
         if G.NEURO.force_inflight and G.NEURO.force_state
           and state_name and state_name ~= "" and state_name ~= "UNKNOWN"
           and G.NEURO.force_state ~= state_name then
-          G.NEURO.force_last_result = "superseded"
-          clear_force_state()
-          mark_force_dirty()
+          force_supersede()
         end
         if state_name and state_name ~= "" and state_name ~= "MENU"
           and state_name ~= "SPLASH" and state_name ~= "UNKNOWN"
@@ -375,12 +375,7 @@ function Orchestrator.update(dt, original_love_update)
             G.NEURO.last_action_at or 0,
             S.state_changed_at or 0)
           if (now - last_activity) > Tuning.force_stall_seconds() then
-            if G.NEURO.force_inflight then
-              G.NEURO.force_last_result = "stall"
-              clear_force_state()
-            end
-            G.NEURO.last_force_fingerprint = nil
-            mark_force_dirty()
+            force_stall()
           end
         end
 
@@ -388,9 +383,7 @@ function Orchestrator.update(dt, original_love_update)
         if G.NEURO.force_inflight and (state_name == "MENU" or state_name == "SPLASH")
             and not G.NEURO.llm_paused then
           if (now - (G.NEURO.force_sent_at or 0)) > Tuning.force_stall_seconds() then
-            G.NEURO.force_last_result = "stall"
-            clear_force_state()
-            mark_force_dirty()
+            force_stall()
           end
         end
 
@@ -449,21 +442,16 @@ function Orchestrator.update(dt, original_love_update)
                 neuro_last_force_attempt_at = now
               elseif force_fingerprint ~= G.NEURO.last_force_fingerprint then
                 emit_state_glossary(state_name)
-                G.NEURO.force_last_result = "pending"
-                G.NEURO.force_state = state_name
-                G.NEURO.force_inflight = true
-                G.NEURO.force_sent_at = now
-                G.NEURO.force_action_names = force.actions
-                G.NEURO.force_action_set = build_action_set(force.actions)
-                G.NEURO.last_force_fingerprint = force_fingerprint
                 neuro_last_force_attempt_at = now
-                G.NEURO:force_actions(
-                  force_context,
-                  force.query,
-                  force.actions,
-                  { priority = "medium", ephemeral_context = true }
-                )
-                G.NEURO.force_dirty = false
+                if force_arm(state_name, force.actions, build_action_set(force.actions), force_fingerprint, now) then
+                  G.NEURO:force_actions(
+                    force_context,
+                    force.query,
+                    force.actions,
+                    { priority = "medium", ephemeral_context = true }
+                  )
+                  G.NEURO.force_dirty = false
+                end
               else
                 restore_once_serials(hint_snapshot)
                 neuro_last_force_attempt_at = now

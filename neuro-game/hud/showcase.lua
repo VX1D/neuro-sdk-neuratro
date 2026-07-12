@@ -154,4 +154,13 @@ function Showcase.update_joker(now)
   pull_showcase(now)
 end
 
+function Showcase.on_state_change()
+  S.joker_showcase = nil
+  S.joker_showcase_q = {}
+  S.pack_gained_q = {}
+  S.buy_showcase = nil
+  S.pack_card_indices = {}
+  if G and G.NEURO then G.NEURO.purchase_showcase_queue = {} end
+end
+
 return Showcase

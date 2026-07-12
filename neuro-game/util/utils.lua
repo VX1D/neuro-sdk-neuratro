@@ -255,34 +255,46 @@ local function collect_ui_lines(node, lines, seen, depth)
   end
 end
 
+local _reap_warned = false
 local function build_ui_text(card)
   if not (card and type(card.generate_UIBox_ability_table) == "function") then
     return nil, nil
   end
 
-  -- generate_UIBox_ability_table leaks dynatext into G.I.MOVEABLE; snapshot and remove new objects or the registry grows unbounded and tanks fps
-  local mv = G and G.I and G.I.MOVEABLE
-  local before
-  if type(mv) == "table" then
-    before = {}
-    for _, obj in pairs(mv) do before[obj] = true end
+  local before_sets = {}
+  if G and type(G.I) == "table" then
+    for _, reg in pairs(G.I) do
+      if type(reg) == "table" then
+        local before = {}
+        for _, obj in pairs(reg) do before[obj] = true end
+        before_sets[reg] = before
+      end
+    end
   end
 
   local ok, ui = pcall(function()
     return card:generate_UIBox_ability_table()
   end)
 
-  if type(mv) == "table" and before then
+  local unreapable = 0
+  for reg, before in pairs(before_sets) do
     local kill = {}
-    for _, obj in pairs(mv) do
+    for _, obj in pairs(reg) do
       if obj and not before[obj] then kill[#kill + 1] = obj end
     end
     for i = 1, #kill do
       local obj = kill[i]
-      pcall(function()
-        if type(obj.remove) == "function" then obj:remove() end
-      end)
+      if type(obj.remove) == "function" then
+        pcall(obj.remove, obj)
+      else
+        unreapable = unreapable + 1
+      end
     end
+  end
+  if unreapable > 0 and not _reap_warned then
+    _reap_warned = true
+    print("[neuro-game] build_ui_text: " .. unreapable
+      .. " UI object(s) with no :remove() -- possible DynaText/Moveable leak (modded card?)")
   end
 
   if not ok or type(ui) ~= "table" then
@@ -655,15 +667,6 @@ function Utils.clean_plain(s) return normalize_spaces(strip_loc_tags(s)) end
 
 function Utils.money(n)
   return "$" .. tostring(n or 0)
-end
-
-function Utils.clamp(v, lo, hi)
-  if v < lo then return lo elseif v > hi then return hi end
-  return v
-end
-function Utils.clamp01(v)
-  if v < 0 then return 0 elseif v > 1 then return 1 end
-  return v
 end
 
 function Utils.lazy_require(name)

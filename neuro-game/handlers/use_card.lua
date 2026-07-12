@@ -223,8 +223,7 @@ local function handle_use_card(data)
       if used_ok and hand_indices and G and G.NEURO then
         -- drop the fingerprint so the settled (post-mutation) hand re-sends instead of the pre-mutation H: line
         -- do NOT clear the hand highlight here: deferred events still index G.hand.highlighted[i] (card.lua:1429) -> E_MANAGER freeze
-        G.NEURO.force_dirty = true
-        G.NEURO.last_force_fingerprint = nil
+        ForceHelpers.rearm()
       end
     end
 

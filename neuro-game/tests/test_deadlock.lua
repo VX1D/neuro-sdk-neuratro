@@ -724,7 +724,7 @@ local SCENARIOS = {
         hand = { cards = {}, highlighted = {} },
         jokers = { cards = {}, config = { card_limit = 5 } },
         consumeables = { cards = {}, config = { card_limit = 2 } },
-        OVERLAY_MENU = {},
+        OVERLAY_MENU = { get_UIE_by_ID = function(_, id) return id == "from_game_over" and {} or nil end },
         NEURO_PERSONA = "neuro",
       }
     end,

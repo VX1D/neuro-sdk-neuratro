@@ -133,25 +133,13 @@ local function setup_text_input()
 end
 
 local function init_neuro_fields()
-  G.NEURO.ai_highlighted         = setmetatable({}, { __mode = "k" })
-  G.NEURO.state                  = nil
-  G.NEURO.force_state            = nil
-  G.NEURO.force_inflight         = false
-  G.NEURO.last_force_fingerprint = nil
-  G.NEURO.force_sent_at          = nil
-  G.NEURO.force_action_names     = nil
-  G.NEURO.force_action_set       = nil
-  G.NEURO.force_dirty            = false
-  G.NEURO.state_enter_serial     = 0
-  G.NEURO.shop_reroll_count      = nil
-  G.NEURO.last_failed_action     = nil
-  G.NEURO.last_failed_reason     = nil
-  G.NEURO.last_failed_at         = nil
-  G.NEURO.rules_sent             = nil
-  G.NEURO.seed_pasted            = nil
-  G.NEURO.login_anim             = nil
-  G.NEURO.game_over_hooked       = nil
-  G.NEURO.persona                = NEURO_PERSONA_FORCE or "hiyori"
+  require("core.neuro_lifecycle").reset_run_state()
+  G.NEURO.ai_highlighted    = setmetatable({}, { __mode = "k" })
+  G.NEURO.rules_sent        = nil
+  G.NEURO.seed_pasted       = nil
+  G.NEURO.login_anim        = nil
+  G.NEURO.game_over_hooked  = nil
+  G.NEURO.persona           = NEURO_PERSONA_FORCE or "hiyori"
   G.NEURO.actions           = NeuroActions
   G.NEURO.dispatcher        = NeuroDispatcher
 end

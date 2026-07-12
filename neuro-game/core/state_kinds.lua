@@ -27,6 +27,13 @@ function M.is_unlock_popup()
     and G.OVERLAY_MENU.joker_unlock_table ~= nil)
 end
 
+function M.is_progression_overlay()
+  local om = G and G.OVERLAY_MENU
+  if not (om and type(om.get_UIE_by_ID) == "function") then return false end
+  return om:get_UIE_by_ID("from_game_over") ~= nil
+    or om:get_UIE_by_ID("run_setup_seed") ~= nil
+end
+
 M.PACK_STATES = PACK_STATES
 M.MENU_STATES = MENU_STATES
 return M

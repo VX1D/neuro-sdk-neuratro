@@ -1,6 +1,7 @@
 local Utils = require("util.utils")
 local dotenv = require("util.dotenv")
 local NeuroAnim = require("render.neuro-anim")
+local gfx = require("render.gfx")
 
 local Prims = {}
 
@@ -22,26 +23,14 @@ Prims.EVIL = {
 
 Prims.now = Utils.now
 
-local floor = math.floor
-local function round(x) return floor(x + 0.5) end
-Prims.round = round
-
-local function set_col(c, a)
-  love.graphics.setColor(c[1], c[2], c[3], a)
-end
-Prims.set_col = set_col
-
-local function shadow_text(txt, x, y, col, a, sh_a, off)
-  off = off or 1
-  love.graphics.setColor(0, 0, 0, sh_a)
-  love.graphics.print(txt, x + off, y + off)
-  love.graphics.setColor(col[1], col[2], col[3], a)
-  love.graphics.print(txt, x, y)
-end
-Prims.shadow_text = shadow_text
-
-Prims.clamp = Utils.clamp
-Prims.clamp01 = Utils.clamp01
+local round = gfx.round
+local set_col = gfx.set_col
+local shadow_text = gfx.shadow_text
+Prims.round = gfx.round
+Prims.set_col = gfx.set_col
+Prims.shadow_text = gfx.shadow_text
+Prims.clamp = gfx.clamp
+Prims.clamp01 = gfx.clamp01
 
 function Prims.smoothstep01(f)
   if f < 0 then f = 0 elseif f > 1 then f = 1 end
