@@ -8,10 +8,6 @@ local TxCache = require("core.tx_cache")
 
 local Tuning = require("core.tuning")
 
-local HOLD_ALL_SELECTED_BASE = 1.1
-local HOVER_DEFAULT_BASE     = 0.5
-local POST_SELL_BASE         = 0.6
-local POST_DEFAULT_BASE      = 0.5
 
 -- Staging.update runs every frame; dedup+cooldown this print or a persistent throw spams stdout ~60x/s
 local _upd_err_cd, _upd_err_last = 0, nil
@@ -35,6 +31,21 @@ local DEBUG_STAGING = Tuning.bool("NEURO_STAGING_DEBUG")
 local Actions = require("core.actions")
 local INFO_ACTIONS = { choose_persona = true }
 for k in pairs(Actions.INFO_ACTIONS or {}) do INFO_ACTIONS[k] = true end
+
+local ACTION_LABELS = {
+  change_selected_back = "Changing deck",
+  change_viewed_back = "Browsing decks",
+  change_viewed_collab = "Browsing collab",
+  change_stake = "Changing stake",
+  change_challenge_description = "Browsing challenge",
+  set_joker_order = "Reordering jokers",
+  toggle_seeded_run = "Toggling seeded run",
+  paste_seed = "Pasting seed",
+  copy_seed = "Copying seed",
+  toggle_shop = "Leaving shop",
+  exit_overlay_menu = "Closing popup",
+  setup_run = "Opening run setup",
+}
 
 local staged = nil
 local _executor = nil
@@ -155,9 +166,9 @@ local function resolve_hover(msg)
   if type(payload) ~= "table" then payload = {} end
 
   local cards = {}
-  local hover_dur = HOVER_DEFAULT_BASE * spd()
-  local post_dur = POST_DEFAULT_BASE * spd()
-  local label = name or "action"
+  local hover_dur = tuned("NEURO_HOVER_DEFAULT")
+  local post_dur = tuned("NEURO_POST_DEFAULT")
+  local label = ACTION_LABELS[name] or Utils.humanize_identifier(name or "action")
   local juice_scale = 0.5
   local juice_rot = 0.3
 
@@ -202,8 +213,8 @@ local function resolve_hover(msg)
 
   elseif name == "sell_card" then
     resolve_payload_card(payload, cards)
-    hover_dur = HOVER_DEFAULT_BASE * spd()
-    post_dur = POST_SELL_BASE * spd()
+    hover_dur = tuned("NEURO_HOVER_DEFAULT")
+    post_dur = tuned("NEURO_POST_SELL")
     juice_scale = 0.7
     juice_rot = 0.4
     local cname = #cards > 0 and card_name(cards[1]) or "card"
@@ -375,7 +386,7 @@ function Staging.update()
         staged.phase = "EXECUTE"
       elseif staged.multi then
         local total_select_time = #cards * staged.hover_dur
-        local total_time = total_select_time + HOLD_ALL_SELECTED_BASE * spd()
+        local total_time = total_select_time + tuned("NEURO_HOLD_ALL_SELECTED")
 
         if elapsed >= total_time then
           staged.phase = "EXECUTE"

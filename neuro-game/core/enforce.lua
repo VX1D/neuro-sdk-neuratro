@@ -49,7 +49,6 @@ local tracker = {
   last_any_action_at = 0,
 }
 
-local REFRESH_COOLDOWN = 0.35
 
 local now_time = require("util.utils").now
 
@@ -102,7 +101,7 @@ local is_forced_action = require("force.force_helpers").is_forced_action
 local function begin_refresh()
   local state_name = State.get_state_name()
   local t = now_time()
-  if tracker.last_refresh_state == state_name and (t - (tracker.last_refresh_at or 0)) < REFRESH_COOLDOWN then
+  if tracker.last_refresh_state == state_name and (t - (tracker.last_refresh_at or 0)) < Tuning.get("NEURO_REFRESH_COOLDOWN") then
     return nil
   end
   tracker.last_refresh_state = state_name

@@ -40,6 +40,7 @@ local neuro_seen_action_at = 0
 local _selftest_on_boot = Tuning.bool("NEURO_SELFTEST_ON_BOOT")
 -- separate flag: run ONLY the real pack-launch scenario (Cases.build_pack) -- heavy, opens real boosters
 local _selftest_pack_on_boot = Tuning.bool("NEURO_SELFTEST_PACK")
+local _tasks_on_boot = Tuning.bool("NEURO_SMALL_REGRESSION")
 
 local Lifecycle = require("core.neuro_lifecycle")
 -- dirty-bump keeps the fingerprint (drop_fingerprint=false)
@@ -262,6 +263,15 @@ function Orchestrator.update(dt, original_love_update)
     local neuro_success, neuro_err = pcall(function()
       G.NEURO:update(dt)
       Staging.update(dt)
+      if _tasks_on_boot or (G.NEURO and G.NEURO.task_mode_active) then
+        local TaskMode = require("core.task_mode")
+        if TaskMode.running() then
+          TaskMode.tick(dt)
+        elseif _tasks_on_boot and TaskMode.available() then
+          _tasks_on_boot = false
+          TaskMode.start()
+        end
+      end
       if _selftest_on_boot or _selftest_pack_on_boot or (G.NEURO and G.NEURO.selftest_active) then
         local SelfTest = require("core.selftest")
         if SelfTest.running() then
@@ -343,7 +353,7 @@ function Orchestrator.update(dt, original_love_update)
         if G.NEURO.persona == "hiyori" and not G.NEURO.login_anim and not S.auto_login_fired then
           if state_name == "MENU" then
             if not S.menu_enter_t then S.menu_enter_t = now end
-            if now - S.menu_enter_t >= 5.0 then
+            if now - S.menu_enter_t >= Tuning.get("NEURO_AUTO_LOGIN_DELAY") then
               S.auto_login_fired = true
               S.menu_enter_t = nil
               local picks = {"neuro", "evil"}
@@ -398,7 +408,7 @@ function Orchestrator.update(dt, original_love_update)
         end
         local _login_block = false
         if G.NEURO.login_anim and G.NEURO.login_anim.start then
-          _login_block = (now - G.NEURO.login_anim.start) < 6.0
+          _login_block = (now - G.NEURO.login_anim.start) < Tuning.get("NEURO_LOGIN_ANIM_BLOCK")
         end
         if G.NEURO.force_dirty and G.NEURO.persona and not G.NEURO.llm_paused
           and not _login_block then
@@ -423,7 +433,7 @@ function Orchestrator.update(dt, original_love_update)
                 local wants_full_jokers = false
                 if G.NEURO.last_action_name == "joker_info" then
                   local last_at = G.NEURO.last_action_at or 0
-                  wants_full_jokers = (now - last_at) <= 2.5
+                  wants_full_jokers = (now - last_at) <= Tuning.get("NEURO_JOKER_INFO_WINDOW")
                 end
 
               if Tuning.bool("NEURO_CTX_SPLIT") then

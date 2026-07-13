@@ -93,8 +93,10 @@ local function handle_set_joker_order(data)
     local card_name = safe_name_or(card)
     table.remove(G.jokers.cards, from_idx)
     table.insert(G.jokers.cards, to_idx, card)
+    for _, c in ipairs(G.jokers.cards) do if c.states and c.states.drag then c.states.drag.is = false end end
     if G.jokers.set_ranks then G.jokers:set_ranks() end
     if G.jokers.align_cards then G.jokers:align_cards() end
+    if G.jokers.hard_set_cards then G.jokers:hard_set_cards() end
     return string.format("Moved %s from position %d to %d", card_name, from_idx, to_idx)
   end
 end

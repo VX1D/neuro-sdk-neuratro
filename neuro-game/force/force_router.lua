@@ -31,6 +31,8 @@ FORCE_HANDLERS["SPLASH"] = MenuFlow.splash
 FORCE_HANDLERS["MENU"] = MenuFlow.menu
 
 function M.get_force_for_state(state_name)
+  local TaskMode = require("core.task_mode")
+  if TaskMode.active then return TaskMode.get_force() end
   if StateKinds.is_unlock_popup() and Actions.is_action_valid("exit_overlay_menu") then
     return {
       query = "An unlock popup is blocking the game. Use exit_overlay_menu to dismiss it "

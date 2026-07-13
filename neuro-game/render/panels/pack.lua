@@ -31,7 +31,7 @@ local function draw_pack_panel(ctx)
   local PACK_LEAVE_DUR = 0.40
 
   if is_pack_state and S.pack_last_sn ~= sn then
-    S.pack_appear_t = now
+    S.pack_appear_t = 0
     S.pack_picked = {}
     S.pack_prev_cards = {}
     S.pack_card_indices = {}
@@ -135,6 +135,7 @@ local function draw_pack_panel(ctx)
 
     if not leaving and S.pack_initial_count == 0 and #display_cards > 0 then
       S.pack_initial_count = #display_cards
+      S.pack_appear_t = now
     end
     local n_cards = math.max(#display_cards, leaving and (S.pack_leave_n or 0) or S.pack_initial_count)
 

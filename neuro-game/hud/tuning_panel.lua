@@ -38,7 +38,7 @@ local SAVED_HOLD = Motion.SLOW * 2
 local HIT = {
   valid = false,
   px = 0, py = 0, pw = 0, ph = 0,
-  row_h = 0, n = 0, rows = {},
+  row_h = 0, n = 0, rows = {}, itemh = {},
   val_x = 0, def_x = 0,
   arrow_w = 12, la_x = 0, ra_x = 0,
   hex_x = 0, hexw = 0, hgap = 2,
@@ -63,6 +63,21 @@ local function active_defs()
   return Tuning.entries()
 end
 
+local collapsed = {}
+local function group_collapsed(g)
+  if page == 3 then return false end
+  local v = collapsed[g]
+  if v == nil then return g ~= "MASTER" end
+  return v
+end
+local function set_all_collapsed(state)
+  local defs = active_defs()
+  for i = 1, #defs do
+    local g = defs[i].group
+    if g then collapsed[g] = state end
+  end
+end
+
 local function fmt_value(d, v)
   if d.readonly then
     local rv = os.getenv(d.key)
@@ -74,10 +89,10 @@ local function fmt_value(d, v)
     return (s ~= "" and s) or "(none)", nil
   end
   local s
-  if d.step >= 1 then
+  if v == math.floor(v) then
     s = string.format("%d", v)
   else
-    s = string.format("%.2f", v)
+    s = string.format("%.4g", v)
   end
   return s, d.unit
 end
@@ -93,27 +108,59 @@ local function apply_live(d)
 end
 
 local _nheaders = 0
+local _nrows = 0
 local function rebuild_rows()
   local defs = active_defs()
   rows = {}
   _nheaders = 0
+  _nrows = 0
+  local counts = {}
+  for i = 1, #defs do
+    local g = defs[i].group or ""
+    counts[g] = (counts[g] or 0) + 1
+  end
   local prev_group = nil
   for i = 1, #defs do
     local d = defs[i]
-    -- get_raw, not get: get applies the cooldown scale; panel edits the base
-    local v, unit = fmt_value(d, Tuning.get_raw(d.key))
-    local hdr = nil
-    if d.group and d.group ~= prev_group then hdr = d.group; _nheaders = _nheaders + 1 end
-    prev_group = d.group
-    rows[i] = {
-      label = d.label,
-      value = v,
-      unit = unit,
-      header = hdr,
-      def = d.readonly and "" or ("[" .. fmt_value(d, d.default) .. (d.unit or "") .. "]"),
-    }
+    local g = d.group or ""
+    if g ~= prev_group then
+      _nheaders = _nheaders + 1
+      rows[#rows + 1] = { kind = "header", group = g, count = counts[g], collapsed = group_collapsed(g) }
+      prev_group = g
+    end
+    if not group_collapsed(g) then
+      -- get_raw, not get: get applies the cooldown scale; panel edits the base
+      local v, unit = fmt_value(d, Tuning.get_raw(d.key))
+      _nrows = _nrows + 1
+      rows[#rows + 1] = {
+        kind = "row",
+        di = i,
+        d = d,
+        label = d.label,
+        value = v,
+        unit = unit,
+        def = d.readonly and "" or ("[" .. fmt_value(d, d.default) .. (d.unit or "") .. "]"),
+      }
+    end
   end
+  rows[#rows + 1] = { kind = "action" }
   rows_dirty = false
+end
+
+function Panel.reveal(key)
+  local defs = active_defs()
+  for i = 1, #defs do
+    if defs[i].key == key then
+      if defs[i].group then collapsed[defs[i].group] = false end
+      rebuild_rows()
+      for vi = 1, #rows do
+        local it = rows[vi]
+        if it.kind == "row" and it.di == i then sel = vi; return true end
+      end
+      return false
+    end
+  end
+  return false
 end
 
 local function hex2(v)
@@ -192,7 +239,8 @@ local function row_at(x, y)
   if x < HIT.px or x >= HIT.px + HIT.pw then return nil end
   for i = 1, HIT.n do
     local ry = HIT.rows[i]
-    if ry and y >= ry and y < ry + HIT.row_h then return i end
+    local rh = (HIT.itemh and HIT.itemh[i]) or HIT.row_h
+    if ry and y >= ry and y < ry + rh then return i end
   end
   return nil
 end
@@ -334,35 +382,50 @@ end
 
 local PANEL_KEYS = {
   up = true, down = true, left = true, right = true,
-  s = true, r = true, tab = true, ["return"] = true, kpenter = true,
+  s = true, r = true, c = true, tab = true, ["return"] = true, kpenter = true,
 }
 
 local function page1_key(key, now)
-  local defs = active_defs()
-  local nrows = #defs + 1
-  if sel > nrows then sel = 1 end
+  if rows_dirty or not rows then rebuild_rows() end
+  local n = #rows
+  if sel > n or sel < 1 then sel = 1 end
+  local it = rows[sel]
   if key == "up" then
-    sel = sel > 1 and sel - 1 or nrows
+    sel = sel > 1 and sel - 1 or n
   elseif key == "down" then
-    sel = sel < nrows and sel + 1 or 1
+    sel = sel < n and sel + 1 or 1
+  elseif key == "c" then
+    set_all_collapsed(not shift_down())
+    rebuild_rows()
+    if sel > #rows then sel = #rows end
   elseif key == "return" or key == "kpenter" then
-    if sel == nrows then
+    if it and it.kind == "action" then
       if page == 3 then reset_all_runtime(now) else trigger_selftest(now) end
+    elseif it and it.kind == "header" then
+      collapsed[it.group] = not group_collapsed(it.group)
+      rebuild_rows()
     end
   elseif key == "left" or key == "right" then
-    if sel > #defs then return end
-    page1_adjust(sel, key == "left" and -1 or 1, shift_down() and 5 or 1, now)
+    if not it then return end
+    if it.kind == "header" then
+      collapsed[it.group] = (key == "left")
+      rebuild_rows()
+    elseif it.kind == "row" then
+      page1_adjust(it.di, key == "left" and -1 or 1, shift_down() and 5 or 1, now)
+    end
   elseif key == "s" then
     local ok = Tuning.save()
     flash_text = ok and "SAVED" or "SAVE FAILED"
     flash_at = now
   elseif key == "r" then
-    if sel > #defs then return end
-    Tuning.reset(defs[sel].key)
-    apply_live(defs[sel])
-    vflash_at = now
-    vflash_row = sel
-    rows_dirty = true
+    if it and it.kind == "row" then
+      local d = active_defs()[it.di]
+      Tuning.reset(d.key)
+      apply_live(d)
+      vflash_at = now
+      vflash_row = it.di
+      rows_dirty = true
+    end
   end
 end
 
@@ -504,22 +567,31 @@ function Panel.mousepressed(x, y, button)
   local i = row_at(x, y)
   if not i then return true end
   if page ~= 2 then
-    local defs = active_defs()
     sel = i
-    if i > #defs then
+    local it = rows and rows[i]
+    if not it then return true end
+    if it.kind == "action" then
       if button == 1 then
         if page == 3 then reset_all_runtime(now) else trigger_selftest(now) end
       end
       return true
     end
-    local d = defs[i]
+    if it.kind == "header" then
+      if button == 1 then
+        collapsed[it.group] = not group_collapsed(it.group)
+        rebuild_rows()
+        if sel > #rows then sel = #rows end
+      end
+      return true
+    end
+    local d = it.d
     local mult = shift_down() and 5 or 1
     if in_rect(x, y, HIT.la_x, HIT.rows[i], HIT.arrow_w, HIT.row_h) then
-      page1_adjust(i, -1, mult, now)
+      page1_adjust(it.di, -1, mult, now)
     elseif in_rect(x, y, HIT.ra_x, HIT.rows[i], HIT.arrow_w, HIT.row_h) then
-      page1_adjust(i, 1, mult, now)
+      page1_adjust(it.di, 1, mult, now)
     elseif x >= HIT.val_x and d.values then
-      page1_adjust(i, button == 2 and -1 or 1, 1, now)
+      page1_adjust(it.di, button == 2 and -1 or 1, 1, now)
     end
     return true
   end
@@ -560,9 +632,10 @@ function Panel.wheelmoved(_, wy)
   local dir = wy > 0 and 1 or -1
   local mult = shift_down() and 5 or 1
   if page ~= 2 then
-    if i <= #active_defs() then
+    local it = rows and rows[i]
+    if it and it.kind == "row" then
       sel = i
-      page1_adjust(i, dir, mult, now)
+      page1_adjust(it.di, dir, mult, now)
     end
   else
     if i <= #Palette.color_keys(Palette.persona()) and edit_mode and sel == i then
@@ -582,11 +655,86 @@ local ST_LABEL = "RUN SELF-TEST"
 local RESET_RUNTIME_LABEL = "RESET ALL RUNTIME"
 local RESET_ALL_LABEL = "RESET ALL COLOURS"
 local COLOUR_NOTE = "Colour grading aid — tune against your stream capture, values persist per persona."
-local FOOTER_1 = "UP/DN ROW  LT/RT ADJUST (SHIFT X5)  ENTER RUN  S SAVE  R RESET  TAB PAGE  F8 EXIT"
-local FOOTER_3 = "UP/DN ROW  LT/RT TOGGLE  ENTER RESET-ALL  S SAVE  R RESET  TAB PAGE  F8 EXIT"
-local FOOTER_1_RUN = "UP/DN ROW  LT/RT ADJUST (SHIFT X5)  A ABORT  S SAVE  R RESET  TAB PAGE  F8 EXIT"
-local FOOTER_2 = "UP/DN ROW  ENTER EDIT  R RESET ROW  S SAVE  TAB PAGE  F8 EXIT  //  CLICK SWATCH TO APPLY"
-local FOOTER_2_EDIT = "TYPE 6 HEX  BKSP DELETE  LT/RT NUDGE  UP/DN CHANNEL  ENTER/ESC DONE  R RESET"
+local DESCS = {
+  NEURO_SPEED_MULT = "Scales the AI's hover + post-action delays (higher = slower)",
+  NEURO_COOLDOWN_SCALE = "Multiplier applied to every cooldown at once",
+  NEURO_AUTO_TUNE = "Auto-scale cooldowns to Balatro's game speed (stream-tuned)",
+  NEURO_CD_PRESET = "Pin a speed profile, or 'auto' to follow game speed",
+  NEURO_REDUCED_MOTION = "Turn off HUD animations (accessibility / perf)",
+  NEURO_CTX_SPLIT = "Send context as stable + volatile channels",
+  NEURO_STATE_VERBOSE = "Include verbose state text in the AI's context",
+  NEURO_FORCE_ONLY = "AI may only take forced actions (no free actions)",
+  NEURO_STATE_COOLDOWN = "Min gap between state-context updates",
+  NEURO_ACTION_COOLDOWN = "Min gap between any two actions",
+  NEURO_ENFORCE_COOLDOWN = "Cooldown before the same action can repeat",
+  NEURO_GLOBAL_COOLDOWN = "Fallback minimum gap between actions",
+  NEURO_FORCE_DEBOUNCE = "Wait before re-sending a changed force",
+  NEURO_TRANSITION_COOLDOWN = "Settle time right after a state change",
+  NEURO_REFRESH_COOLDOWN = "Min gap before refreshing context in a state",
+  NEURO_THROTTLE_SHOP = "Per-action cooldown while in the shop",
+  NEURO_THROTTLE_PACK = "Per-action cooldown while opening packs",
+  NEURO_GLOBAL_THROTTLE_SELECTING_HAND = "Global action gap while selecting a hand",
+  NEURO_GLOBAL_THROTTLE_SHOP = "Global action gap in the shop",
+  NEURO_GLOBAL_THROTTLE_BLIND_SELECT = "Global action gap at blind select",
+  NEURO_GLOBAL_THROTTLE_PACK = "Global action gap while in a pack",
+  NEURO_POST_PLAY = "Pause after playing a hand",
+  NEURO_POST_DISCARD = "Pause after discarding",
+  NEURO_POST_BUY = "Pause after buying from the shop",
+  NEURO_SHOP_BUY_DELAY = "Delay before a shop buy resolves (game clock)",
+  NEURO_SHOP_BUY_BLOCK = "Block new actions this long after a buy",
+  NEURO_PACK_PICK_DELAY = "Delay before a pack pick resolves (game clock)",
+  NEURO_PACK_PICK_BLOCK = "Block new actions this long after a pack pick",
+  NEURO_POST_SELL = "Pause after selling a card",
+  NEURO_POST_DEFAULT = "Default pause after any staged action",
+  NEURO_ENTRY_CD_SHOP = "Grace after entering the shop before acting",
+  NEURO_ENTRY_CD_ROUND_EVAL = "Grace after entering round-eval before acting",
+  NEURO_ENTRY_CD_SMODS_BOOSTER_OPENED = "Grace after a modded booster opens",
+  NEURO_ENTRY_CD_BUFFOON_PACK = "Grace after a Buffoon pack opens",
+  NEURO_ENTRY_CD_TAROT_PACK = "Grace after a Tarot pack opens",
+  NEURO_ENTRY_CD_PLANET_PACK = "Grace after a Planet pack opens",
+  NEURO_ENTRY_CD_SPECTRAL_PACK = "Grace after a Spectral pack opens",
+  NEURO_ENTRY_CD_STANDARD_PACK = "Grace after a Standard pack opens",
+  NEURO_FORCE_STALL_SECONDS = "Re-arm a force if it stalls this long (watchdog)",
+  NEURO_STAGING_FAILSAFE = "Cancel a stuck staged action after this long",
+  NEURO_GAMEOVER_COOLDOWN = "Hold on the game-over screen before acting",
+  NEURO_SHOP_BUY_WATCHDOG_GRACE = "Extra grace before the buy watchdog trips",
+  NEURO_PACK_PICK_WATCHDOG_GRACE = "Extra grace before the pack-pick watchdog trips",
+  NEURO_DEFER_WINDOW_MIN = "Min window protecting a just-failed action",
+  NEURO_AUTO_LOGIN_DELAY = "Auto-pick a persona after this long idle at menu",
+  NEURO_LOGIN_ANIM_BLOCK = "Don't force actions during the login animation",
+  NEURO_STATE_INTERVAL = "How often game state is written to context",
+  NEURO_HOVER_PER_CARD = "Hover time per card before a play / discard",
+  NEURO_HOVER_SHOP = "Hover time on a shop item before buying",
+  NEURO_HOVER_DEFAULT = "Default hover time before executing",
+  NEURO_HOLD_ALL_SELECTED = "Hold after all cards selected, before playing",
+  NEURO_CTX_CACHE_TTL = "How long a built context is reused before rebuild",
+  NEURO_REREGISTER_THROTTLE = "Throttle repeated action re-registration",
+  NEURO_JOKER_INFO_WINDOW = "Show full joker detail this long after joker_info",
+  NEURO_OVERLAY_SCALE_RIGHT = "Size of the right HUD panel",
+  NEURO_OVERLAY_SCALE_LEFT = "Size of the left HUD panel",
+  NEURO_DEBUG_OVERLAY = "On-screen debug stats (off / compact / expanded)",
+  NEURO_PERSONA = "Character skin -- reload to reskin",
+  NEURO_ENABLE = "Whether the SDK bridge is active (read-only)",
+  NEURO_IPC_DIR = "IPC folder used to talk to the bridge (read-only)",
+  NEURO_DEBUG = "Verbose debug logging to file",
+  NEURO_TRACE = "Crash-trace logging (read-only)",
+  NEURO_PERF_LOG = "Write FPS / memory samples to disk",
+  NEURO_AI_CARD_GLOW = "Glow the card the AI is hovering",
+  NEURO_OVERLAY_DEV = "Hot-reload HUD files on change (dev)",
+  NEURO_STAGING_DEBUG = "Draw the staging hover/execute debug overlay",
+  NEURO_OUTBOX_TRUNCATE_ON_STARTUP = "Clear the outbox file on boot",
+  NEURO_INBOX_TRUNCATE_ON_STARTUP = "Clear the inbox file on boot",
+  NEURO_SELFTEST_ON_BOOT = "Run the in-engine self-test suite at boot",
+  NEURO_SELFTEST_PACK = "Run only the pack-launch self-test scenario",
+  NEURO_SELFTEST_FILTER = "Only run self-test cases matching this text",
+  NEURO_SMALL_REGRESSION = "Run the fixed LLM task battery at boot (small regression check)",
+}
+
+local FOOTER_1 = "UP/DN nav   LT/RT edit   C fold all   S save   R reset   TAB page   F8 exit"
+local FOOTER_3 = "UP/DN nav   LT/RT toggle   S save   R reset   TAB page   F8 exit"
+local FOOTER_1_RUN = "UP/DN nav   LT/RT edit   A abort   S save   R reset   TAB page   F8 exit"
+local FOOTER_2 = "UP/DN nav   ENTER edit   R reset   S save   TAB page   F8 exit"
+local FOOTER_2_EDIT = "TYPE 6 HEX   BKSP del   LT/RT nudge   UP/DN channel   ENTER/ESC done"
 local MOUSE_HINT = "  //  MOUSE: CLICK ROW  < > STEP  WHEEL (SHIFT X5)  RMB BACK"
 
 local _footer_mouse = {}
@@ -702,24 +850,26 @@ function Panel.draw()
   local st_line = st_running or (st_done ~= nil)
 
   local nh = (page ~= 2) and (_nheaders or 0) or 0
+  local nvr = (page ~= 2) and (_nrows or 0) or 0
   local st_footer_line = st_line and page ~= 3
+  local desc_h = (page ~= 2) and (small_h + 2) or 0
   local function page1_body(rh)
-    return #defs * rh + nh * header_h + U * 2 + rh + (st_footer_line and (small_h + 2) or 0)
+    return nvr * rh + nh * header_h + U * 2 + rh + (st_footer_line and (small_h + 2) or 0)
   end
   local body_h
   if page ~= 2 then
     body_h = page1_body(row_h)
-    local ph_try = title_h + 2 + U + body_h + U * 2 + small_h + U * 2
+    local ph_try = title_h + 2 + U + body_h + U * 2 + desc_h + small_h + U * 2
     if ph_try > sh * 0.96 then
-      local fixed = ph_try - (#defs + 1) * row_h
+      local fixed = ph_try - (nvr + 1) * row_h
       local avail = sh * 0.96 - fixed
-      row_h = math.max(text_h + 1, math.floor(avail / (#defs + 1)))
+      row_h = math.max(text_h + 1, math.floor(avail / (nvr + 1)))
       body_h = page1_body(row_h)
     end
   else
     body_h = small_h + U * 2 + (text_h + U * 2) + (#crows + 1) * row_h
   end
-  local ph = title_h + 2 + U + body_h + U * 2 + small_h + U * 2
+  local ph = title_h + 2 + U + body_h + U * 2 + desc_h + small_h + U * 2
   local px = math.floor((sw - pw) / 2)
   local py = math.floor((sh - ph) / 2) + rise
 
@@ -857,6 +1007,7 @@ function Panel.draw()
 
   local function row_chrome(i, y)
     HIT.rows[i] = y
+    HIT.itemh[i] = row_h
     local hovered = mouse_in_panel and my >= y and my < y + row_h
     if hovered then
       set_col(FRD, 0.45 * pa)
@@ -866,102 +1017,118 @@ function Panel.draw()
   end
 
   if page ~= 2 then
-    HIT.n = #rows + 1
+    HIT.n = #rows
     for i = 1, #rows do
       local r = rows[i]
-      local d = defs[i]
-      if r.header then
+      if r.kind == "header" then
+        HIT.rows[i] = cy
+        HIT.itemh[i] = header_h
+        local hovered = mouse_in_panel and my >= cy and my < cy + header_h
+        local selected = i == sel
+        if hovered or selected then
+          set_col(FRD, (selected and 0.55 or 0.40) * pa)
+          love.graphics.rectangle("fill", px + 2, cy - 1, pw - 4, header_h)
+        end
         love.graphics.setFont(font_small)
-        set_col(ACC, 0.72 * pa)
-        love.graphics.print(r.header, px + GUT, cy + (header_h - small_h) - 1)
+        set_col(ACC, (selected and 0.97 or 0.72) * pa)
+        local htxt = (r.collapsed and "> " or "v ") .. r.group
+        if r.collapsed then htxt = htxt .. "  (" .. r.count .. ")" end
+        love.graphics.print(htxt, px + GUT, cy + (header_h - small_h) - 1)
         set_col(FRD, 0.50 * pa)
         love.graphics.rectangle("fill", px + GUT, cy + header_h - 2, pw - GUT * 2, 1)
         love.graphics.setFont(font)
         cy = cy + header_h
-      end
-      local hovered = row_chrome(i, cy)
-      local selected = i == sel
-      if selected then
-        set_col(ACC, 0.90 * pa)
-        love.graphics.rectangle("fill", px + U, cy, 2, text_h)
-        love.graphics.setColor(1, 1, 1, 0.98 * pa)
-      else
-        love.graphics.setColor(1, 1, 1, 0.62 * pa)
-      end
-      love.graphics.print(r.label, px + GUT, cy)
-
-      if hovered or selected then
-        local la_hov = hovered and mx >= HIT.la_x and mx < HIT.la_x + HIT.arrow_w
-        local ra_hov = hovered and mx >= HIT.ra_x and mx < HIT.ra_x + HIT.arrow_w
-        if la_hov then
-          set_col(ACC, 0.97 * pa)
+      elseif r.kind == "action" then
+        cy = cy + U
+        set_col(FRD, 0.90 * pa)
+        love.graphics.rectangle("fill", px + U, cy, pw - U * 2, 1)
+        cy = cy + U
+        HIT.rows[i] = cy
+        HIT.itemh[i] = row_h
+        local st_sel = sel == i
+        local hovered = mouse_in_panel and my >= cy and my < cy + row_h
+        if hovered then
+          set_col(FRD, 0.45 * pa)
+          love.graphics.rectangle("fill", px + 2, cy - 1, pw - 4, row_h)
+        end
+        if st_sel then
+          set_col(ACC, 0.90 * pa)
+          love.graphics.rectangle("fill", px + U, cy, 2, text_h)
+        end
+        if page == 3 then
+          set_col(ACC, (st_sel and 0.97 or 0.62) * pa)
+          love.graphics.print(RESET_RUNTIME_LABEL, px + GUT, cy)
         else
-          love.graphics.setColor(1, 1, 1, 0.45 * pa)
+          if st_avail then
+            set_col(ACC, (st_sel and 0.97 or 0.85) * pa)
+          else
+            love.graphics.setColor(1, 1, 1, (st_sel and 0.55 or 0.40) * pa)
+          end
+          love.graphics.print(ST_LABEL, px + GUT, cy)
+          if st_line then
+            cy = cy + row_h
+            love.graphics.setFont(font_small)
+            love.graphics.setColor(1, 1, 1, 0.72 * pa)
+            love.graphics.print(st_value, px + GUT, cy)
+            love.graphics.setFont(font)
+          else
+            love.graphics.setColor(1, 1, 1, 0.42 * pa)
+            love.graphics.print(st_value, val_x, cy)
+          end
         end
-        love.graphics.print("<", HIT.la_x + 2, cy)
-        if ra_hov then
-          set_col(ACC, 0.97 * pa)
-        else
-          love.graphics.setColor(1, 1, 1, 0.45 * pa)
-        end
-        love.graphics.print(">", HIT.ra_x + 2, cy)
-      end
-
-      local vr, vg, vb, va
-      if selected then
-        vr, vg, vb, va = ACC[1], ACC[2], ACC[3], 0.97
-      else
-        vr, vg, vb, va = 1, 1, 1, 0.82
-      end
-      vr, vg, vb, va = selflash(vr, vg, vb, va, i, now, pa)
-      if bool_def(d) then
-        draw_checkbox(val_x, cy + 1, text_h - 2, checkbox_on(Tuning.get_raw(d.key)), pa, ACC)
-        love.graphics.setColor(vr, vg, vb, va)
-        love.graphics.print(r.value, val_x + text_h + U, cy)
-      else
-        love.graphics.setColor(vr, vg, vb, va)
-        love.graphics.print(r.value, val_x, cy)
-        if r.unit then
-          love.graphics.setColor(1, 1, 1, 0.42 * pa)
-          love.graphics.print(r.unit, val_x + font:getWidth(r.value), cy)
-        end
-      end
-      love.graphics.setColor(1, 1, 1, 0.32 * pa)
-      love.graphics.print(r.def, def_x, cy)
-      cy = cy + row_h
-    end
-
-    cy = cy + U
-    set_col(FRD, 0.90 * pa)
-    love.graphics.rectangle("fill", px + U, cy, pw - U * 2, 1)
-    cy = cy + U
-
-    local st_i = #defs + 1
-    row_chrome(st_i, cy)
-    local st_sel = sel == st_i
-    if st_sel then
-      set_col(ACC, 0.90 * pa)
-      love.graphics.rectangle("fill", px + U, cy, 2, text_h)
-    end
-    if page == 3 then
-      set_col(ACC, (st_sel and 0.97 or 0.62) * pa)
-      love.graphics.print(RESET_RUNTIME_LABEL, px + GUT, cy)
-    else
-      if st_avail then
-        set_col(ACC, (st_sel and 0.97 or 0.85) * pa)
-      else
-        love.graphics.setColor(1, 1, 1, (st_sel and 0.55 or 0.40) * pa)
-      end
-      love.graphics.print(ST_LABEL, px + GUT, cy)
-      if st_line then
         cy = cy + row_h
-        love.graphics.setFont(font_small)
-        love.graphics.setColor(1, 1, 1, 0.72 * pa)
-        love.graphics.print(st_value, px + GUT, cy)
-        love.graphics.setFont(font)
       else
-        love.graphics.setColor(1, 1, 1, 0.42 * pa)
-        love.graphics.print(st_value, val_x, cy)
+        local d = r.d
+        local hovered = row_chrome(i, cy)
+        local selected = i == sel
+        if selected then
+          set_col(ACC, 0.90 * pa)
+          love.graphics.rectangle("fill", px + U, cy, 2, text_h)
+          love.graphics.setColor(1, 1, 1, 0.98 * pa)
+        else
+          love.graphics.setColor(1, 1, 1, 0.62 * pa)
+        end
+        love.graphics.print(r.label, px + GUT, cy)
+
+        if hovered or selected then
+          local la_hov = hovered and mx >= HIT.la_x and mx < HIT.la_x + HIT.arrow_w
+          local ra_hov = hovered and mx >= HIT.ra_x and mx < HIT.ra_x + HIT.arrow_w
+          if la_hov then
+            set_col(ACC, 0.97 * pa)
+          else
+            love.graphics.setColor(1, 1, 1, 0.45 * pa)
+          end
+          love.graphics.print("<", HIT.la_x + 2, cy)
+          if ra_hov then
+            set_col(ACC, 0.97 * pa)
+          else
+            love.graphics.setColor(1, 1, 1, 0.45 * pa)
+          end
+          love.graphics.print(">", HIT.ra_x + 2, cy)
+        end
+
+        local vr, vg, vb, va
+        if selected then
+          vr, vg, vb, va = ACC[1], ACC[2], ACC[3], 0.97
+        else
+          vr, vg, vb, va = 1, 1, 1, 0.82
+        end
+        vr, vg, vb, va = selflash(vr, vg, vb, va, r.di, now, pa)
+        if bool_def(d) then
+          draw_checkbox(val_x, cy + 1, text_h - 2, checkbox_on(Tuning.get_raw(d.key)), pa, ACC)
+          love.graphics.setColor(vr, vg, vb, va)
+          love.graphics.print(r.value, val_x + text_h + U, cy)
+        else
+          love.graphics.setColor(vr, vg, vb, va)
+          love.graphics.print(r.value, val_x, cy)
+          if r.unit then
+            love.graphics.setColor(1, 1, 1, 0.42 * pa)
+            love.graphics.print(r.unit, val_x + font:getWidth(r.value), cy)
+          end
+        end
+        love.graphics.setColor(1, 1, 1, 0.32 * pa)
+        love.graphics.print(r.def, def_x, cy)
+        cy = cy + row_h
       end
     end
   else
@@ -1079,8 +1246,26 @@ function Panel.draw()
   end
   if mouse_seen then footer = footer_with_mouse(footer) end
   love.graphics.setFont(font_small)
+  local fit_w = pw - GUT * 2
+  if page ~= 2 and desc_h > 0 then
+    local it = rows and rows[sel]
+    local dtxt
+    if it then
+      if it.kind == "row" and it.d then dtxt = DESCS[it.d.key]
+      elseif it.kind == "header" then dtxt = it.count .. " settings -- Enter to fold/unfold"
+      elseif it.kind == "action" then dtxt = (page == 3) and "reset all runtime toggles to defaults" or "run the in-engine self-test suite" end
+    end
+    if dtxt then
+      local w = font_small:getWidth(dtxt)
+      local sx = (w > fit_w and w > 0) and (fit_w / w) or 1
+      love.graphics.setColor(1, 1, 1, 0.88 * pa)
+      love.graphics.print(dtxt, px + GUT, py + ph - small_h - U * 2 - desc_h, 0, sx, sx)
+    end
+  end
+  local fw = font_small:getWidth(footer)
+  local fsx = (fw > fit_w and fw > 0) and (fit_w / fw) or 1
   love.graphics.setColor(1, 1, 1, 0.42 * pa)
-  love.graphics.print(footer, px + GUT, py + ph - small_h - U * 2)
+  love.graphics.print(footer, px + GUT, py + ph - small_h - U * 2, 0, fsx, fsx)
 
   HIT.valid = open
 
@@ -1101,6 +1286,7 @@ if rawget(_G, "NEURO_TEST") then
     reset_mouse = function() mouse_seen = false end,
     state = function() return page, sel, edit_mode, edit_ch end,
     edit_hex = function() return edit_hex end,
+    rows = function() return rows end,
   }
 end
 

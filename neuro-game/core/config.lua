@@ -21,7 +21,7 @@ local DEFS = {
   { key = "NEURO_SPEED_MULT",          label = "SPEED MULT",          group = "MASTER", min = 0.1, max = 2.0, step = 0.05, default = 1.0, unit = "x" },
   { key = "NEURO_COOLDOWN_SCALE",      label = "COOLDOWN SCALE (ALL)", group = "MASTER", min = 0.25, max = 3.0, step = 0.05, default = 1.0, unit = "x" },
   -- CD OVERRIDE off: cooldowns auto-track the game-speed slider; on: sliders are literal, game speed ignored
-  { key = "NEURO_CD_OVERRIDE",         label = "CD OVERRIDE (MANUAL)", group = "MASTER", values = { "off", "on" }, default = "off" },
+  { key = "NEURO_AUTO_TUNE",           label = "AUTO-TUNE (STREAM)",  group = "MASTER", values = { "off", "on" }, default = "on" },
   { key = "NEURO_CD_PRESET",           label = "CD SPEED PRESET",     group = "MASTER", values = { "auto", "0.5x", "1x", "2x", "4x" }, default = "auto" },
 
   { key = "NEURO_REDUCED_MOTION", label = "REDUCED MOTION", group = "FLAGS", values = { "off", "on" }, default = onoff((function() local v = tostring(dotenv.get("NEURO_REDUCED_MOTION", "")):lower(); return v == "1" or v == "true" or v == "on" end)()) },
@@ -35,6 +35,7 @@ local DEFS = {
   { key = "NEURO_GLOBAL_COOLDOWN",     label = "GLOBAL ACTION GAP",   group = "COOLDOWNS", cd = true, min = 0, max = 10,  step = 0.1,  default = _fast and 0.65 or 2.0, unit = "s" },
   { key = "NEURO_FORCE_DEBOUNCE",      label = "FORCE DEBOUNCE",      group = "COOLDOWNS", cd = true, min = 0, max = 2.0, step = 0.02, default = _fast and 0.10 or 0.12, unit = "s" },
   { key = "NEURO_TRANSITION_COOLDOWN", label = "TRANSITION COOLDOWN", group = "COOLDOWNS", cd = true, min = 0, max = 2.0, step = 0.01, default = 0.15, unit = "s" },
+  { key = "NEURO_REFRESH_COOLDOWN",    label = "CTX REFRESH COOLDOWN", group = "COOLDOWNS", cd = true, min = 0, max = 3, step = 0.05, default = 0.35, unit = "s" },
 
   { key = "NEURO_THROTTLE_SHOP",       label = "SHOP COOLDOWN",       group = "THROTTLES", cd = true, min = 0, max = 10, step = 0.1,  default = _fast and 0.30 or 1.20, unit = "s" },
   { key = "NEURO_THROTTLE_PACK",       label = "PACK COOLDOWN",       group = "THROTTLES", cd = true, min = 0, max = 10, step = 0.1,  default = _fast and 0.35 or 1.20, unit = "s" },
@@ -51,6 +52,8 @@ local DEFS = {
   { key = "NEURO_SHOP_BUY_BLOCK",      label = "SHOP BUY BLOCK",      group = "POST-ACTION", cd = true, min = 0, max = 8, step = 0.1,  default = 2.2, unit = "s" },
   { key = "NEURO_PACK_PICK_DELAY",     label = "PACK PICK DELAY",     group = "POST-ACTION", cd = true, event = true, min = 0, max = 8, step = 0.1,  default = 2.2, unit = "s" },
   { key = "NEURO_PACK_PICK_BLOCK",     label = "PACK PICK BLOCK",     group = "POST-ACTION", cd = true, min = 0, max = 8, step = 0.1,  default = 3.0, unit = "s" },
+  { key = "NEURO_POST_SELL",           label = "POST SELL",           group = "POST-ACTION", cd = true, min = 0, max = 4, step = 0.05, default = 0.6, unit = "s" },
+  { key = "NEURO_POST_DEFAULT",        label = "POST DEFAULT",        group = "POST-ACTION", cd = true, min = 0, max = 4, step = 0.05, default = 0.5, unit = "s" },
 
   { key = "NEURO_ENTRY_CD_SHOP",                 label = "ENTRY: SHOP",          group = "ENTRY COOLDOWNS", cd = true, min = 0, max = 15, step = 0.5, default = 2.5, unit = "s" },
   { key = "NEURO_ENTRY_CD_ROUND_EVAL",           label = "ENTRY: ROUND EVAL",    group = "ENTRY COOLDOWNS", cd = true, min = 0, max = 15, step = 0.5, default = 5.0, unit = "s" },
@@ -66,10 +69,18 @@ local DEFS = {
   { key = "NEURO_GAMEOVER_COOLDOWN",   label = "GAME OVER STATS HOLD", group = "WATCHDOGS", min = 0, max = 120, step = 1,  default = 5, unit = "s" },
   { key = "NEURO_SHOP_BUY_WATCHDOG_GRACE", label = "SHOP BUY GRACE",  group = "WATCHDOGS", min = 0, max = 5, step = 0.1,  default = 1.5, unit = "s" },
   { key = "NEURO_PACK_PICK_WATCHDOG_GRACE", label = "PACK PICK GRACE", group = "WATCHDOGS", min = 0, max = 5, step = 0.1, default = 1.5, unit = "s" },
+  { key = "NEURO_DEFER_WINDOW_MIN",    label = "DEFER WINDOW MIN",    group = "WATCHDOGS", min = 0, max = 10, step = 0.5, default = 3, unit = "s" },
+  { key = "NEURO_AUTO_LOGIN_DELAY",    label = "AUTO-LOGIN DELAY",    group = "WATCHDOGS", min = 0, max = 30, step = 0.5, default = 5.0, unit = "s" },
+  { key = "NEURO_LOGIN_ANIM_BLOCK",    label = "LOGIN ANIM BLOCK",    group = "WATCHDOGS", min = 0, max = 15, step = 0.5, default = 6.0, unit = "s" },
 
   { key = "NEURO_STATE_INTERVAL",      label = "STATE WRITE INTERVAL", group = "CADENCE", min = 0.2, max = 10, step = 0.1, default = 1.0, unit = "s" },
   { key = "NEURO_HOVER_PER_CARD",      label = "HOVER PER CARD",      group = "CADENCE", min = 0.05, max = 3, step = 0.05, default = 0.95, unit = "s" },
   { key = "NEURO_HOVER_SHOP",          label = "HOVER SHOP",          group = "CADENCE", min = 0, max = 3, step = 0.05, default = 1.0, unit = "s" },
+  { key = "NEURO_HOVER_DEFAULT",       label = "HOVER DEFAULT",       group = "CADENCE", min = 0, max = 3, step = 0.05, default = 0.5, unit = "s" },
+  { key = "NEURO_HOLD_ALL_SELECTED",   label = "HOLD ALL SELECTED",   group = "CADENCE", min = 0, max = 5, step = 0.05, default = 1.1, unit = "s" },
+  { key = "NEURO_CTX_CACHE_TTL",       label = "CONTEXT CACHE TTL",   group = "CADENCE", min = 0, max = 2, step = 0.01, default = 0.20, unit = "s" },
+  { key = "NEURO_REREGISTER_THROTTLE", label = "RE-REGISTER THROTTLE", group = "CADENCE", min = 0, max = 10, step = 0.1, default = 2.0, unit = "s" },
+  { key = "NEURO_JOKER_INFO_WINDOW",   label = "JOKER INFO WINDOW",   group = "CADENCE", min = 0, max = 10, step = 0.5, default = 2.5, unit = "s" },
 
   { key = "NEURO_OVERLAY_SCALE_RIGHT", label = "OVERLAY SCALE RIGHT", group = "LAYOUT", min = 0.5, max = 1.5, step = 0.05, default = 1.0, unit = "x" },
   { key = "NEURO_OVERLAY_SCALE_LEFT",  label = "OVERLAY SCALE LEFT",  group = "LAYOUT", min = 0.5, max = 1.5, step = 0.05, default = 1.0, unit = "x" },
@@ -91,6 +102,7 @@ local RUNTIME = {
   { key = "NEURO_SELFTEST_ON_BOOT", label = "SELFTEST ON BOOT", group = "RUNTIME", runtime = true, values = { "off", "on" }, default = onoff(dotenv.bool("NEURO_SELFTEST_ON_BOOT", false)) },
   { key = "NEURO_SELFTEST_PACK",    label = "SELFTEST PACK",    group = "RUNTIME", runtime = true, values = { "off", "on" }, default = onoff(dotenv.bool("NEURO_SELFTEST_PACK", false)) },
   { key = "NEURO_SELFTEST_FILTER",  label = "SELFTEST FILTER",  group = "RUNTIME", runtime = true, panel = false, kind = "string", default = dotenv.get("NEURO_SELFTEST_FILTER", "") },
+  { key = "NEURO_SMALL_REGRESSION", label = "SMALL REGRESSION", group = "RUNTIME", runtime = true, values = { "off", "on" }, default = onoff(dotenv.bool("NEURO_SMALL_REGRESSION", false)) },
 }
 
 local index = {}
@@ -180,17 +192,25 @@ local function game_speed()
 end
 Config.game_speed = game_speed
 
--- factor = 1/target-speed so cooldowns track animation length; CD OVERRIDE on pins it to 1 (manual sliders)
 local PRESET_SPEED = { ["0.5x"] = 0.5, ["1x"] = 1, ["2x"] = 2, ["4x"] = 4 }
+local STREAM_CD_FACTOR = { [0.5] = 1.5, [1] = 1.0, [2] = 0.7, [4] = 0.5 }
+local function snap_speed(sp)
+  local best, bd = 1, math.huge
+  for _, s in ipairs({ 0.5, 1, 2, 4 }) do
+    local d = math.abs(sp - s)
+    if d < bd then bd = d; best = s end
+  end
+  return best
+end
 local function cd_gate_factor()
-  if values.NEURO_CD_OVERRIDE == "on" then return 1 end
+  if values.NEURO_AUTO_TUNE ~= "on" then return 1 end
   local preset = values.NEURO_CD_PRESET
   local sp = PRESET_SPEED[preset] or game_speed()
-  if sp == 1 then return 1 end
-  local f = 1 / sp
+  local f = STREAM_CD_FACTOR[snap_speed(sp)] or 1
   return (type(f) == "number" and f > 0) and f or 1
 end
 Config.cd_gate_factor = cd_gate_factor
+Config.stream_cd_factor = STREAM_CD_FACTOR
 
 -- unlike Config.get, this is never scaled -- used by the panel display/edit/save
 function Config.get_raw(key)
