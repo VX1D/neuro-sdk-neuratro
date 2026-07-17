@@ -65,11 +65,12 @@ end
 
 local print_tracked = Prims.print_tracked
 local tracked_width = Prims.tracked_width
-local function caps_label(s, x, y, col, a, track, f, sh_a)
+local function caps_label(s, x, y, col, a, track, f, sh_a, off)
   track = track or 0
   if sh_a and sh_a > 0 then
+    off = off or 1
     lg.setColor(0, 0, 0, sh_a)
-    print_tracked(s, x + 1, y + 1, track, f)
+    print_tracked(s, x + off, y + off, track, f)
   end
   set_col(col, a)
   return print_tracked(s, x, y, track, f)

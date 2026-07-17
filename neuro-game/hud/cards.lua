@@ -5,6 +5,7 @@ Cards._mini_fallback = 0
 local Palette = require("render.palette")
 local Utils = require("util.utils")
 local S = require("hud.state")
+local Assets = require("hud.assets")
 local Prims = require("hud.prims")
 local smoothstep01 = Prims.smoothstep01
 
@@ -178,18 +179,20 @@ end
 local function draw_enh_badge(card, x, y, h, a)
   local ab = enh_abbr_of(card)
   if not ab then return end
-  local f = love.graphics.getFont()
-  if not f or f:getHeight() <= 0 then return end
   local pill_h = math.max(8, h * 0.22)
-  local sc = pill_h / f:getHeight()
+  local f = Assets.font_px(math.floor(pill_h + 0.5))
+  if not f or f:getHeight() <= 0 then return end
   local pad = 2
-  local pw = f:getWidth(ab) * sc + pad * 2
-  local ph = pill_h + pad
+  local pw = f:getWidth(ab) + pad * 2
+  local ph = f:getHeight() + pad
+  local prev = love.graphics.getFont()
+  love.graphics.setFont(f)
   love.graphics.setColor(0, 0, 0, 0.62 * a)
   love.graphics.rectangle("fill", x + 1, y + 1, pw, ph, 2, 2)
   love.graphics.setColor(1, 1, 1, 0.95 * a)
-  love.graphics.print(ab, x + 1 + pad, y + 1 + pad * 0.5, 0, sc, sc)
+  love.graphics.print(ab, x + 1 + pad, y + 1 + pad * 0.5)
   love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.setFont(prev)
 end
 
 local function draw_mini_fallback(card, x, y, w, h, a)
@@ -200,9 +203,10 @@ local function draw_mini_fallback(card, x, y, w, h, a)
   if name and name ~= "?" then
     local f = love.graphics.getFont()
     local fh = f:getHeight()
-    local sc = math.min(1, (w - 4) / math.max(1, f:getWidth(name)))
+    local maxw = w - 4
+    while #name > 1 and f:getWidth(name) > maxw do name = name:sub(1, #name - 1) end
     love.graphics.setColor(0.9, 0.9, 0.9, a)
-    love.graphics.print(name, x + 2, y + 2 + (h - fh * sc - 4) * 0.5, 0, sc, sc)
+    love.graphics.print(name, x + 2, y + 2 + (h - fh - 4) * 0.5)
     love.graphics.setColor(1, 1, 1, 1)
   end
 end
@@ -404,15 +408,16 @@ local function draw_card_mini_approx(card, x, y, h, a)
   if ed then
     local ed_text = (ed.negative and "NEG") or (ed.polychrome and "POLY") or (ed.holo and "HOLO") or (ed.foil and "FOIL") or nil
     if ed_text then
-      local f = love.graphics.getFont()
-      local fh = f:getHeight()
-      local ew = f:getWidth(ed_text)
-      local sc = math.min(1, (w - 4) / math.max(1, ew))
-      local tw = ew * sc
+      local f0 = love.graphics.getFont()
+      local sc = math.min(1, (w - 4) / math.max(1, f0:getWidth(ed_text)))
+      local f = (sc < 1) and Assets.font_px(math.max(6, math.floor(f0:getHeight() * sc))) or f0
+      local fh, tw = f:getHeight(), f:getWidth(ed_text)
       love.graphics.setColor(0, 0, 0, 0.6 * a)
-      love.graphics.rectangle("fill", x + w - tw - 3, y + 2, tw + 3, fh * sc + 2)
+      love.graphics.rectangle("fill", x + w - tw - 3, y + 2, tw + 3, fh + 2)
       love.graphics.setColor(1, 1, 1, 0.95 * a)
-      love.graphics.print(ed_text, x + w - tw - 1, y + 3, 0, sc, sc)
+      if f ~= f0 then love.graphics.setFont(f) end
+      love.graphics.print(ed_text, x + w - tw - 1, y + 3)
+      if f ~= f0 then love.graphics.setFont(f0) end
       love.graphics.setColor(1, 1, 1, 1)
     end
   end

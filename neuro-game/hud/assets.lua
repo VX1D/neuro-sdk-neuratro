@@ -56,6 +56,10 @@ function Assets.get_panel_fonts(scale)
   return f_big or S.panel_font, f_small or S.panel_font_small
 end
 
+function Assets.font_px(px)
+  return Utils.font_at(PANEL_FONT_PATH, px, 1)
+end
+
 local _font_ids = setmetatable({}, { __mode = "k" })
 local _font_id_n = 0
 function Assets.font_cache_id(f)

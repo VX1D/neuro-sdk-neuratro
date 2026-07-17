@@ -1256,16 +1256,20 @@ function Panel.draw()
       elseif it.kind == "action" then dtxt = (page == 3) and "reset all runtime toggles to defaults" or "run the in-engine self-test suite" end
     end
     if dtxt then
-      local w = font_small:getWidth(dtxt)
-      local sx = (w > fit_w and w > 0) and (fit_w / w) or 1
+      if font_small:getWidth(dtxt) > fit_w then
+        while #dtxt > 2 and font_small:getWidth(dtxt .. "..") > fit_w do dtxt = dtxt:sub(1, #dtxt - 1) end
+        dtxt = dtxt .. ".."
+      end
       love.graphics.setColor(1, 1, 1, 0.88 * pa)
-      love.graphics.print(dtxt, px + GUT, py + ph - small_h - U * 2 - desc_h, 0, sx, sx)
+      love.graphics.print(dtxt, px + GUT, py + ph - small_h - U * 2 - desc_h)
     end
   end
-  local fw = font_small:getWidth(footer)
-  local fsx = (fw > fit_w and fw > 0) and (fit_w / fw) or 1
+  if font_small:getWidth(footer) > fit_w then
+    while #footer > 2 and font_small:getWidth(footer .. "..") > fit_w do footer = footer:sub(1, #footer - 1) end
+    footer = footer .. ".."
+  end
   love.graphics.setColor(1, 1, 1, 0.42 * pa)
-  love.graphics.print(footer, px + GUT, py + ph - small_h - U * 2, 0, fsx, fsx)
+  love.graphics.print(footer, px + GUT, py + ph - small_h - U * 2)
 
   HIT.valid = open
 

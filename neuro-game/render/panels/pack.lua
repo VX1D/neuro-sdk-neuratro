@@ -22,8 +22,11 @@ local function draw_pack_panel(ctx)
   local bg = th.bg
   local now, pulse, shimr, shimg, shimb = H.motion(mo)
   local persona_evil, persona_neuro = H.persona(th)
-  local font, panel_font_small = th.font, th.panel_font_small
-  local rn, sw, U, GUT, TRACK_SM, line_h, small_line_h, text_h = me.rn, me.sw, me.U, me.GUT, me.TRACK_SM, me.line_h, me.small_line_h, me.text_h
+  local font, panel_font_small = th.rfont or th.font, th.rfont_small or th.panel_font_small
+  local rn, sw, U, GUT, TRACK_SM = me.rn, me.sw, me.U, me.GUT, me.TRACK_SM
+  local text_h = me.r_text_h
+  local line_h = text_h + rn(4)
+  local small_line_h = me.r_small_text_h + rn(2)
   local pack_rows, sn = da.pack_rows, da.sn
   local trunc, wrapped_lines, draw_colored_desc = dr.trunc, dr.wrapped_lines, dr.draw_colored_desc
   local pack_has_cards = pack_rows.cards and #pack_rows.cards > 0
@@ -92,9 +95,9 @@ local function draw_pack_panel(ctx)
   if leaving then leave01 = 1 - Motion.anim01(now - S.pack_leave_t, PACK_LEAVE_DUR) end
 
   if (is_pack_state and (pack_has_cards or next(S.pack_picked))) or leaving then
-    local pk_pad = 10
-    local slot_gap = 6
-    local slot_h = 190
+    local pk_pad = rn(10)
+    local slot_gap = rn(6)
+    local slot_h = rn(190)
     local small_f = panel_font_small or font
 
     local display_cards = S.pack_disp or {}
@@ -148,12 +151,12 @@ local function draw_pack_panel(ctx)
       end
       S.pack_leave_n = n_cards
     end
-    local pk_w = clamp(n_cards * 155 + 20, 500, sw - 40)
+    local pk_w = clamp(n_cards * rn(155) + rn(20), 500, sw - 40)
     local pk_x = math.floor((sw - pk_w) / 2)
     local pk_content_w = pk_w - pk_pad * 2
     local slot_w = (n_cards > 0) and math.max(1, math.floor((pk_content_w - (n_cards - 1) * slot_gap) / n_cards)) or pk_content_w
-    local title_h2 = line_h + 6
-    local pk_total_h = title_h2 + slot_h + 10
+    local title_h2 = line_h + rn(6)
+    local pk_total_h = title_h2 + slot_h + rn(10)
 
     local pk_in = Motion.anim01(now - S.pack_appear_t, Motion.dur(Motion.MED)) * leave01
 
@@ -161,7 +164,7 @@ local function draw_pack_panel(ctx)
     if leaving then ctx.center_top_y = pk_base_top + math.floor((1 - leave01) * 16) end
 
     local pk_rad = H.persona_frame(th, mo, pk_x, ctx.center_top_y, pk_w, pk_total_h, rn(1),
-      { a = pk_in, rad = 9, title_h = title_h2, skip_body = true })
+      { a = pk_in, rad = rn(9), title_h = title_h2, skip_body = true })
     if persona_evil then
       local pft = now - S.pack_appear_t
       local flare = clamp01(pft / 0.45)
@@ -201,9 +204,9 @@ local function draw_pack_panel(ctx)
     end
     love.graphics.setFont(font)
     love.graphics.setColor(0, 0, 0, 0.30 * pk_in)
-    love.graphics.print(trunc(pack_rows.title or "Pack", pk_content_w - 22), pk_title_tx + 1, pk_title_ty + 1)
+    love.graphics.print(trunc(pack_rows.title or "Pack", pk_content_w - rn(22)), pk_title_tx + 1, pk_title_ty + 1)
     set_col(pk_title_color, 1.0 * pk_in)
-    love.graphics.print(trunc(pack_rows.title or "Pack", pk_content_w - 22), pk_title_tx, pk_title_ty)
+    love.graphics.print(trunc(pack_rows.title or "Pack", pk_content_w - rn(22)), pk_title_tx, pk_title_ty)
 
     local function draw_pack_slot(dc, slot_x, sy_slot, ca, appear_ef, scan)
       local st = dc.state
@@ -224,7 +227,7 @@ local function draw_pack_panel(ctx)
           set_col(GOLD, 0.18 * ca)
           love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h)
           set_col(GOLD, (0.70 + 0.12 * scan) * ca)
-          love.graphics.setLineWidth(2)
+          love.graphics.setLineWidth(rn(2))
           love.graphics.rectangle("line", slot_x, sy_slot, slot_w, slot_h)
         end
 
@@ -239,7 +242,7 @@ local function draw_pack_panel(ctx)
           love.graphics.setColor(hr, hg2, hb3, (0.10 + 0.06 * scan) * ca)
           love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h)
           set_col(GOLD, (0.80 + 0.15 * scan) * ca)
-          love.graphics.setLineWidth(2)
+          love.graphics.setLineWidth(rn(2))
           love.graphics.rectangle("line", slot_x, sy_slot, slot_w, slot_h)
           Prims.photo_corners(slot_x - 1, sy_slot - 1, slot_w + 2, slot_h + 2, GOLD, (0.85 + 0.15 * scan) * ca, rn(9))
         elseif persona_neuro then
@@ -247,18 +250,18 @@ local function draw_pack_panel(ctx)
           love.graphics.setColor(hr, hg2, hb3, (0.12 + 0.06 * scan) * ca)
           love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, rn(6), rn(6))
           love.graphics.setColor(hr, hg2, hb3, (0.65 + 0.20 * scan) * ca)
-          love.graphics.setLineWidth(2)
+          love.graphics.setLineWidth(rn(2))
           love.graphics.rectangle("line", slot_x, sy_slot, slot_w, slot_h, rn(6), rn(6))
         else
           love.graphics.setColor(hr, hg2, hb3, (0.12 + 0.05 * scan) * ca)
           love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h)
           love.graphics.setColor(hr, hg2, hb3, (0.75 + 0.15 * scan) * ca)
-          love.graphics.setLineWidth(2)
+          love.graphics.setLineWidth(rn(2))
           love.graphics.rectangle("line", slot_x, sy_slot, slot_w, slot_h)
           set_col(WHITE, (0.18 + 0.10 * scan) * ca)
-          love.graphics.setLineWidth(1)
+          love.graphics.setLineWidth(rn(1))
           love.graphics.rectangle("line", slot_x + 2, sy_slot + 2, slot_w - 4, slot_h - 4)
-          Prims.photo_corners(slot_x, sy_slot, slot_w, slot_h, {hr, hg2, hb3}, (0.80 + 0.15 * scan) * ca, 11)
+          Prims.photo_corners(slot_x, sy_slot, slot_w, slot_h, {hr, hg2, hb3}, (0.80 + 0.15 * scan) * ca, rn(11))
         end
 
       else
@@ -272,7 +275,7 @@ local function draw_pack_panel(ctx)
         end
         local rr = persona_evil and 0 or rn(3)
         set_col(dc.rc, (0.30 + 0.10 * pulse) * ca)
-        love.graphics.setLineWidth(1)
+        love.graphics.setLineWidth(rn(1))
         love.graphics.rectangle("line", slot_x, sy_slot, slot_w, slot_h, rr, rr)
       end
 
@@ -285,10 +288,10 @@ local function draw_pack_panel(ctx)
       end
 
       if dc.card then
-        local sprite_w2 = math.min(slot_w - 16, 90)
+        local sprite_w2 = math.min(slot_w - rn(16), rn(90))
         local sprite_h2 = math.floor(sprite_w2 / 0.747)
         local sprite_x2 = slot_x + math.floor((slot_w - sprite_w2) / 2)
-        local sprite_y2 = sy_slot + 6
+        local sprite_y2 = sy_slot + rn(6)
 
         love.graphics.setColor(0, 0, 0, 0.30 * ca)
         love.graphics.ellipse("fill", sprite_x2 + sprite_w2 / 2, sprite_y2 + sprite_h2 + 3, sprite_w2 * 0.48, 3)
@@ -298,13 +301,13 @@ local function draw_pack_panel(ctx)
         if st == "picked" then sb_col = persona_neuro and {shimr, shimg, shimb} or GOLD
         elseif st == "highlighted" then sb_col = persona_evil and GOLD or (persona_neuro and {shimr, shimg, shimb} or CYAN) end
         set_col(sb_col, (0.45 + 0.15 * (st == "normal" and pulse or scan)) * ca)
-        love.graphics.setLineWidth(1)
+        love.graphics.setLineWidth(rn(1))
         love.graphics.rectangle("line", sprite_x2 - 1, sprite_y2 - 1, sprite_w2 + 2, sprite_h2 + 2)
         if persona_evil then
           Prims.photo_corners(sprite_x2 - 2, sprite_y2 - 2, sprite_w2 + 4, sprite_h2 + 4, GOLD, 0.60 * ca, rn(4))
         elseif persona_neuro and (st == "picked" or st == "highlighted") then
           love.graphics.setColor(shimr, shimg, shimb, 0.45 * ca)
-          love.graphics.rectangle("line", sprite_x2 - 3, sprite_y2 - 3, sprite_w2 + 6, sprite_h2 + 6, 3, 3)
+          love.graphics.rectangle("line", sprite_x2 - 3, sprite_y2 - 3, sprite_w2 + 6, sprite_h2 + 6, rn(3), rn(3))
         end
 
         draw_card_mini(dc.card, sprite_x2, sprite_y2, sprite_h2, ca)
@@ -323,34 +326,34 @@ local function draw_pack_panel(ctx)
             local fl = math.sin(math.pi * math.min(1, pe / 0.24))
             if fl > 0 then
               love.graphics.setColor(shimr, shimg, shimb, 0.35 * fl * ca)
-              love.graphics.rectangle("fill", sprite_x2, sprite_y2, sprite_w2, sprite_h2, 3, 3)
+              love.graphics.rectangle("fill", sprite_x2, sprite_y2, sprite_w2, sprite_h2, rn(3), rn(3))
               love.graphics.setColor(1, 1, 1, 0.25 * fl * ca)
               love.graphics.rectangle("fill", sprite_x2, sprite_y2, sprite_w2, math.max(2, sprite_h2 * 0.14))
             end
           end
         end
 
-        local name_y = sprite_y2 + sprite_h2 + 4
+        local name_y = sprite_y2 + sprite_h2 + rn(4)
         local rc2 = (st == "picked" and GOLD) or (st == "highlighted" and CYAN) or dc.rc
-        local name_str = trunc(dc.name, slot_w - 8)
+        local name_str = trunc(dc.name, slot_w - rn(8))
         local name_x = slot_x + math.floor((slot_w - font:getWidth(name_str)) / 2)
-        shadow_text(name_str, name_x, name_y, rc2, 0.97 * ca, 0.35 * ca)
+        shadow_text(name_str, name_x, name_y, rc2, 0.97 * ca, 0.35 * ca, rn(1))
 
         if dc.desc and dc.desc ~= "" then
           if panel_font_small then love.graphics.setFont(panel_font_small) end
-          local desc_lines = wrapped_lines(dc.desc, slot_w - 8, small_f)
-          local dy = name_y + text_h + 2
+          local desc_lines = wrapped_lines(dc.desc, slot_w - rn(8), small_f)
+          local dy = name_y + text_h + rn(2)
           for li = 1, math.min(#desc_lines, 2) do
-            draw_colored_desc(desc_lines[li], slot_x + 4, dy, ca, small_f)
+            draw_colored_desc(desc_lines[li], slot_x + rn(4), dy, ca, small_f)
             dy = dy + small_line_h
           end
           if panel_font_small then love.graphics.setFont(font) end
         end
       elseif not (persona_evil and st == "picked") then
-        local name_str = trunc(dc.name, slot_w - 16)
+        local name_str = trunc(dc.name, slot_w - rn(16))
         local name_x = slot_x + math.floor((slot_w - font:getWidth(name_str)) / 2)
         local name_y = sy_slot + math.floor((slot_h - text_h) / 2)
-        shadow_text(name_str, name_x, name_y, GOLD, 0.97 * ca, 0.35 * ca)
+        shadow_text(name_str, name_x, name_y, GOLD, 0.97 * ca, 0.35 * ca, rn(1))
       end
 
       if st == "highlighted" then
@@ -426,7 +429,7 @@ local function draw_pack_panel(ctx)
             local ov = math.min(1, pe / 0.32)
             local veil = (pe < 0.32) and (0.5 * ov) or math.max(0, 0.5 * (1 - (pe - 0.32) / 0.18))
             set_col(ACC, veil * ca)
-            love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, 3, 3)
+            love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, rn(3), rn(3))
             love.graphics.setColor(shimr, shimg, shimb, veil * 0.6 * ca)
             love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, math.max(2, slot_h * 0.5))
           end
@@ -447,9 +450,9 @@ local function draw_pack_panel(ctx)
           if pe >= 0.30 and pe < 0.52 then
             local fl = math.sin(math.pi * (pe - 0.30) / 0.22)
             love.graphics.setColor(1, 1, 1, 0.5 * fl * ca)
-            love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, 3, 3)
+            love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, rn(3), rn(3))
             set_col(pg, 0.35 * fl * ca)
-            love.graphics.rectangle("fill", slot_x - rn(2), sy_slot - rn(2), slot_w + rn(4), slot_h + rn(4), 4, 4)
+            love.graphics.rectangle("fill", slot_x - rn(2), sy_slot - rn(2), slot_w + rn(4), slot_h + rn(4), rn(4), rn(4))
             local burst = (pe - 0.30) / 0.22
             Prims.confetti_burst(mcx, mcy, burst, slot_w, U * 1.8, 0.6, pg, ACC, ca)
             Prims.confetti_burst(mcx, mcy, burst, slot_w * 0.8, U * 1.5, 1.7, pg, ACC, 0.9 * ca)
@@ -459,7 +462,7 @@ local function draw_pack_panel(ctx)
           Prims.draw_bow(mcx, mcy, rn(2) * bsc, ACC, 0.95 * ca, pg)
         else
           love.graphics.setColor(1, 1, 1, 0.4 * math.max(0, 1 - pe / 0.4) * ca)
-          love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, 3, 3)
+          love.graphics.rectangle("fill", slot_x, sy_slot, slot_w, slot_h, rn(3), rn(3))
         end
       end
 
@@ -468,8 +471,8 @@ local function draw_pack_panel(ctx)
         local lbl_col = persona_neuro and pg or GOLD
         local plw = tracked_width(pick_label, TRACK_SM, font)
         local plx = slot_x + math.floor((slot_w - plw) / 2)
-        local ply = sy_slot + slot_h - text_h - 4
-        caps_label(pick_label, plx, ply, lbl_col, 0.95 * ca, TRACK_SM, font, 0.32 * ca)
+        local ply = sy_slot + slot_h - text_h - rn(4)
+        caps_label(pick_label, plx, ply, lbl_col, 0.95 * ca, TRACK_SM, font, 0.32 * ca, rn(1))
         if persona_neuro then
           Prims.draw_heart(plx - U * 3, ply + math.floor(text_h / 2), U * 2, pg, 0.9 * ca)
           Prims.draw_heart(plx + plw + U * 3, ply + math.floor(text_h / 2), U * 2, pg, 0.9 * ca)
@@ -487,7 +490,7 @@ local function draw_pack_panel(ctx)
       end
     end
 
-    local slot_y = ctx.center_top_y + title_h2 + 4
+    local slot_y = ctx.center_top_y + title_h2 + rn(4)
     for ci, dc in ipairs(display_cards) do
       local ca = dc.alpha
       if leaving then ca = ca * leave01 end
@@ -513,7 +516,7 @@ local function draw_pack_panel(ctx)
       draw_pack_slot(dc, slot_x, slot_y + slide_y, ca, appear_ef, scan)
     end
 
-    ctx.center_top_y = pk_base_top + pk_total_h + 4
+    ctx.center_top_y = pk_base_top + pk_total_h + rn(4)
   end
 end
 
