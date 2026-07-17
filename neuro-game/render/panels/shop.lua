@@ -131,7 +131,7 @@ local function draw_shop_panel(ctx)
       love.graphics.setColor(0, 0, 0, 0.32 * sa)
       love.graphics.rectangle("fill", sh_tx - ln(6), sh_ty - ln(3), sh_nw + ln(12), l_text_h + ln(6))
     end
-    caps_label("SHOP", sh_tx, sh_ty, ACC, 0.97 * sa, TRACK, lfont, 0.30 * sa)
+    caps_label("SHOP", sh_tx, sh_ty, ACC, 0.97 * sa, TRACK, lfont, 0.30 * sa, ln(1))
     if persona_neuro then
       love.graphics.setColor(shimr, shimg, shimb, 0.55 * sa)
       love.graphics.rectangle("fill", sh_tx, sh_ty + l_text_h + ln(1), sh_nw, 1)
@@ -163,7 +163,7 @@ local function draw_shop_panel(ctx)
         love.graphics.rectangle("fill", m_x - ln(5) - ext, iy - ln(2), m_w + ln(10) + ext, pfh + ln(4))
       end
       love.graphics.setColor(0, 0, 0, 0.40 * sa)
-      love.graphics.print(m_txt, m_x + 1, iy + 1)
+      love.graphics.print(m_txt, m_x + ln(1), iy + ln(1))
       if persona_neuro or persona_evil then
         love.graphics.setColor(shimr, shimg, shimb, 0.97 * sa)
       else
@@ -172,7 +172,7 @@ local function draw_shop_panel(ctx)
       love.graphics.print(m_txt, m_x, iy)
       if r_txt then
         local r_x = m_x - ln(persona_evil and 14 or 10) - r_w
-        shadow_text(r_txt, r_x, iy, ACC, 0.72 * sa, 0.30 * sa)
+        shadow_text(r_txt, r_x, iy, ACC, 0.72 * sa, 0.30 * sa, ln(1))
         local r_cy = iy + math.floor(pfh / 2)
         if persona_evil then
           if S.rr_last ~= nil and rr ~= S.rr_last then S.rr_stab_at = now end
@@ -239,7 +239,7 @@ local function draw_shop_panel(ctx)
           Prims.draw_heart(sepx2 - ln(2), lcy, ln(2), pg, 0.55 * sa)
         else
           set_col(FRD, 0.90 * sa)
-          love.graphics.setLineWidth(1)
+          love.graphics.setLineWidth(ln(1))
           love.graphics.line(sepx1, lcy, sepx2, lcy)
         end
         lcy = lcy + lp_sep_h - l_U
@@ -282,7 +282,7 @@ local function draw_shop_panel(ctx)
         local sprite_y = lcy + math.floor((lp_card_line_h - sprite_h) / 2)
         local est_w = sprite_h * 0.75
         local mini_w = draw_card_mini(card_obj, sprite_x, sprite_y, sprite_h, (afford and 1 or 0.6) * sa)
-        love.graphics.setLineWidth(1)
+        love.graphics.setLineWidth(ln(1))
         if persona_neuro then
           love.graphics.setColor(shimr, shimg, shimb, (afford and 0.40 or 0.18) * sa)
           love.graphics.rectangle("line", sprite_x - 1, sprite_y - 1, est_w + 2, sprite_h + 2)
@@ -331,7 +331,7 @@ local function draw_shop_panel(ctx)
           price_left = ptx - ln(4)
         end
         love.graphics.setColor(0, 0, 0, 0.35 * sa)
-        love.graphics.print(price_txt, ptx + 1, pty + 1)
+        love.graphics.print(price_txt, ptx + ln(1), pty + ln(1))
         if afford then
           if persona_neuro then
             love.graphics.setColor(1, 1, 1, 0.96 * sa)
@@ -346,7 +346,7 @@ local function draw_shop_panel(ctx)
 
         local name_max = price_left - ln(4) - name_x
         local lp_txt = trunc(name, name_max, lp_font)
-        shadow_text(lp_txt, name_x, row_cy, name_col, (afford and 0.98 or 0.72) * sa, 0.42 * sa)
+        shadow_text(lp_txt, name_x, row_cy, name_col, (afford and 0.98 or 0.72) * sa, 0.42 * sa, ln(1))
         local lp_ed_tag = card_edition_tag(card_obj)
         if lp_ed_tag ~= "" then
           draw_animated_edition(lp_ed_tag, name_x + lp_font:getWidth(lp_txt), row_cy, sa, lp_font, now, pk)
@@ -359,7 +359,7 @@ local function draw_shop_panel(ctx)
         love.graphics.rectangle("fill", lx + 2, lcy - 1, lp_w - 4, lp_line_h + 2)
         local htx = lx + lp_pad_x
         love.graphics.setColor(0, 0, 0, 0.40 * sa)
-        love.graphics.print(htxt, htx + 1, lcy + 2)
+        love.graphics.print(htxt, htx + ln(1), lcy + 1 + ln(1))
         love.graphics.setColor(1, 1, 1, 0.96 * sa)
         love.graphics.print(htxt, htx, lcy + 1)
         local hw = lp_font:getWidth(htxt)
@@ -397,7 +397,7 @@ local function draw_shop_panel(ctx)
         set_col(col, 0.20 * sa)
         love.graphics.rectangle("fill", lx + lp_pad_x + indent - 4, lcy, l_accw, lp_small_line_h - 2)
         love.graphics.setColor(0, 0, 0, 0.25 * sa)
-        love.graphics.print(trunc(txt, lp_content_w - indent, sf), lx + lp_pad_x + indent + 1, lcy + 1)
+        love.graphics.print(trunc(txt, lp_content_w - indent, sf), lx + lp_pad_x + indent + ln(1), lcy + ln(1))
         set_col(col, 0.82 * sa)
         love.graphics.print(trunc(txt, lp_content_w - indent, sf), lx + lp_pad_x + indent, lcy)
         love.graphics.setFont(lp_font)

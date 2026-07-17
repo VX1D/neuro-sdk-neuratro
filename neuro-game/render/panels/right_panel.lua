@@ -110,7 +110,7 @@ local function draw_rp_header(ctx)
       print_tracked(persona_name, tx + jit, ty - 1, TRACK, rfont)
     end
   end
-  local name_end = caps_label(persona_name, tx, ty, ACC, 0.97, TRACK, rfont, 0.30)
+  local name_end = caps_label(persona_name, tx, ty, ACC, 0.97, TRACK, rfont, 0.30, rn(1))
   if persona_evil and name_end then
     local oy2 = ty + math.floor(r_text_h / 2)
     local cur_slot = (S.desc_slot or 0) * 131 + (S.cons_slot or 0)
@@ -153,7 +153,7 @@ local function draw_rp_header(ctx)
     local lw = tracked_width(state_label, TRACK_SM, sl_font)
     local dot_x = tx + lw + r_U + 2
     local dot_gap, dot_r = 6, 1.6
-    caps_label(state_label, tx, sl_y, ACC, (0.82 + 0.12 * breathe) * sl_in, TRACK_SM, sl_font, 0.32 * sl_in)
+    caps_label(state_label, tx, sl_y, ACC, (0.82 + 0.12 * breathe) * sl_in, TRACK_SM, sl_font, 0.32 * sl_in, rn(1))
     if persona_evil then
       for di = 0, 2 do
         local et = Motion.reduced and 0.5 or ((now * 1.2 + di * 0.33) % 1)
@@ -306,7 +306,7 @@ local function draw_desc_carousel(P)
       love.graphics.setColor(0, 0, 0, 0.55 * fade_a)
       love.graphics.rectangle("fill", sprite_x - 1, sprite_y - 1, est_w + 2, sprite_h + 2)
       set_col(rc, 0.60 * fade_a)
-      love.graphics.setLineWidth(1)
+      love.graphics.setLineWidth(rn(1))
       love.graphics.rectangle("line", sprite_x - 1, sprite_y - 1, est_w + 2, sprite_h + 2)
       if persona_evil then
         set_col(GOLD, 0.30 * fade_a)
@@ -319,14 +319,14 @@ local function draw_desc_carousel(P)
       local text_off = math.max(est_w, mini_w > 0 and mini_w or 0) + rn(7)
 
       love.graphics.setColor(0, 0, 0, 0.30 * fade_a)
-      love.graphics.print(trunc(jname, content_w - text_off - rn(28), rp_font), rx + p_pad_x + cy_dx + text_off + 1, cy + (rp_card_line_h - rp_text_h) / 2 + 1)
+      love.graphics.print(trunc(jname, content_w - text_off - rn(28), rp_font), rx + p_pad_x + cy_dx + text_off + rn(1), cy + (rp_card_line_h - rp_text_h) / 2 + rn(1))
       set_col(rc, 0.97 * fade_a)
       love.graphics.print(trunc(jname, content_w - text_off - rn(28), rp_font), rx + p_pad_x + cy_dx + text_off, cy + (rp_card_line_h - rp_text_h) / 2)
 
       love.graphics.setFont(rfont_small)
       local slot_txt = tostring(cy_slot + 1) .. "/" .. tostring(n)
       local stw = sf:getWidth(slot_txt)
-      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 0.60 + 0.15 * pulse, 0.20)
+      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 0.60 + 0.15 * pulse, 0.20, rn(1))
 
       if #lns > 0 then
         local desc_y = cy + rp_card_line_h
@@ -344,7 +344,7 @@ local function draw_desc_carousel(P)
         set_col(FRD, 0.90)
         love.graphics.rectangle("fill", bar_x + 1, bar_y + 1, content_w - 2, bar_h)
         set_col(FR, 0.90)
-        love.graphics.setLineWidth(1)
+        love.graphics.setLineWidth(rn(1))
         love.graphics.rectangle("line", bar_x + 0.5, bar_y + 0.5, content_w - 1, bar_h + 1)
         local prog_w = math.max(1, (content_w - 2) * show_progress)
         if persona_neuro then
@@ -425,13 +425,13 @@ local function draw_rp_rows(ctx)
       local act_tx = caret_x + rfont:getWidth("> ")
       local action_draw = trunc(action_text, p_x + pw_total - p_pad_x - act_tx, rfont)
       love.graphics.setColor(0, 0, 0, 0.45 * act_in)
-      love.graphics.print(action_draw, act_tx + 1 + act_dx, act_ty + 1)
+      love.graphics.print(action_draw, act_tx + rn(1) + act_dx, act_ty + rn(1))
       love.graphics.setColor(1, 1, 1, 0.98 * act_in)
       love.graphics.print(action_draw, act_tx + act_dx, act_ty)
     end
     cy = cy + action_row_h
     set_col(FRD, 0.90)
-    love.graphics.setLineWidth(1)
+    love.graphics.setLineWidth(rn(1))
     love.graphics.line(p_x + p_pad_x, cy, p_x + pw_total - p_pad_x, cy)
     cy = cy + r_U
   end
@@ -478,7 +478,7 @@ local function draw_rp_rows(ctx)
       if kind == "sep" then
         cy = cy + r_U
         set_col(FRD, 0.90)
-        love.graphics.setLineWidth(1)
+        love.graphics.setLineWidth(rn(1))
         love.graphics.line(rx + p_pad_x, cy, rx + p_w - p_pad_x, cy)
         cy = cy + rp_sep_h - r_U
 
@@ -510,7 +510,7 @@ local function draw_rp_rows(ctx)
           Prims.draw_diamond(hd_x - rn(3), hd_cy, rn(1), GOLD, 0.40 + 0.20 * pulse)
         end
         love.graphics.setColor(0, 0, 0, 0.30)
-        love.graphics.print(trunc(txt, content_w - 10, rp_font), rx + p_pad_x + 1, cy + 2)
+        love.graphics.print(trunc(txt, content_w - 10, rp_font), rx + p_pad_x + rn(1), cy + 1 + rn(1))
         set_col(col, 1.0)
         love.graphics.print(trunc(txt, content_w - 10, rp_font), rx + p_pad_x, cy + 1)
         cy = cy + rp_line_h
@@ -530,7 +530,7 @@ local function draw_rp_rows(ctx)
         for li = 1, n_sub do
           local lyc = cy + (li - 1) * rp_line_h
           love.graphics.setColor(0, 0, 0, 0.25)
-          love.graphics.print(sub_lines[li], rx + p_pad_x + indent + 1, lyc + 1)
+          love.graphics.print(sub_lines[li], rx + p_pad_x + indent + rn(1), lyc + rn(1))
           set_col(col, 0.97)
           love.graphics.print(sub_lines[li], rx + p_pad_x + indent, lyc)
         end
@@ -541,7 +541,7 @@ local function draw_rp_rows(ctx)
         local txt = r.text or ""
         local indent = r.indent or 0
         local draw_txt = trunc(txt, content_w - indent, rp_font)
-        shadow_text(draw_txt, rx + p_pad_x + indent, cy, col, 0.90, 0.22)
+        shadow_text(draw_txt, rx + p_pad_x + indent, cy, col, 0.90, 0.22, rn(1))
         cy = cy + rp_line_h
       end
     end
@@ -563,7 +563,7 @@ local function draw_rp_footer(ctx)
   if footer_h > 0 then
     local fy = p_y + total_h - footer_h
     set_col(FRD, 0.90)
-    love.graphics.setLineWidth(1)
+    love.graphics.setLineWidth(rn(1))
     love.graphics.line(p_x + p_pad_x, fy, p_x + pw_total - p_pad_x, fy)
 
     if footer_is_emote and footer_emote and footer_emote.img then
@@ -590,7 +590,7 @@ local function draw_rp_footer(ctx)
       local qw = qf:getWidth(qt)
       local qx = p_x + (pw_total - qw) / 2
       local qy = fy + (footer_h - r_small_text_h) / 2
-      shadow_text(qt, qx, qy, DIM, 0.62 + 0.10 * pulse, 0.25)
+      shadow_text(qt, qx, qy, DIM, 0.62 + 0.10 * pulse, 0.25, rn(1))
       if persona_evil then
         local fl_y = qy + math.floor(r_small_text_h / 2)
         local fl_in_l = qx - rn(8)
