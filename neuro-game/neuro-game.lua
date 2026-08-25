@@ -3,14 +3,23 @@
 --- MOD_ID: neuro-game
 --- MOD_AUTHOR: [x264.webrip]
 --- MOD_DESCRIPTION: Neuro SDK bridge + IPC for Balatro
---- MOD_VERSION: 1.0.0
+--- MOD_VERSION: 1.1.0
 
 if rawget(_G, "NEURO_SDK_MOD_LOADED") then
+  local src = debug.getinfo(1, "S").source
+  print("[neuro-game] WARNING: a second copy of this mod was loaded from "
+    .. tostring(src and src:gsub("^@", "") or "?")
+    .. " and was skipped. Remove stale copies from the Mods directory -- whichever copy "
+    .. "loads first wins, and require() can still pull modules from the other one.")
   return
 end
 _G.NEURO_SDK_MOD_LOADED = true
 
 do
+  local sep = package.config:sub(1, 1)
+  local function appdata_mod_dir(appdata)
+    return table.concat({ appdata, "Balatro", "Mods", "neuro-game", "" }, sep)
+  end
   local function add_path(p)
     if p and not package.path:find(p, 1, true) then
       package.path = package.path .. ";" .. p
@@ -21,17 +30,25 @@ do
   end
   local _appdata = os.getenv("APPDATA")
   if _appdata then
-    local _d = _appdata .. "\\Balatro\\Mods\\neuro-game\\"
+    local _d = appdata_mod_dir(_appdata)
     add_path(_d .. "?.lua")
   end
 end
 
+local ModConfig = require("core.config")
+local current_mod = assert(SMODS and SMODS.current_mod, "neuro-game requires Steamodded current_mod")
+ModConfig.init(current_mod.config, function()
+  return SMODS.save_mod_config(current_mod)
+end)
+
 local NeuroActions = require("core.actions")
 local NeuroDispatcher = require("core.dispatcher")
 local PersonaPalette = require("render.persona_palette")
+local GfxGuard = require("render.gfx_guard")
 local HUD = require("render.hud_overlay")
 local Orchestrator = require("core.orchestrator")
 local trace = require("core.trace")
+local SelfTest = require("core.selftest")
 local DebugStats, StagingDebug, TuningPanel
 local function _get_debug()
   if not DebugStats then
@@ -45,88 +62,76 @@ local function _get_tuning()
   return TuningPanel
 end
 
+local CardDex = nil
+local function _get_card_dex()
+  CardDex = CardDex or require("hud.card_dex")
+  return CardDex
+end
+
 if not G then G = {} end
 G.NEURO = G.NEURO or {}
 G.NEURO.actions = NeuroActions
 G.NEURO.dispatcher = NeuroDispatcher
 G.NEURO.ai_highlighted = G.NEURO.ai_highlighted or setmetatable({}, {__mode = "k"})
+G.NEURO.ai_glow = G.NEURO.ai_glow or setmetatable({}, {__mode = "k"})
 
-local _NEURO_DEBUG = require("core.tuning").bool("NEURO_DEBUG")
+local function _NEURO_DEBUG() return require("core.config").bool("NEURO_DEBUG") end
 local function neuro_log(...)
-  if _NEURO_DEBUG then print("[neuro-game]", ...) end
+  if _NEURO_DEBUG() then print("[neuro-game]", ...) end
 end
 
-local _overlay_dev = require("core.tuning").bool("NEURO_OVERLAY_DEV")
-local _overlay_isolate = _overlay_dev
-local DevScenario = _overlay_dev and require("hud.dev_scenario") or nil
-local _reload_err = nil
-local function _detect_base()
-  local cands = {}
-  local ad = os.getenv("APPDATA")
-  if ad then cands[#cands + 1] = ad .. "\\Balatro\\Mods\\neuro-game\\" end
-  local sp = SMODS and SMODS.current_mod and SMODS.current_mod.path
-  if sp and sp ~= "" then
-    if not (sp:sub(-1) == "/" or sp:sub(-1) == "\\") then sp = sp .. "/" end
-    cands[#cands + 1] = sp
-  end
-  for _, b in ipairs(cands) do
-    local f = io.open(b .. "render/hud_overlay.lua", "rb")
-    if f then f:close(); return b end
-  end
-  return cands[1]
+local function _env_flag(name)
+  local v = os.getenv(name)
+  if not v then return nil end
+  v = tostring(v):lower()
+  if v == "1" or v == "on" or v == "true" or v == "yes" then return true end
+  if v == "0" or v == "off" or v == "false" or v == "no" then return false end
+  return nil
 end
-local _mod_base = _overlay_dev and _detect_base() or nil
--- hud_overlay requires hud_shared + render.panels.* at require time; clear them too or edits won't hot-reload.
-local _RELOAD_ORDER = {
-  "hud.cards", "hud.emotes", "hud.prims", "render.palette", "hud.showcase",
-  "hud.vouchers", "render.debug_stats", "hud.tuning_panel",
-  "render.hud_shared", "hud.rows", "hud.text_colors",
-  "render.panels.shop", "render.panels.pack", "render.panels.right_panel",
-  "render.panels.buy_toast", "render.panels.center_showcase",
-  "render.hud_overlay",
-}
-local _watch_files = {
-  "render/hud_overlay.lua", "hud/prims.lua", "render/palette.lua", "hud/vouchers.lua",
-  "hud/showcase.lua", "hud/cards.lua", "hud/emotes.lua", "render/debug_stats.lua", "hud/tuning_panel.lua",
-  "render/hud_shared.lua", "hud/rows.lua", "hud/text_colors.lua",
-  "render/panels/shop.lua", "render/panels/pack.lua", "render/panels/right_panel.lua",
-  "render/panels/buy_toast.lua", "render/panels/center_showcase.lua",
-}
-local function _read(relpath)
-  if not _mod_base then return nil end
-  local f = io.open(_mod_base .. relpath, "rb"); if not f then return nil end
-  local c = f:read("*a"); f:close(); return c
-end
-local function reload_overlay()
-  for _, m in ipairs(_RELOAD_ORDER) do package.loaded[m] = nil end
-  local ok, res = pcall(require, "render.hud_overlay")
-  if ok and type(res) == "table" and res.draw_indicator then
-    HUD = res
-    if TuningPanel then local ok2, tp = pcall(require, "hud.tuning_panel"); if ok2 then TuningPanel = tp end end
-    if DebugStats then local ok3, ds = pcall(require, "render.debug_stats"); if ok3 then DebugStats = ds end end
-    _reload_err = nil
-    print("[neuro-game] overlay reloaded")
+
+local _overlay_dev = _env_flag("NEURO_OVERLAY_DEV")
+if _overlay_dev == nil then _overlay_dev = require("core.config").bool("NEURO_OVERLAY_DEV") end
+local _overlay_isolate = false
+local _dev_autostart = false
+
+local HotReload = require("core.hot_reload")
+local _reload_ready = false
+
+local DevScenario = nil
+local function _load_dev_scenario()
+  if DevScenario then return DevScenario end
+  local ok, dev = pcall(require, "hud.dev_scenario")
+  if ok then
+    DevScenario = dev
   else
-    _reload_err = tostring(res)
-    print("[neuro-game] RELOAD FAILED (keeping last good): " .. _reload_err)
+    print("[neuro-game] dev harness failed to load: " .. tostring(dev))
+  end
+  return DevScenario
+end
+
+local function _warn_stale_copy()
+  local own = debug.getinfo(1, "S").source
+  own = own and own:gsub("^@", "") or nil
+  local declared = SMODS and SMODS.current_mod and SMODS.current_mod.path
+  if not (own and declared) then return end
+  local here = own:gsub("\\", "/"):lower():match("^(.*)/[^/]*$")
+  local there = declared:gsub("\\", "/"):lower():gsub("/+$", "")
+  if here and there ~= "" and here ~= there then
+    print("[neuro-game] WARNING: this chunk runs from " .. own .. " but SMODS registered "
+      .. declared .. " -- a stale copy is installed and require() may mix versions")
   end
 end
-local _watch, _watch_accum = {}, 0
+
 if _overlay_dev then
-  for _, rp in ipairs(_watch_files) do _watch[rp] = _read(rp) end
-  print("[neuro-game] OVERLAY DEV MODE on -- F5: demo scenes (click the bottom button bank), F7: isolate, F6: reload, auto-reload on save"
-    .. (_mod_base and ("  [watch: " .. _mod_base .. "]") or "  [watch path unresolved -> F6 only]"))
-end
-local function _poll_reload(dt)
-  _watch_accum = _watch_accum + (dt or 0)
-  if _watch_accum < 0.4 then return end
-  _watch_accum = 0
-  local dirty = false
-  for _, rp in ipairs(_watch_files) do
-    local c = _read(rp)
-    if c and c ~= _watch[rp] then _watch[rp] = c; dirty = true end
-  end
-  if dirty then reload_overlay() end
+  _reload_ready = HotReload.init()
+  _load_dev_scenario()
+  _dev_autostart = (_env_flag("NEURO_OVERLAY_DEV_AUTOSTART") == true) and DevScenario ~= nil
+  local iso = _env_flag("NEURO_OVERLAY_DEV_ISOLATE")
+  _overlay_isolate = (iso == nil) and _dev_autostart or (iso == true)
+  _warn_stale_copy()
+  print("[neuro-game] OVERLAY DEV on -- F5 harness, F6 reload, shift+F6 reload all, F7 isolate, auto-reload on save"
+    .. (_reload_ready and ("  [watch: " .. tostring(HotReload.base()) .. "]")
+      or "  [watch path unresolved -> reload disabled]"))
 end
 
 local original_love_load = love.load
@@ -145,22 +150,14 @@ end
 local original_love_update = love.update
 love.update = function(dt)
   Orchestrator.update(dt, original_love_update)
-  if _overlay_dev then pcall(_poll_reload, dt) end
+  if _overlay_dev and _reload_ready then pcall(HotReload.poll, dt) end
 end
 
 local original_love_draw = love.draw
 local _draw_error_last = nil
 local _draw_err_seen = {}
--- LOVE's matrix stack and scissor persist across frames; an uncaught throw leaks them and compounds into a black-out within ~1s.
-local function drain_gfx_leak()
-  pcall(love.graphics.setScissor)
-  for _ = 1, 16 do
-    if not pcall(love.graphics.pop) then break end
-  end
-  pcall(love.graphics.origin)
-  pcall(love.graphics.setColor, 1, 1, 1, 1)
-  pcall(love.graphics.setLineWidth, 1)
-end
+local drain_gfx_leak = GfxGuard.drain
+G.NEURO.drain_gfx_leak = drain_gfx_leak
 local function guarded_draw(label, fn)
   local ok, err = xpcall(fn, debug.traceback)
   if not ok then
@@ -186,12 +183,8 @@ love.draw = function()
 
   if original_love_draw then
     local base_ok, base_err = xpcall(original_love_draw, debug.traceback)
-    -- drains pushes leaked by the base render or a swallowed Card:draw error (hud/cards.lua); no-op on a balanced stack
-    for _ = 1, 16 do
-      if not pcall(love.graphics.pop) then break end
-    end
-    pcall(love.graphics.setScissor)
     if not base_ok then
+      drain_gfx_leak()
       local e = tostring(base_err)
       if e ~= _draw_error_last then
         print("[neuro-game] DRAW ERROR (base game draw): " .. e)
@@ -200,11 +193,22 @@ love.draw = function()
     end
   end
   trace("TRACE: original_love_draw done")
+  local overlay_state_saved = pcall(love.graphics.push, "all")
 
-  if _overlay_dev then pcall(DevScenario.apply) end
+  if _dev_autostart and DevScenario and not DevScenario.active then
+    _dev_autostart = false
+    guarded_draw("dev autostart", function() DevScenario.set(true) end)
+    print("[neuro-game] dev harness auto-started (F5 toggles it off)")
+  end
+
+  local dev_mounted = false
+  if _overlay_dev and DevScenario and DevScenario.active then
+    dev_mounted = true
+    guarded_draw("dev mount", DevScenario.mount)
+  end
 
   if _overlay_dev and _overlay_isolate then
-    pcall(function()
+    guarded_draw("dev isolate", function()
       local sw, sh = love.graphics.getWidth(), love.graphics.getHeight()
       love.graphics.setColor(0.92, 0.92, 0.94, 1)
       love.graphics.rectangle("fill", 0, 0, sw, sh)
@@ -227,83 +231,141 @@ love.draw = function()
   if StagingDebug then guarded_draw("staging debug", StagingDebug.draw) end
   if TuningPanel then guarded_draw("tuning panel", TuningPanel.draw) end
 
-  if _overlay_dev then guarded_draw("dev buttons", DevScenario.draw_buttons) end
+  if CardDex and CardDex.active then guarded_draw("card dex", CardDex.draw) end
 
-  if _overlay_dev and _reload_err then
-    pcall(function()
-      local sw = love.graphics.getWidth()
-      love.graphics.setColor(0, 0, 0, 0.72)
-      love.graphics.rectangle("fill", 8, 8, sw - 16, 44)
-      love.graphics.setColor(1, 0.42, 0.42, 1)
-      love.graphics.print("RELOAD ERROR (showing last good build):", 14, 14)
-      love.graphics.print(_reload_err, 14, 30)
-    end)
+  if dev_mounted then guarded_draw("dev unmount", DevScenario.unmount) end
+  if _overlay_dev and DevScenario then guarded_draw("dev buttons", DevScenario.draw_buttons) end
+
+  guarded_draw("selftest banner", SelfTest.draw_banner)
+
+  if _overlay_dev then
+    local rl = HotReload.status()
+    if rl.err then
+      guarded_draw("dev reload banner", function()
+        local sw = love.graphics.getWidth()
+        local msg = tostring(rl.err)
+        love.graphics.setColor(0, 0, 0, 0.78)
+        love.graphics.rectangle("fill", 8, 8, sw - 16, 44)
+        love.graphics.setColor(1, 0.42, 0.42, 1)
+        love.graphics.print("RELOAD ERROR (showing last good build):", 14, 14)
+        love.graphics.printf(msg, 14, 30, sw - 36, "left")
+      end)
+    elseif #rl.ark_order > 0 then
+      guarded_draw("dev restart banner", function()
+        local sw = love.graphics.getWidth()
+        love.graphics.setColor(0, 0, 0, 0.78)
+        love.graphics.rectangle("fill", 8, 8, sw - 16, 26)
+        love.graphics.setColor(1, 0.82, 0.35, 1)
+        love.graphics.print("RESTART NEEDED -- edited outside the reloadable set: "
+          .. table.concat(rl.ark_order, ", "), 14, 14)
+      end)
+    end
   end
 
-  pcall(function()
-    love.graphics.setScissor()
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setShader()
-    love.graphics.setBlendMode("alpha")
-    love.graphics.setLineWidth(1)
-  end)
+  if overlay_state_saved then
+    pcall(love.graphics.pop)
+  else
+    pcall(function()
+      love.graphics.setScissor()
+      love.graphics.setColor(1, 1, 1, 1)
+      love.graphics.setShader()
+      love.graphics.setBlendMode("alpha")
+      love.graphics.setLineWidth(1)
+    end)
+  end
   trace("TRACE: love.draw frame complete")
+end
+
+local function finish_input_hook(label, ok, ...)
+  if not ok then
+    print("[neuro-game] " .. label .. " ERROR: " .. tostring((...)))
+    return nil
+  end
+  return ...
 end
 
 local original_love_mousepressed = love.mousepressed
 love.mousepressed = function(x, y, button, istouch, presses)
   if G and G.NEURO and G.NEURO.login_anim then return end
-  -- no retry on error: handler may have applied a side effect, re-running would duplicate the click
-  local ok, err = pcall(function()
-    if _overlay_dev and DevScenario.mousepressed(x, y, button) then return end
-    if TuningPanel and TuningPanel.is_open() and TuningPanel.mousepressed(x, y, button) then return end
+  return finish_input_hook("MOUSE", pcall(function()
+    if CardDex and CardDex.active and CardDex.mousepressed(x, y, button) then return true end
+    if _overlay_dev and DevScenario and DevScenario.mousepressed(x, y, button) then return true end
+    if TuningPanel and TuningPanel.is_open() and TuningPanel.mousepressed(x, y, button) then return true end
     if original_love_mousepressed then
       return original_love_mousepressed(x, y, button, istouch, presses)
     end
-  end)
-  if not ok then
-    print("[neuro-game] MOUSE ERROR: " .. tostring(err))
-  end
+  end))
+end
+
+local original_love_mousemoved = love.mousemoved
+love.mousemoved = function(x, y, dx, dy, istouch)
+  return finish_input_hook("MOUSE MOVE", pcall(function()
+    if TuningPanel and TuningPanel.is_open() and TuningPanel.mousemoved(x, y, dx, dy) then return true end
+    if original_love_mousemoved then return original_love_mousemoved(x, y, dx, dy, istouch) end
+  end))
+end
+
+local original_love_mousereleased = love.mousereleased
+love.mousereleased = function(x, y, button, istouch, presses)
+  if G and G.NEURO and G.NEURO.login_anim then return end
+  return finish_input_hook("MOUSE RELEASE", pcall(function()
+    if TuningPanel and TuningPanel.is_open() and TuningPanel.mousereleased(x, y, button) then return true end
+    if original_love_mousereleased then return original_love_mousereleased(x, y, button, istouch, presses) end
+  end))
 end
 
 local original_love_wheelmoved = love.wheelmoved
 love.wheelmoved = function(wx, wy)
   if G and G.NEURO and G.NEURO.login_anim then return end
-  local ok, err = pcall(function()
-    if TuningPanel and TuningPanel.is_open() and TuningPanel.wheelmoved(wx, wy) then return end
+  return finish_input_hook("WHEEL", pcall(function()
+    if CardDex and CardDex.active and CardDex.wheelmoved(wx, wy) then return true end
+    if TuningPanel and TuningPanel.is_open() and TuningPanel.wheelmoved(wx, wy) then return true end
     if original_love_wheelmoved then
       return original_love_wheelmoved(wx, wy)
     end
-  end)
-  if not ok then
-    print("[neuro-game] WHEEL ERROR: " .. tostring(err))
-  end
+  end))
 end
 
 local original_love_keypressed = love.keypressed
 love.keypressed = function(key, scancode, isrepeat)
   if G and G.NEURO and G.NEURO.login_anim then return end
-  local ok, err = pcall(function()
-    if _overlay_dev and key == "f7" then _overlay_isolate = not _overlay_isolate; return end
-    if _overlay_dev and key == "f6" then reload_overlay(); return end
+  return finish_input_hook("KEY", pcall(function()
+    if CardDex and CardDex.active and CardDex.keypressed(key) then return true end
+    if key == "f4" then
+      local dex = _get_card_dex()
+      dex.toggle()
+      print("[neuro-game] card dex: " .. (dex.active and "ON (E edition, S size, F filter, R report)" or "off"))
+      return true
+    end
+    if _overlay_dev and key == "f7" then
+      _overlay_isolate = not _overlay_isolate
+      print("[neuro-game] overlay isolate: " .. (_overlay_isolate and "ON" or "off"))
+      return true
+    end
+    if _overlay_dev and key == "f6" then
+      local shift = love.keyboard and love.keyboard.isDown
+        and (love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift"))
+      HotReload.reload(shift and true or false)
+      return true
+    end
     if _overlay_dev and key == "f5" then
-      DevScenario.toggle()
-      print("[neuro-game] demo scenario: " .. (DevScenario.active and "ON (click the bottom button bank)" or "off"))
-      return
+      local dev = _load_dev_scenario()
+      if dev then
+        dev.toggle()
+        print("[neuro-game] dev harness: " .. (dev.active and "ON (bank at the bottom of the screen)" or "off"))
+      end
+      return true
     end
     if key == "f8" then
       _get_tuning().toggle()
-      return
+      return true
     end
-    if TuningPanel and TuningPanel.is_open() and TuningPanel.keypressed(key) then return end
-    if key == "f10" and _NEURO_DEBUG then require("tests.test_deadlock").run() end
+    if TuningPanel and TuningPanel.is_open() and TuningPanel.keypressed(key) then return true end
+    if key == "f10" and _NEURO_DEBUG() then require("tests.test_deadlock").run() end
     if key == "f9" then _get_debug().toggle() end
     if key == "f11" then _get_debug().cycle_page(1) end
     if original_love_keypressed then
       return original_love_keypressed(key, scancode, isrepeat)
     end
-  end)
-  if not ok then
-    print("[neuro-game] KEY ERROR: " .. tostring(err))
-  end
+  end))
 end

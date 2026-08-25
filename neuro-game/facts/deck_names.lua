@@ -1,6 +1,5 @@
--- pure fact extractors kept in facts/ so facts/deck_facts can require them without a facts->force cycle
 local function get_back_display_name(b)
-  if not b then return "Unknown Deck" end   -- exported; a nil deck-back ref must not crash at b.key
+  if not b then return "Unknown Deck" end
   if b.key and localize then
     local ok, loc = pcall(localize, {type = 'name_text', set = 'Back', key = b.key})
     if ok and type(loc) == "string" and loc ~= "" and loc ~= "ERROR" then

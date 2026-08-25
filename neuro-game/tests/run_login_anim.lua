@@ -1,4 +1,3 @@
-package.path = "./?.lua;;" .. package.path
 
 local FONT = {
   getWidth = function(_, s) return #tostring(s or "") * 8 end,

@@ -1,9 +1,10 @@
 local CardUtil = require("facts.card_util")
-local CtxEconomy = require("context.ctx_economy")
+local CtxEconomy = require("facts.economy_facts")
 local HandFacts = require("facts.hand_facts")
 local SelfTest = require("core.selftest")
 local Cards = require("hud.cards")
-local mock_UIBox = require("facts.card_area_util").mock_UIBox
+local ActionResult = require("core.action_result")
+local mock_UIBox = require("core.game_actions").mock_UIBox
 
 local M = {}
 local ENG = _G
@@ -15,12 +16,42 @@ local function settled()
   return true
 end
 
-local function run_action(name, data)
+local function dispatch_once(name, data)
   local h = require("core.dispatcher").get_action_handler(name)
   if not h then return nil, "no handler registered for " .. tostring(name) end
   local exec, err = h(data or {})
   if not exec then return nil, err end
   return exec()
+end
+
+local function needs_confirmation(err)
+  return type(err) == "table" and err.__action_error == true
+    and err.reason_code == "CONFIRMATION_REQUIRED"
+end
+
+local function confirm_retry(dispatch, name, data)
+  local res, err = dispatch(name, data)
+  if not needs_confirmation(err) then return res, err end
+  return dispatch(name, data)
+end
+
+local function run_action(name, data)
+  return confirm_retry(dispatch_once, name, data)
+end
+
+local function rejection(err, code, needle)
+  if not ActionResult.is_error(err) then
+    return false, "expected a typed action error, got: " .. tostring(err)
+  end
+  if err.reason_code ~= code then
+    return false, string.format("expected reason_code %s, got %s: %s",
+      tostring(code), tostring(err.reason_code), tostring(err.message))
+  end
+  if needle and not tostring(err.message):lower():find(tostring(needle):lower(), 1, true) then
+    return false, string.format("%s message must state '%s', got: %s",
+      tostring(code), tostring(needle), tostring(err.message))
+  end
+  return true, string.format("%s -- %s", tostring(err.reason_code), tostring(err.message))
 end
 
 local function gfunc(name)
@@ -49,6 +80,27 @@ local function clear_area(area)
     local c = area.cards[i]
     if c then c:remove() end
   end
+end
+
+local SHOP_AREA_KEYS = { "shop_jokers", "shop_booster", "shop_vouchers" }
+
+local function state_label(v)
+  for name, id in pairs((G and G.STATES) or {}) do
+    if id == v then return name end
+  end
+  return tostring(v)
+end
+
+local function require_shop_areas()
+  local missing = {}
+  for _, k in ipairs(SHOP_AREA_KEYS) do
+    local area = G and G[k]
+    if not (area and area.cards) then missing[#missing + 1] = "G." .. k end
+  end
+  if #missing == 0 then return end
+  error(string.format(
+    "precondition failed: %s nil at state=%s -- the shop UI was never built, so this case cannot exercise anything; scaffold case shop/cash_out_reaches_shop must pass first",
+    table.concat(missing, ", "), state_label(G and G.STATE)), 0)
 end
 
 local function spawn_consumable(key)
@@ -189,33 +241,9 @@ local function score_delta_case(name, specs, indices, opts)
   }
 end
 
--- every info action must return a non-empty string and never error; the AI reads these each turn
-local function info_smoke_case(action_name)
-  local needs_sel = action_name == "simulate_hand"
-    or action_name == "get_poker_hand_information" or action_name == "scoring_explanation"
-  return {
-    name = "info/" .. action_name, timeout_s = 8,
-    setup = function()
-      if G.STATE == G.STATES.SELECTING_HAND then set_hand({ "H_5", "S_5", "D_2", "C_9", "H_K" }) end
-    end,
-    act = function(ctx)
-      ctx.res, ctx.err = run_action(action_name, needs_sel and { indices = { 1, 2 } } or {})
-    end,
-    wait_for = function() return true end,
-    assert = function(ctx)
-      if ctx.err then return false, action_name .. " refused: " .. tostring(ctx.err) end
-      return type(ctx.res) == "string" and ctx.res ~= "",
-        string.format("%s -> %s len %s", action_name, type(ctx.res),
-          type(ctx.res) == "string" and #ctx.res or "n/a")
-    end,
-  }
-end
-
 local baseline_hands
 function M.reset()
-  pcall(function()
     if not (G and G.GAME) then return end
-    -- a case that runs out of hands lands on GAME_OVER; recover to a fresh run so later cases don't run against the end screen
     if G.STATES and G.STATE == G.STATES.GAME_OVER then
       if G.FUNCS and G.FUNCS.go_to_menu then pcall(G.FUNCS.go_to_menu) end
       if G.FUNCS and G.FUNCS.start_run then
@@ -238,7 +266,6 @@ function M.reset()
     money(50)
     clear_area(G.consumeables)
     clear_area(G.jokers)
-    -- sandbox never reshuffles, so plays drain the draw pile; refill or a full-hand play never settles (timeout)
     if G.deck and G.deck.cards and #G.deck.cards < 15 and ENG.create_playing_card and G.P_CARDS and G.P_CENTERS then
       for _ = 1, 20 do
         pcall(function()
@@ -252,7 +279,6 @@ function M.reset()
       G.GAME.current_round.discards_left = 4
       if G.GAME.blind then G.GAME.blind.chips = 1e13 end
     end
-  end)
 end
 
 local function planet_case(center)
@@ -467,7 +493,13 @@ SPECIAL.c_death = function(_center)
       ctx.hand = set_hand({ "H_5", "S_9" })
       ctx.card = spawn_consumable("c_death")
     end,
-    act = function(ctx) use_owned(ctx, { 1, 2 }) end,
+    act = function(ctx)
+      local idx = index_of(G.consumeables, ctx.card) or 1
+      local name = require("util.utils").safe_name_or(ctx.card)
+      local _, err = run_action("use_directional_card",
+        { area = "consumeables", index = idx, name = name, left_index = 1, right_index = 2 })
+      if err then error(err) end
+    end,
     wait_for = function() return #G.consumeables.cards == 0 and settled() end,
     assert = function(ctx)
       local left = ctx.hand[1]
@@ -906,6 +938,7 @@ local function voucher_case(center)
   return {
     name = "voucher/" .. key, timeout_s = 25,
     setup = function(ctx)
+      require_shop_areas()
       ctx.card = SMODS.add_voucher_to_shop(key)
       money((tonumber(ctx.card.cost) or 10) + 30)
       ctx.cost = tonumber(ctx.card.cost) or 0
@@ -946,9 +979,18 @@ end
 
 local function booster_cases(center, add)
   local key = center.key
+  local opened = false
+  local function require_open_pack(what)
+    if opened then return end
+    error(string.format(
+      "precondition failed: booster/%s/buy never opened a pack, so there is nothing to %s -- fix that case first",
+      key, what), 0)
+  end
   add({
     name = "booster/" .. key .. "/buy", timeout_s = 25,
     setup = function(ctx)
+      require_shop_areas()
+      opened = false
       money(60)
       ctx.card = SMODS.add_booster_to_shop(key)
       ctx.cost = tonumber(ctx.card.cost) or 0
@@ -966,6 +1008,7 @@ local function booster_cases(center, add)
       return G.STATE ~= G.STATES.SHOP and G.pack_cards and #G.pack_cards.cards >= ctx.size and settled()
     end,
     assert = function(ctx)
+      opened = true
       local n = G.pack_cards and #G.pack_cards.cards or 0
       if n ~= ctx.size then
         return false, string.format("pack size: expected %d, got %d", ctx.size, n)
@@ -982,6 +1025,7 @@ local function booster_cases(center, add)
   add({
     name = "booster/" .. key .. "/pick", timeout_s = 25,
     setup = function(ctx)
+      require_open_pack("pick from")
       local bp = G.pack_cards
       ctx.open = bp and #bp.cards > 0 and G.STATE ~= G.STATES.SHOP
       if not ctx.open then return end
@@ -1020,10 +1064,10 @@ local function booster_cases(center, add)
         string.format("picked; expected %d pick(s) left, got %s", ctx.pre_choices - 1, tostring(left))
     end,
   })
-  -- exercises the deferred pack-pick + mock_UIBox lifecycle that /pick (no-target only) never touches; a stall trips the timeout
   add({
     name = "booster/" .. key .. "/pick_hand_target", timeout_s = 25,
     setup = function(ctx)
+      require_open_pack("pick from")
       local bp = G.pack_cards
       ctx.open = bp and #bp.cards > 0 and G.STATE ~= G.STATES.SHOP
       if not ctx.open then return end
@@ -1062,8 +1106,11 @@ local function booster_cases(center, add)
   })
   add({
     name = "booster/" .. key .. "/skip", timeout_s = 20,
-    act = function(ctx)
+    setup = function(ctx)
+      require_open_pack("skip")
       ctx.was_open = not not (G.booster_pack or (G.pack_cards and G.STATE ~= G.STATES.SHOP))
+    end,
+    act = function(ctx)
       if ctx.was_open then gfunc("skip_booster") end
     end,
     wait_for = function()
@@ -1084,17 +1131,91 @@ function M.build()
   local covered = {}
 
   add({
+    name = "dynamic_joker/current_value_delivered", timeout_s = 20,
+    setup = function(ctx)
+      clear_area(G.jokers)
+      money(20) -- Bull: +$2 Chips per $1 held -> current +40 Chips (computed from state, not in ability)
+      ctx.specs = {
+        { key = "j_bull",          want = "40",  label = "Bull @ $20" },
+        { key = "j_green_joker",   want = "7",   label = "GreenJoker mult=7",
+          set = function(c) c.ability.mult = 7 end },
+        { key = "j_vampire",       want = "1.8", label = "Vampire xMult=1.8",
+          set = function(c) c.ability.x_mult = 1.8 end },
+        { key = "j_ride_the_bus",  want = "5",   label = "RideBus mult=5",
+          set = function(c) c.ability.mult = 5 end },
+      }
+      ctx.jokers = {}
+      for _, s in ipairs(ctx.specs) do
+        local c = spawn_joker(s.key)
+        if c and s.set then pcall(s.set, c) end
+        ctx.jokers[s.key] = c
+      end
+    end,
+    act = function() end,
+    wait_for = function() return settled() end,
+    assert = function(ctx)
+      local SR = require("core.semantic_registry")
+      local out, ok_all, misses = {}, true, {}
+      for _, s in ipairs(ctx.specs) do
+        local card = ctx.jokers[s.key]
+        local text = card and tostring(SR.render("owned_joker_row", card) or "") or "<no card>"
+        out[#out + 1] = s.label .. "=>[" .. text .. "]"
+        if s.want and not text:find(s.want, 1, true) then
+          ok_all = false; misses[#misses + 1] = s.label .. " missing '" .. s.want .. "'"
+        end
+      end
+      local detail = table.concat(out, " || ")
+      if not ok_all then detail = "MISS: " .. table.concat(misses, "; ") .. " || " .. detail end
+      return ok_all, detail
+    end,
+  })
+
+  add({
+    name = "edition_labeling/foil_joker_not_fused", timeout_s = 20,
+    setup = function(ctx)
+      clear_area(G.jokers)
+      ctx.card = spawn_joker("j_joker")
+      if ctx.card and ctx.card.set_edition then
+        pcall(function() ctx.card:set_edition("e_foil", true, true) end)
+      end
+    end,
+    act = function() end,
+    wait_for = function() return settled() end,
+    assert = function(ctx)
+      local SR = require("core.semantic_registry")
+      local CtxHelpers = require("context.ctx_helpers")
+      local card = ctx.card
+      if not card then return false, "no joker spawned" end
+      if not (card.edition and card.edition.foil) then
+        return false, "joker is not Foil (edition=" .. tostring(card.edition and card.edition.key) .. ")"
+      end
+      local owned = tostring(SR.render("owned_joker_row", card) or "")
+      local shop  = tostring(SR.render("shop_card_row", card) or "")
+      local flags = tostring(CtxHelpers.joker_tags(card) or "")
+      local probs = {}
+      if not owned:find("4", 1, true) then probs[#probs + 1] = "owned missing own mult" end
+      if owned:find("+50", 1, true) or owned:find("50 Chips", 1, true) then
+        probs[#probs + 1] = "owned FUSED the foil +50 Chips into the effect"
+      end
+      if not flags:find("Foil", 1, true) then probs[#probs + 1] = "flags missing the Foil token" end
+      if not shop:find("Foil", 1, true) then probs[#probs + 1] = "shop missing the Foil token" end
+      local detail = "owned=[" .. owned .. "] shop=[" .. shop .. "] flg=[" .. flags .. "]"
+      if #probs > 0 then return false, table.concat(probs, "; ") .. " || " .. detail end
+      return true, detail
+    end,
+  })
+
+  add({
     name = "gameover/stale_force_cleared", timeout_s = 10,
     setup = function(ctx)
       ctx.saved = {
         inflight = G.NEURO.force_inflight, state = G.NEURO.force_state,
-        names = G.NEURO.force_action_names, set = G.NEURO.force_action_set,
-        sent_at = G.NEURO.force_sent_at,
+        sent_at = G.NEURO.force_sent_at, window = G.NEURO.force_window,
       }
-      G.NEURO.force_inflight = true
-      G.NEURO.force_state = "GAME_OVER"
-      G.NEURO.force_action_names = { "cash_out" }
-      G.NEURO.force_sent_at = require("util.utils").now()
+      G.NEURO.force_inflight = false
+      G.NEURO.force_window = nil
+      require("core.force_state").arm("GAME_OVER", { "cash_out" }, { cash_out = true },
+        require("util.utils").now())
     end,
     act = function() end,
     wait_for = function() return not G.NEURO.force_inflight end,
@@ -1106,9 +1227,8 @@ function M.build()
       local s = ctx.saved or {}
       G.NEURO.force_inflight = s.inflight
       G.NEURO.force_state = s.state
-      G.NEURO.force_action_names = s.names
-      G.NEURO.force_action_set = s.set
       G.NEURO.force_sent_at = s.sent_at
+      G.NEURO.force_window = s.window
     end,
   })
 
@@ -1117,13 +1237,14 @@ function M.build()
     setup = function(ctx)
       ctx.saved = {
         inflight = G.NEURO.force_inflight, state = G.NEURO.force_state,
-        names = G.NEURO.force_action_names, set = G.NEURO.force_action_set,
-        sent_at = G.NEURO.force_sent_at,
+        sent_at = G.NEURO.force_sent_at, window = G.NEURO.force_window,
       }
       G.NEURO.force_inflight = true
       G.NEURO.force_state = "MENU"
-      G.NEURO.force_action_set = { setup_run = true }
-      G.NEURO.force_action_names = { "setup_run" }
+      G.NEURO.force_inflight = false
+      G.NEURO.force_window = nil
+      require("core.force_state").arm(G.NEURO.force_state or "MENU", { "setup_run" },
+        { setup_run = true }, require("util.utils").now())
       G.NEURO.force_sent_at = require("util.utils").now()
       ctx.enf = require("core.enforce")
       ctx.saved_pre = ctx.enf.pre_action
@@ -1143,9 +1264,8 @@ function M.build()
       local s = ctx.saved or {}
       G.NEURO.force_inflight = s.inflight
       G.NEURO.force_state = s.state
-      G.NEURO.force_action_names = s.names
-      G.NEURO.force_action_set = s.set
       G.NEURO.force_sent_at = s.sent_at
+      G.NEURO.force_window = s.window
     end,
   })
 
@@ -1194,7 +1314,6 @@ function M.build()
           local out = Filtered.sanitize(bad)
           local masked = out:find("%*", 1, true) ~= nil or not out:lower():find(string.char(102, 117, 99, 107), 1, true)
           if not masked then return false, "profanity not masked: " .. tostring(out) end
-          -- seed is the AI's only free public text input, so paste_seed must reject a fully-profane seed
           local ok_sr, SeedRun = pcall(require, "handlers.seed_run_handlers")
           if ok_sr and SeedRun.handle_paste_seed then
             local exec, err = SeedRun.handle_paste_seed({ seed = string.char(102, 117, 99, 107) })
@@ -1275,17 +1394,48 @@ function M.build()
     assert = function()
       local ok_df, DF = pcall(require, "facts.debuff_facts")
       if not (ok_df and DF.blind_effect_text) then return false, "debuff_facts unavailable" end
-      local bad, n = {}, 0
+      local ok_m, Model = pcall(require, "facts.boss.model")
+      local ok_r, Render = pcall(require, "facts.boss.render")
+      if not (ok_m and ok_r) then return false, "boss package unavailable" end
+      local bad, n, curated = {}, 0, 0
       for key, def in pairs(G.P_BLINDS or {}) do
         if type(def) == "table" and def.boss then
           n = n + 1
-          local txt = DF.blind_effect_text(key, def)
-          if not (type(txt) == "string" and txt ~= "") then bad[#bad + 1] = tostring(key) end
+          local rec = Model.RECORDS[key]
+          local sel
+          if rec then
+            curated = curated + 1
+            sel = Render.render("select", key, { blind = def })
+            if not (type(sel) == "string" and sel ~= "") then bad[#bad + 1] = tostring(key) .. ":no-render" end
+          else
+            local txt = DF.blind_effect_text(key, def)
+            if not (type(txt) == "string" and txt ~= "") then bad[#bad + 1] = tostring(key) .. ":no-fallback-text" end
+          end
+          local d = type(def.debuff) == "table" and def.debuff or {}
+          if rec and sel then
+            if d.suit and not sel:find(tostring(d.suit), 1, true) then
+              bad[#bad + 1] = tostring(key) .. ":record-disagrees-on-suit-" .. tostring(d.suit)
+            end
+            if d.is_face and not sel:find("face card", 1, true) then
+              bad[#bad + 1] = tostring(key) .. ":record-disagrees-on-is_face"
+            end
+            local ge = tonumber(d.h_size_ge)
+            if ge and ge > 0 then
+              if not rec.affordance then bad[#bad + 1] = tostring(key) .. ":h_size_ge-without-affordance" end
+              if not sel:find(tostring(ge), 1, true) and not (ge == 5 and sel:find("5", 1, true)) then
+                bad[#bad + 1] = tostring(key) .. ":record-disagrees-on-h_size_ge"
+              end
+            end
+          end
+          if rec and rec.since and type(def.boss) == "table" and tonumber(def.boss.min)
+            and rec.since ~= tonumber(def.boss.min) and not key:find("^bl_final") then
+            bad[#bad + 1] = tostring(key) .. ":since-" .. tostring(rec.since) .. "-vs-min-" .. tostring(def.boss.min)
+          end
         end
       end
       if n == 0 then return false, "no boss blinds enumerated" end
-      if #bad > 0 then return false, string.format("%d/%d bosses lack effect text: %s", #bad, n, table.concat(bad, ", ")) end
-      return true, string.format("%d boss blinds have effect text", n)
+      if #bad > 0 then return false, string.format("%d/%d bosses disagree with game data: %s", #bad, n, table.concat(bad, ", ")) end
+      return true, string.format("%d boss blinds have context (%d curated, %d raw-fallback)", n, curated, n - curated)
     end,
   })
   add({
@@ -1309,9 +1459,10 @@ function M.build()
     name = "meta/all_mods_have_context", timeout_s = 8,
     setup = function() end, act = function() end, wait_for = function() return true end,
     assert = function()
-      local bad = {}
+      local bad, n_centers, n_seals = {}, 0, 0
       for key, center in pairs(G.P_CENTERS or {}) do
         if type(center) == "table" and key ~= "" then
+          n_centers = n_centers + 1
           if center.set == "Enhanced" and not CardUtil.ENHANCEMENTS[key] then
             bad[#bad + 1] = "enh:" .. tostring(key)
           elseif center.set == "Edition" then
@@ -1322,10 +1473,13 @@ function M.build()
         end
       end
       for key, _ in pairs(G.P_SEALS or {}) do
+        n_seals = n_seals + 1
         if not CardUtil.SEALS[key] then bad[#bad + 1] = "seal:" .. tostring(key) end
       end
+      if n_centers == 0 then return false, "no centers enumerated" end
+      if n_seals == 0 then return false, "no seals enumerated" end
       if #bad > 0 then return false, "missing fact entry: " .. table.concat(bad, ", ") end
-      return true, "enhancements/editions/seals all have fact entries"
+      return true, string.format("%d centers and %d seals all have fact entries", n_centers, n_seals)
     end,
   })
   add({
@@ -1393,16 +1547,15 @@ function M.build()
       end
       local norm_cases = {
         { "abcd1234", "ABCD1234" },
-        { "hello-world-123", "HELLOWOR" }, -- strip separators + truncate to 8
         { "xy", "XY" },
       }
       for _, c in ipairs(norm_cases) do
         local got = norm(c[1])
         if got ~= c[2] then return false, string.format("norm(%q)=%s expected %s", c[1], tostring(got), c[2]) end
       end
-      -- leetspeak profanity in a seed must still be rejected (strict filter)
+      if norm("hello-world-123") ~= nil then return false, "overlong seed was accepted" end
       if norm(string.char(53, 104, 49, 116)) ~= nil then return false, "leet profanity seed was accepted" end
-      return true, "seed upper/strip/truncate correct; leet profanity rejected"
+      return true, "seed upper/strip correct; overlong and profanity rejected"
     end,
   })
   add({
@@ -1432,16 +1585,51 @@ function M.build()
     "TAROT_PACK", "PLANET_PACK", "SPECTRAL_PACK", "STANDARD_PACK", "BUFFOON_PACK", "SMODS_BOOSTER_OPENED",
   }
   add({
-    name = "policy/info_actions_excluded_from_avail", timeout_s = 6,
+    name = "registry/dynamic_joker_keys_exist", timeout_s = 6,
     setup = function() end, act = function() end, wait_for = function() return true end,
     assert = function()
-      local A = require("core.actions")
-      for _, st in ipairs(ALL_STATES) do
-        for _, name in ipairs(A.get_available_actions_for_state(st) or {}) do
-          if A.INFO_ACTIONS[name] then return false, st .. " AVAIL leaks info action " .. name end
+      if not (G and G.P_CENTERS) then return true, "no P_CENTERS, skipped" end
+      local DJ = require("facts.dynamic_jokers")
+      local bad = {}
+      for _, tbl in ipairs({ "ROWS" }) do
+        if type(DJ[tbl]) ~= "table" then
+          return false, "dynamic_jokers has no table " .. tbl .. " to check"
+        end
+        for key in pairs(DJ[tbl]) do
+          if not G.P_CENTERS[key] then bad[#bad + 1] = tbl .. ":" .. tostring(key) end
         end
       end
-      return true, "AVAIL excludes all info actions in every state"
+      table.sort(bad)
+      if #bad > 0 then return false, "dynamic_jokers keys not in P_CENTERS: " .. table.concat(bad, ", ") end
+      return true, "every dynamic_jokers key resolves to a real center"
+    end,
+  })
+  add({
+    name = "registry/voucher_chains_match_game", timeout_s = 6,
+    setup = function() end, act = function() end, wait_for = function() return true end,
+    assert = function()
+      if not (G and G.P_CENTERS) then return true, "no P_CENTERS, skipped" end
+      local FH = require("facts.fact_hints")
+      local chains = FH.VOUCHER_CHAINS
+      if type(chains) ~= "table" or #chains == 0 then
+        return false, "fact_hints exposes no VOUCHER_CHAINS to check"
+      end
+      local bad = {}
+      for _, pair in ipairs(chains) do
+        local up = G.P_CENTERS[pair.upgrade]
+        local base = G.P_CENTERS[pair.base]
+        if not up then bad[#bad + 1] = pair.upgrade .. ": no such center"
+        elseif not base then bad[#bad + 1] = pair.base .. ": no such center"
+        else
+          local req = up.requires and up.requires[1]
+          if req ~= pair.base then
+            bad[#bad + 1] = pair.upgrade .. " requires " .. tostring(req) .. ", table says " .. pair.base
+          end
+        end
+      end
+      table.sort(bad)
+      if #bad > 0 then return false, "voucher chain mismatch: " .. table.concat(bad, "; ") end
+      return true, #chains .. " voucher chains match the game's requires data"
     end,
   })
   add({
@@ -1458,7 +1646,7 @@ function M.build()
         { "SELECTING_HAND", "play_hand", true }, { "SELECTING_HAND", "buy_from_shop", false },
         { "BLIND_SELECT", "select_blind", true }, { "BLIND_SELECT", "skip_blind", true },
         { "ROUND_EVAL", "cash_out", true }, { "ROUND_EVAL", "buy_from_shop", false },
-        { "SELECTING_HAND", "exit_overlay_menu", true }, -- universal
+        { "SELECTING_HAND", "exit_overlay_menu", true },
       }
       for _, c in ipairs(checks) do
         if has(c[1], c[2]) ~= c[3] then
@@ -1500,30 +1688,39 @@ function M.build()
       for _, st in ipairs(ALL_STATES) do
         for _, name in ipairs(A.get_action_names_for_state(st) or {}) do offered[name] = true end
       end
-      -- actions with a schema that are never offered via a static state list (reachable only via force/menu screen)
       local KNOWN_OFFSCREEN = {}
+      local statics = A.get_static_actions()
+      if type(statics) ~= "table" or #statics == 0 then
+        return false, "no static actions to check for reachability"
+      end
       local bad = {}
-      for _, def in ipairs(A.get_static_actions() or {}) do
+      for _, def in ipairs(statics) do
         if not offered[def.name] and not KNOWN_OFFSCREEN[def.name] then bad[#bad + 1] = def.name end
       end
       if #bad > 0 then return false, "unexpected unreachable (dead) actions: " .. table.concat(bad, ", ") end
-      return true, "no unexpected dead actions"
+      return true, string.format("no unexpected dead actions across %d static actions", #statics)
     end,
   })
   add({
-    name = "policy/non_progress_contains_all_info", timeout_s = 6,
+    name = "policy/non_progress_excludes_progress", timeout_s = 6,
     setup = function() end, act = function() end, wait_for = function() return true end,
     assert = function()
-      local A = require("core.actions")
       local D = require("core.dispatcher")
       local np = D.NON_PROGRESS_FORCE_ACTIONS or {}
-      for name in pairs(A.INFO_ACTIONS) do
-        if not np[name] then return false, "NON_PROGRESS missing info action " .. name end
+      local EXPECTED = { "set_joker_order", "set_joker_intents", "set_plan", "copy_seed",
+        "change_selected_back", "change_stake", "toggle_seeded_run", "paste_seed" }
+      local expected_set = {}
+      for _, n in ipairs(EXPECTED) do
+        expected_set[n] = true
+        if not np[n] then return false, "NON_PROGRESS missing " .. n end
+      end
+      for name in pairs(np) do
+        if not expected_set[name] then return false, "NON_PROGRESS holds unexpected " .. name end
       end
       for _, p in ipairs({ "buy_from_shop", "select_blind", "play_hand", "discard_hand", "cash_out" }) do
         if np[p] then return false, p .. " wrongly marked non-progress" end
       end
-      return true, "NON_PROGRESS = info + non-advancing, excludes progress actions"
+      return true, string.format("NON_PROGRESS is exactly the %d non-advancing actions", #EXPECTED)
     end,
   })
   add({
@@ -1536,11 +1733,11 @@ function M.build()
       for _, n in ipairs({ "buy_from_shop", "play_hand", "discard_hand", "select_blind", "use_card", "sell_card", "cash_out" }) do
         if not ss(n) then return false, n .. " should stage but did not" end
       end
-      for _, n in ipairs({ "help", "quick_status", "simulate_hand" }) do
-        if ss(n) then return false, n .. " must not stage (info)" end
+      for _, n in ipairs({ "choose_persona" }) do
+        if ss(n) then return false, n .. " must not stage" end
       end
       if S.should_stage({ command = "startup" }) then return false, "non-action message must not stage" end
-      return true, "should_stage classifies progress vs info/non-action"
+      return true, "should_stage classifies progress vs non-staging vs non-action"
     end,
   })
   add({
@@ -1551,8 +1748,9 @@ function M.build()
       if not center and G.P_CENTERS then
         for k, v in pairs(G.P_CENTERS) do if type(k) == "string" and k:sub(1, 2) == "j_" then center = v; break end end
       end
-      if not (center and type(create_UIBox_card_unlock) == "function") then ctx.skip = "no joker center / unlock UI builder"; return end
-      local ok = pcall(function() G.FUNCS.overlay_menu({ definition = create_UIBox_card_unlock(center) }) end)
+      local build_unlock = rawget(_G, "create_UIBox_card_unlock")
+      if not (center and type(build_unlock) == "function") then ctx.skip = "no joker center / unlock UI builder"; return end
+      local ok = pcall(function() G.FUNCS.overlay_menu({ definition = build_unlock(center) }) end)
       if not (ok and G.OVERLAY_MENU) then ctx.skip = "could not create real unlock overlay"; return end
       ctx.bridge = { results = {},
         send_action_result = function(self, id, ok2, m) self.results[#self.results + 1] = { id = id, ok = ok2, msg = m } end,
@@ -1572,29 +1770,40 @@ function M.build()
         for _, a in ipairs((f or {}).actions or {}) do if a == "exit_overlay_menu" then ctx.routed = true end end
         ctx.unlock_marked = G.OVERLAY_MENU ~= nil and G.OVERLAY_MENU.joker_unlock_table ~= nil
         local S = require("core.staging")
-        local msg = { command = "action", data = { id = "selftest-overlay-dismiss", name = "exit_overlay_menu", data = {} } }
+        local msg = { command = "action", run_generation = G.NEURO and G.NEURO.run_generation,
+          data = { id = "selftest-overlay-dismiss", name = "exit_overlay_menu", data = {} } }
         ctx.staged = S.should_stage(msg)
+        require("core.action_registry").note_registered({ "exit_overlay_menu" })
         S.queue(msg, ctx.bridge)
         ctx.queued = true
       end
       require("core.staging").update()
-      return not require("core.staging").is_busy()
+      return not require("core.staging").is_busy() and G.OVERLAY_MENU == nil and settled()
     end,
     assert = function(ctx)
       if ctx.skip then return true, ctx.skip end
       if not ctx.unlock_marked then return false, "real unlock overlay never set joker_unlock_table (not the unlock popup)" end
       if not ctx.routed then return false, "force_router did not offer exit_overlay_menu with the unlock popup up" end
       if not ctx.staged then return false, "exit_overlay_menu did not stage" end
-      if G.OVERLAY_MENU ~= nil then return false, "unlock popup still open after staged exit_overlay_menu (dismiss failed)" end
       local r = ctx.bridge.results
+      if G.OVERLAY_MENU ~= nil then
+        return false, string.format(
+          "unlock popup still open after staged exit_overlay_menu (dismiss failed); %d result(s), last=%s",
+          #r, tostring(r[#r] and r[#r].msg or "none"))
+      end
       if #r ~= 1 then return false, string.format("want exactly 1 result, got %d", #r) end
       if r[1].ok ~= true then return false, "dismiss result not ok=true: " .. tostring(r[1].msg) end
       return true, "REAL joker-unlock popup induced -> joker_unlock_table set -> staged exit_overlay_menu -> continue_unlock dismissed it"
     end,
+    teardown = function()
+      if G.OVERLAY_MENU and G.FUNCS and G.FUNCS.exit_overlay_menu then pcall(G.FUNCS.exit_overlay_menu) end
+      require("core.action_registry").note_unregistered({ "exit_overlay_menu" })
+    end,
   })
   add({
     name = "force/round_eval_static", timeout_s = 6,
-    setup = function() end, act = function() end, wait_for = function() return true end,
+    setup = function(ctx) ctx.was_round_eval = G.round_eval; G.round_eval = true end,
+    act = function() end, wait_for = function() return true end,
     assert = function()
       local ok_f, FR = pcall(require, "force.force_router")
       if not (ok_f and FR.get_force_for_state) then return false, "force_router unavailable" end
@@ -1605,6 +1814,7 @@ function M.build()
       for _, a in ipairs(f.actions) do if a == "cash_out" then hascash = true end end
       return hascash, "ROUND_EVAL force must offer cash_out, got " .. table.concat(f.actions, ",")
     end,
+    teardown = function(ctx) G.round_eval = ctx.was_round_eval end,
   })
   add({
     name = "force/pure_helpers", timeout_s = 6,
@@ -1630,7 +1840,9 @@ function M.build()
   })
   add({
     name = "force/gameover_offers_restart_immediately", timeout_s = 6,
-    setup = function() end,
+    setup = function(ctx)
+      if G.NEURO then ctx.was_persona = G.NEURO.persona; G.NEURO.persona = "neuro" end
+    end,
     act = function() end, wait_for = function() return true end,
     assert = function()
       if not G.NEURO then return true, "no G.NEURO, skipped" end
@@ -1644,6 +1856,7 @@ function M.build()
       end
       return false, "game-over force must offer setup_run"
     end,
+    teardown = function(ctx) if G.NEURO then G.NEURO.persona = ctx.was_persona end end,
   })
   add({
     name = "ctx/helpers_short_maps", timeout_s = 6,
@@ -1657,14 +1870,15 @@ function M.build()
         end
       end
       if CH.short_value and CH.short_value("Ace") ~= "A" then return false, "short_value(Ace) != A" end
-      if CH.compact_text then
-        local out = CH.compact_text("a,b|c\nd  e", 100)
+      if CH.normalize_text then
+        local out = CH.normalize_text("a,b|c\nd  e")
         if out:find(",", 1, true) or out:find("|", 1, true) or out:find("\n", 1, true) then
-          return false, "compact_text left a delimiter: " .. out
+          return false, "normalize_text left a delimiter: " .. out
         end
-        if #CH.compact_text(string.rep("x", 50), 10) > 10 then return false, "compact_text did not truncate to max" end
+        local long = string.rep("x", 5000)
+        if CH.normalize_text(long) ~= long then return false, "normalize_text shortened a 5000-char value" end
       end
-      return true, "ctx_helpers short maps + compact_text sanitize/truncate correct"
+      return true, "ctx_helpers short maps + normalize_text sanitizes without shortening"
     end,
   })
   add({
@@ -1672,7 +1886,7 @@ function M.build()
     setup = function() end, act = function() end, wait_for = function() return true end,
     assert = function()
       local ok_t, TL = pcall(require, "facts.token_legends")
-      if not (ok_t and TL.for_state) then return false, "token_legends unavailable" end
+      if not (ok_t and TL.READABLE_COMMON) then return false, "token_legends unavailable" end
       local function ascii_check(label, text)
         if type(text) ~= "string" then return true end
         for i = 1, #text do
@@ -1680,14 +1894,18 @@ function M.build()
         end
         return true
       end
-      local okc, errc = ascii_check("COMMON", TL.COMMON)
+      local okc, errc = ascii_check("READABLE_COMMON", TL.READABLE_COMMON)
       if not okc then return false, errc end
-      for _, st in ipairs(ALL_STATES) do
-        local _, text = TL.for_state(st)
+      local okj, errj = ascii_check("READABLE_JOKER_TAGS", TL.READABLE_JOKER_TAGS)
+      if not okj then return false, errj end
+      local n_state = 0
+      for st, text in pairs(TL.READABLE_STATE or {}) do
+        n_state = n_state + 1
         local oks, errs = ascii_check(st, text)
         if not oks then return false, errs end
       end
-      return true, "all token legends are ASCII-only"
+      if n_state == 0 then return false, "READABLE_STATE is empty -- no state legend was checked" end
+      return true, string.format("all token legends are ASCII-only (%d state legends)", n_state)
     end,
   })
 
@@ -1742,14 +1960,6 @@ function M.build()
     end
   end
 
-  -- info smoke tests in SELECTING_HAND; shop_context needs the shop so it is added in the SHOP span
-  do
-    local Actions = require("core.actions")
-    for name in pairs(Actions.INFO_ACTIONS or {}) do
-      if name ~= "shop_context" then add(info_smoke_case(name)) end
-    end
-  end
-
   add({
     name = "action/discard_consumes_discard", timeout_s = 20,
     setup = function(ctx)
@@ -1769,15 +1979,14 @@ function M.build()
   })
   add({
     name = "action/discard_rejected_when_zero", timeout_s = 10,
-    setup = function() G.GAME.current_round.discards_left = 0 end,
+    setup = function() set_hand({ "H_5", "S_5", "D_2" }); G.GAME.current_round.discards_left = 0 end,
     act = function(ctx)
       local _, err = run_action("discard_hand", { indices = { 1 } })
       ctx.err = err
     end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):find("discard") ~= nil,
-        "expected no-discards rejection, got: " .. tostring(ctx.err)
+      return rejection(ctx.err, "ACTION_UNAVAILABLE", "No discards remaining")
     end,
     teardown = function() if G.GAME.current_round then G.GAME.current_round.discards_left = 4 end end,
   })
@@ -1851,7 +2060,6 @@ function M.build()
     end,
   })
 
-  -- numeric scoring: realized round-score delta must equal the fact-derived base+card contributions
   add(score_delta_case("score/base_high_card", { "H_2", "S_5", "D_9", "C_K", "H_A" }, { 1, 2, 3, 4, 5 }))
   add(score_delta_case("score/base_pair", { "H_5", "S_5", "D_2", "C_9", "H_K" }, { 1, 2 }))
   add(score_delta_case("score/base_two_pair", { "H_5", "S_5", "D_9", "C_9", "H_K" }, { 1, 2, 3, 4 }))
@@ -1978,8 +2186,7 @@ function M.build()
     act = function(ctx) local _, err = run_action("play_hand", { indices = { 1, 2 } }); ctx.err = err end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):find("hands remaining") ~= nil,
-        "expected no-hands rejection, got: " .. tostring(ctx.err)
+      return rejection(ctx.err, "ACTION_UNAVAILABLE", "No hands remaining")
     end,
     teardown = function() if G.GAME.current_round then G.GAME.current_round.hands_left = 4 end end,
   })
@@ -1989,8 +2196,7 @@ function M.build()
     act = function(ctx) local _, err = run_action("play_hand", { indices = { 99, 100 } }); ctx.err = err end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):find("indices") ~= nil,
-        "expected invalid-indices rejection, got: " .. tostring(ctx.err)
+      return rejection(ctx.err, "INVALID_SELECTION", "out of range")
     end,
   })
   add({
@@ -1999,15 +2205,14 @@ function M.build()
     act = function(ctx) local _, err = run_action("play_hand", { indices = {} }); ctx.err = err end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):find("indices") ~= nil,
-        "expected empty-indices rejection, got: " .. tostring(ctx.err)
+      return rejection(ctx.err, "INVALID_SELECTION", "card indices")
     end,
   })
   add({
     name = "neg/consumable_too_many_targets", timeout_s = 10,
     setup = function(ctx)
       clear_area(G.consumeables)
-      set_hand({ "H_5", "S_5", "D_2", "C_9", "H_K" }) -- >=4 valid cards so only the count check can fire
+      set_hand({ "H_5", "S_5", "D_2", "C_9", "H_K" })
       ctx.card = spawn_consumable("c_strength")
     end,
     act = function(ctx)
@@ -2017,8 +2222,7 @@ function M.build()
     end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):lower():find("too many") ~= nil,
-        "expected too-many-targets rejection, got: " .. tostring(ctx.err)
+      return rejection(ctx.err, "INVALID_SELECTION", "Too many cards")
     end,
   })
   add({
@@ -2050,26 +2254,30 @@ function M.build()
   })
 
   add({
-    name = "fact/quick_status_reports_money", timeout_s = 8,
+    name = "fact/context_reports_money", timeout_s = 8,
     setup = function(ctx) ctx.m = dollars(); money(42) end,
-    act = function(ctx) ctx.res, ctx.err = run_action("quick_status") end,
+    act = function(ctx)
+      ctx.res = require("context.context_compact").build(
+        require("core.state").get_state_name(), nil, { no_cache = true })
+    end,
     wait_for = function() return true end,
     assert = function(ctx)
-      if ctx.err then return false, "quick_status err: " .. tostring(ctx.err) end
-      return type(ctx.res) == "string" and ctx.res:find("42", 1, true) ~= nil,
-        "quick_status should report $42, got: " .. tostring(ctx.res)
+      return type(ctx.res) == "string" and ctx.res:find("$42 in the bank", 1, true) ~= nil,
+        "context should report $42, got: " .. tostring(ctx.res)
     end,
     teardown = function(ctx) money(ctx.m or 50) end,
   })
   add({
-    name = "fact/hand_levels_reflects_level", timeout_s = 8,
+    name = "fact/context_reflects_hand_level", timeout_s = 8,
     setup = function(ctx) ctx.hd = G.GAME.hands["Pair"]; ctx.lvl0 = ctx.hd and ctx.hd.level; if ctx.hd then ctx.hd.level = 7 end end,
-    act = function(ctx) ctx.res, ctx.err = run_action("hand_levels_info") end,
+    act = function(ctx)
+      ctx.res = require("context.context_compact").build(
+        require("core.state").get_state_name(), nil, { no_cache = true })
+    end,
     wait_for = function() return true end,
     assert = function(ctx)
-      if ctx.err then return false, tostring(ctx.err) end
-      return type(ctx.res) == "string" and ctx.res:find("7", 1, true) ~= nil,
-        "hand_levels_info should show Pair at level 7"
+      return type(ctx.res) == "string" and ctx.res:find("Pair: level 7", 1, true) ~= nil,
+        "context should show Pair at level 7, got: " .. tostring(ctx.res)
     end,
     teardown = function(ctx) if ctx.hd and ctx.lvl0 then ctx.hd.level = ctx.lvl0 end end,
   })
@@ -2115,8 +2323,8 @@ function M.build()
     setup = function()
       clear_area(G.jokers)
       clear_area(G.consumeables)
-      spawn_joker("j_joker")            -- non-eternal => sell_card legal (mid-round sell)
-      spawn_consumable("c_mercury")     -- => use_card legal
+      spawn_joker("j_joker")
+      spawn_consumable("c_mercury")
       set_hand({ "H_5", "S_5", "D_2", "C_9", "H_K" })
       G.GAME.current_round.hands_left = 3
       G.GAME.current_round.discards_left = 3
@@ -2131,13 +2339,23 @@ function M.build()
       if type(f) ~= "table" or type(f.actions) ~= "table" then return false, "no force for SELECTING_HAND" end
       local set = {}
       for _, a in ipairs(f.actions) do set[a] = true end
-      -- force must offer EVERY legal PROGRESS action (agnostic, no preference); NON_PROGRESS (set_joker_order, sorts) may be dropped/ride-along
-      for _, need in ipairs(A.get_available_actions_for_state("SELECTING_HAND") or {}) do
+      local avail = A.get_available_actions_for_state("SELECTING_HAND")
+      if type(avail) ~= "table" or #avail == 0 then
+        return false, "no legal SELECTING_HAND actions to compare the force against"
+      end
+      for _, need in ipairs(avail) do
         if not np[need] and not set[need] then return false, "force omits legal progress action " .. need end
       end
-      if not set["sell_card"] then return false, "force must offer sell_card with a sellable joker" end
+      local sell_legal = A.is_action_valid("sell_card")
+      if sell_legal ~= (set["sell_card"] or false) then
+        return false, string.format(
+          "sell_card legality and force offer must agree: is_action_valid=%s offered=%s",
+          tostring(sell_legal), tostring(set["sell_card"] or false))
+      end
       if not (set["play_hand"] or set["discard_hand"]) then return false, "force must offer play_hand/discard_hand" end
-      return true, "force offers all legal SELECTING_HAND actions incl sell_card/use_card"
+      return true, string.format(
+        "force offers every legal SELECTING_HAND progress action; sell_card legal=%s offered=%s",
+        tostring(sell_legal), tostring(set["sell_card"] or false))
     end,
     teardown = function() clear_area(G.jokers); clear_area(G.consumeables) end,
   })
@@ -2149,7 +2367,6 @@ function M.build()
       local FR = require("force.force_router")
       local f = FR.get_force_for_state("SELECTING_HAND")
       if type(f) ~= "table" then return true, "no force (fine), skipped" end
-      -- agnosticism: force is a flat list of action NAME strings, never a pre-chosen index/target payload
       for _, a in ipairs(f.actions or {}) do
         if type(a) ~= "string" then return false, "force carries a non-name payload (pre-selection): " .. type(a) end
       end
@@ -2182,7 +2399,7 @@ function M.build()
       local volatile = CC.build("SELECTING_HAND", allowed, { no_cache = true, split = "volatile" })
       if type(stable) ~= "string" or type(volatile) ~= "string" then return true, "split unsupported, skipped" end
       if stable == volatile then return true, "split produced identical output, skipped" end
-      local prefixes = { "V|", "JD:", "FRAME|", "RUN|" }
+      local prefixes = { "Joker details:", "FRAME|", "Deck rules" }
       local function is_stable(line)
         for _, p in ipairs(prefixes) do if line:sub(1, #p) == p then return true end end
         return false
@@ -2249,7 +2466,6 @@ function M.build()
     end,
   })
 
-  -- per-joker context without spawning (cumulative spawns corrupt engine state / hang the queue); constructed card so joker_fx can't mutate the live game
   add({
     name = "meta/all_jokers_have_context", timeout_s = 8,
     setup = function() end, act = function() end, wait_for = function() return true end,
@@ -2425,8 +2641,6 @@ function M.build()
     end,
   })
 
-  add(info_smoke_case("shop_context"))
-
   add({
     name = "action/reroll_shop_cost_and_progression", timeout_s = 15,
     setup = function(ctx)
@@ -2456,6 +2670,7 @@ function M.build()
   add({
     name = "neg/buy_insufficient_funds", timeout_s = 10,
     setup = function(ctx)
+      require_shop_areas()
       clear_area(G.jokers)
       clear_area(G.shop_jokers)
       ctx.buy = SMODS.create_card({ key = "j_joker", area = G.shop_jokers, skip_materialize = true, bypass_discovery_center = true, no_edition = true })
@@ -2468,7 +2683,7 @@ function M.build()
     end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):find("afford") ~= nil,
+      return ctx.err ~= nil and tostring(ctx.err.message):find("afford") ~= nil,
         "expected afford rejection at $0, got: " .. tostring(ctx.err)
     end,
     teardown = function() clear_area(G.shop_jokers) end,
@@ -2476,6 +2691,7 @@ function M.build()
   add({
     name = "neg/buy_rejected_full_joker_slots", timeout_s = 15,
     setup = function(ctx)
+      require_shop_areas()
       clear_area(G.jokers)
       clear_area(G.shop_jokers)
       ctx.limit = G.jokers.config.card_limit
@@ -2490,7 +2706,7 @@ function M.build()
     end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):lower():find("space") ~= nil,
+      return ctx.err ~= nil and tostring(ctx.err.message):lower():find("space") ~= nil,
         "expected no-slot-space rejection when jokers full, got: " .. tostring(ctx.err)
     end,
     teardown = function() clear_area(G.shop_jokers); clear_area(G.jokers) end,
@@ -2498,9 +2714,11 @@ function M.build()
 
   add({
     name = "force/shop_completeness", timeout_s = 10,
-    setup = function()
+    setup = function(ctx)
       clear_area(G.jokers)
-      spawn_joker("j_joker") -- sellable
+      ctx.buy_joker = spawn_joker("j_joker")
+      G.NEURO.joker_intents = G.NEURO.joker_intents or {}
+      G.NEURO.joker_intents[ctx.buy_joker.sort_id] = { tag = "keep" }
       money(50)
     end,
     act = function() end, wait_for = function() return settled() end,
@@ -2513,14 +2731,21 @@ function M.build()
       if type(f) ~= "table" or type(f.actions) ~= "table" then return false, "no force for SHOP" end
       local set = {}
       for _, a in ipairs(f.actions) do set[a] = true end
-      for _, need in ipairs(A.get_available_actions_for_state("SHOP") or {}) do
+      local avail = A.get_available_actions_for_state("SHOP")
+      if type(avail) ~= "table" or #avail == 0 then
+        return false, "no legal SHOP actions to compare the force against"
+      end
+      for _, need in ipairs(avail) do
         if not np[need] and not set[need] then return false, "shop force omits legal progress action " .. need end
       end
       if not set["toggle_shop"] then return false, "shop force must offer toggle_shop" end
       if not set["sell_card"] then return false, "shop force must offer sell_card with a sellable joker" end
       return true, "shop force offers all legal actions incl toggle_shop/sell_card"
     end,
-    teardown = function() clear_area(G.jokers) end,
+    teardown = function(ctx)
+      if ctx.buy_joker then G.NEURO.joker_intents[ctx.buy_joker.sort_id] = nil end
+      clear_area(G.jokers)
+    end,
   })
   add({
     name = "ctx/build_ascii_shop", timeout_s = 8,
@@ -2548,6 +2773,7 @@ function M.build()
   add({
     name = "edge/credit_card_floor_fact", timeout_s = 20,
     setup = function(ctx)
+      require_shop_areas()
       clear_area(G.jokers)
       clear_area(G.shop_jokers)
       spawn_joker("j_credit_card")
@@ -2578,6 +2804,7 @@ function M.build()
   add({
     name = "edge/credit_card_floor_rejects_breach", timeout_s = 10,
     setup = function(ctx)
+      require_shop_areas()
       clear_area(G.jokers)
       clear_area(G.shop_jokers)
       spawn_joker("j_credit_card")
@@ -2592,7 +2819,7 @@ function M.build()
     end,
     wait_for = function() return true end,
     assert = function(ctx)
-      return ctx.err ~= nil and tostring(ctx.err):find("afford") ~= nil,
+      return ctx.err ~= nil and tostring(ctx.err.message):find("afford") ~= nil,
         "expected affordability rejection at the floor, got: " .. tostring(ctx.err)
     end,
     teardown = function() clear_area(G.shop_jokers) end,
@@ -2601,6 +2828,7 @@ function M.build()
   add({
     name = "edge/negative_joker_buy_with_full_slots", timeout_s = 20,
     setup = function(ctx)
+      require_shop_areas()
       clear_area(G.jokers)
       clear_area(G.shop_jokers)
       ctx.limit = G.jokers.config.card_limit
@@ -2696,10 +2924,15 @@ function M.build()
       if type(f) ~= "table" or type(f.actions) ~= "table" then return true, "blind select transitioning, skipped" end
       local set = {}
       for _, a in ipairs(f.actions) do set[a] = true end
-      for _, need in ipairs(A.get_available_actions_for_state("BLIND_SELECT") or {}) do
+      local avail = A.get_available_actions_for_state("BLIND_SELECT")
+      if type(avail) ~= "table" or #avail == 0 then
+        return false, "no legal BLIND_SELECT actions to compare the force against"
+      end
+      for _, need in ipairs(avail) do
         if not np[need] and not set[need] then return false, "blind-select force omits legal progress action " .. need end
       end
-      return true, "blind-select force offers all legal actions (select/skip/sell/use as available)"
+      return true, string.format(
+        "blind-select force offers all %d legal actions (select/skip/sell/use as available)", #avail)
     end,
     teardown = function() clear_area(G.jokers); clear_area(G.consumeables) end,
   })
@@ -2841,19 +3074,18 @@ function M.build()
       G.GAME.won = false
       local lost_txt = CtxMisc.game_over_section()
       G.GAME.won = ctx.won
-      local ok = type(won_txt) == "string" and won_txt:find("GO|", 1, true) and won_txt:upper():find("WON")
-        and type(lost_txt) == "string" and lost_txt:find("GO|", 1, true) and lost_txt:find("lost", 1, true)
+      local ok = type(won_txt) == "string" and won_txt:upper():find("WON")
+        and type(lost_txt) == "string" and lost_txt:find("lost", 1, true)
       return ok, string.format("won=%s lost=%s", tostring(won_txt), tostring(lost_txt))
     end,
     teardown = function(ctx) G.GAME.won = ctx.won end,
   })
 
-  -- ok= (can_take_pack_card) must match the real gate in card.lua:1851-1896, both directions, for every real center
   add({
     name = "pack/consumable_takeability_matrix", timeout_s = 40,
     setup = function(ctx)
       local CU = require("facts.card_util")
-      ctx.PACK = {}  -- sentinel: a pack card owns no inventory slot
+      ctx.PACK = {}
       local GATE = {}
       for _, k in ipairs({ "c_high_priestess", "c_emperor" }) do GATE[k] = "cslot" end
       GATE.c_fool = "fool"
@@ -2900,7 +3132,6 @@ function M.build()
       local function each(grp, want, label)
         for _, e in ipairs(ctx.groups[grp]) do check(e, want, label) end
       end
-      -- mirror card.lua:4566-4571 so the ejoker gate evaluates for real instead of via the fallback
       local function set_eligible()
         local list = {}
         for _, v in ipairs((G.jokers and G.jokers.cards) or {}) do
@@ -2937,7 +3168,6 @@ function M.build()
       spawn_joker("j_joker"); set_eligible(); each("ejoker", true, "eligible")
       clear_area(G.jokers); set_eligible(); each("ejoker", false, "noeligible")
 
-      -- hand-count spectrals need a pack/hand state
       local prev_state = G.STATE
       G.STATE = (G.STATES and G.STATES.SPECTRAL_PACK) or prev_state
       set_hand({ "H_5", "S_9", "D_2" }); each("handn", true, "hand3")
@@ -2952,13 +3182,10 @@ function M.build()
     teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
   })
 
-  -- ok= must hold for every pack card kind: Buffoon needs joker room (negatives always takeable), Standard
-  -- cards always takeable, Soul needs joker room (creates a Legendary), Black Hole always usable
   add({
     name = "pack/takeability_all_kinds", timeout_s = 60,
     setup = function(ctx)
       clear_area(G.jokers)
-      -- raw create (no :emplace) leaves G.jokers empty, so every joker is checked against open slots
       ctx.jokers = {}
       for _, center in ipairs((G.P_CENTER_POOLS and G.P_CENTER_POOLS.Joker) or {}) do
         if center.key then
@@ -2968,9 +3195,7 @@ function M.build()
         end
       end
       ctx.probe_key = (ctx.jokers[1] and ctx.jokers[1][1]) or "j_joker"
-      -- Standard-pack contents: plain, off-suit, and an enhanced card all ride the base.suit path
       ctx.playing = set_hand({ "H_5", "S_9", { front = "D_2", center = "m_gold" } })
-      -- legendaries created into consumeables (their real destination when picked)
       ctx.soul = SMODS.create_card({ key = "c_soul", area = G.consumeables, skip_materialize = true,
         bypass_discovery_center = true, no_edition = true })
       ctx.black_hole = SMODS.create_card({ key = "c_black_hole", area = G.consumeables, skip_materialize = true,
@@ -2993,7 +3218,6 @@ function M.build()
       if #bad > 0 then
         return false, string.format("%d card(s) read ok=N despite being takeable with room: %s", #bad, table.concat(bad, ", "))
       end
-      -- inverse direction: FULL joker slots must block a normal joker + Soul (ok=N) but NOT a negative joker
       for _ = 1, CU.joker_limit() do spawn_joker("j_joker") end
       local full_probe = SMODS.create_card({ key = ctx.probe_key, area = G.jokers, skip_materialize = true,
         bypass_discovery_center = true, no_edition = true })
@@ -3002,7 +3226,7 @@ function M.build()
       neg_probe.edition = { negative = true, key = "e_negative" }
       local full_ok = CU.can_take_pack_card(full_probe)
       local neg_ok = CU.can_take_pack_card(neg_probe)
-      local soul_full = CU.can_take_pack_card(ctx.soul)  -- Soul lives in consumeables; full jokers -> no room
+      local soul_full = CU.can_take_pack_card(ctx.soul)
       clear_area(G.jokers)
       if full_ok ~= false then return false, "a normal joker read ok=Y with joker slots FULL (should be N)" end
       if neg_ok ~= true then return false, "a NEGATIVE joker read ok=N with slots full (it bumps the slot -> should stay Y)" end
@@ -3013,7 +3237,6 @@ function M.build()
     teardown = function() clear_area(G.jokers) end,
   })
 
-  -- consumable_target_range must match each center's max_highlighted, + Aura's name-gated (1,1) override
   add({
     name = "pack/target_range_drift", timeout_s = 20,
     setup = function(ctx)
@@ -3032,7 +3255,7 @@ function M.build()
     wait_for = function() return settled() end,
     assert = function(ctx)
       local CU = require("facts.card_util")
-      local NAMED = { c_aura = 1 }  -- name-gated hand target (empty config) -> must surface (1,1)
+      local NAMED = { c_aura = 1 }
       local bad = {}
       for _, e in ipairs(ctx.cards) do
         local key, card = e[1], e[2]
@@ -3054,19 +3277,22 @@ function M.build()
     teardown = function() clear_area(G.consumeables) end,
   })
 
-  -- structural guard: every enumerated pool item must have produced a case (no silent skips)
   add({
     name = "meta/pools_fully_enumerated", timeout_s = 8,
     setup = function() end, act = function() end, wait_for = function() return true end,
     assert = function()
       local pools = { "Planet", "Tarot", "Spectral", "Voucher", "Booster" }
-      local bad, total = {}, 0
+      local bad, empty, total = {}, {}, 0
       for _, pool in ipairs(pools) do
+        local n = 0
         for _, center in ipairs((G.P_CENTER_POOLS and G.P_CENTER_POOLS[pool]) or {}) do
+          n = n + 1
           total = total + 1
           if center.key and not covered[center.key] then bad[#bad + 1] = pool .. ":" .. tostring(center.key) end
         end
+        if n == 0 then empty[#empty + 1] = pool end
       end
+      if #empty > 0 then return false, "pool enumerated empty: " .. table.concat(empty, ", ") end
       if #bad > 0 then return false, string.format("%d pool items got no case: %s", #bad, table.concat(bad, ", ")) end
       return true, string.format("every item across %d pools has a case (%d items)", #pools, total)
     end,
@@ -3075,7 +3301,6 @@ function M.build()
   return cases
 end
 
--- pack-launch scenario (NEURO_SELFTEST_PACK): drives a REAL Card:open() booster, not the synthetic matrix above
 local function open_booster(key)
   local card = SMODS.create_card({
     key = key, skip_materialize = true, bypass_discovery_center = true, no_edition = true,
@@ -3083,7 +3308,8 @@ local function open_booster(key)
   if not card then error("could not create booster " .. tostring(key)) end
   card.cost = 0
   if type(card.open) ~= "function" then error("booster '" .. tostring(key) .. "' has no :open()") end
-  card:open()   -- real flow: sets SMODS_BOOSTER_OPENED, queues pack-card creation + hand draw
+  if G and G.GAME then G.GAME.PACK_INTERRUPT = G.STATE end
+  card:open()
   return card
 end
 
@@ -3093,7 +3319,6 @@ local SPECTRAL_KEYS = {
   "c_soul", "c_black_hole",
 }
 
--- mirror card.lua:4566: freshly created cards have eligible_*_jokers nil (next(nil) throws the Ecto/Hex gate); populate so injected cards hit the REAL gate, not the pcall-swallowed fallback
 local function set_eligible(card)
   local list = {}
   for _, v in ipairs((G.jokers and G.jokers.cards) or {}) do
@@ -3112,7 +3337,7 @@ local function pack_launch_case(name, booster_key)
     name = name, timeout_s = 30, act_delay = 0.2,
     setup = function(ctx)
       clear_area(G.consumeables); clear_area(G.jokers)
-      spawn_joker("j_joker")   -- a plain editionless joker so joker-gated spectrals (Ecto/Hex/Ankh/Wraith) aren't trivially ok=N
+      spawn_joker("j_joker")
       money(20)
       ctx.key = booster_key
     end,
@@ -3137,13 +3362,11 @@ local function pack_launch_case(name, booster_key)
         local ok_take = CardUtil.can_take_pack_card(c)
         lines[#lines + 1] = string.format("%d:%s tgt=%s ok=%s", i, nm, targeting and (mn .. "-" .. mh) or "-", ok_take and "Y" or "N")
         if not ok_take then okn[#okn + 1] = nm end
-        -- a targeting card the mod marks takeable must have a hand to target
         if targeting and ok_take and hand_n < (mn or 1) and not bad then
           bad = string.format("no-hand-window: '%s' ok=Y (targets %d) but hand=%d", nm, mn, hand_n)
         end
         if targeting and ok_take and not first_tgt_i then first_tgt_i, first_tgt_min = i, (mn or 1) end
       end
-      -- traced even on PASS: always surface whether ok=N exists
       local okn_str = (#okn > 0) and string.format("OK=N[%d]: %s", #okn, table.concat(okn, ",")) or "OK=N: none"
       SelfTest.trace("%s | hand=%d | %s | %s", name, hand_n, okn_str, table.concat(lines, " "))
       local tail = okn_str .. " | " .. table.concat(lines, " ")
@@ -3165,19 +3388,18 @@ local function pack_launch_case(name, booster_key)
       return false, "NO takeable card -- couldn't pick ANY | " .. tail
     end,
     teardown = function()
-      pcall(run_action, "skip_booster", {})   -- best-effort: don't leave the run stuck in a pack
+      pcall(run_action, "skip_booster", {})
       clear_area(G.consumeables); clear_area(G.jokers)
     end,
   }
 end
 
--- opens a REAL spectral pack (only rolls 2-3, so inject all 18 keys); asserts every spectral ok=Y + a live Aura pick
 local function all_spectrals_case()
   return {
     name = "pack/launch/all_spectrals_real", timeout_s = 40, act_delay = 0.2,
     setup = function()
       clear_area(G.consumeables); clear_area(G.jokers)
-      spawn_joker("j_joker")   -- editionless joker so Ecto/Hex/Ankh/Wraith have a valid target
+      spawn_joker("j_joker")
       money(20)
     end,
     act = function(ctx) ctx.booster = open_booster("p_spectral_normal_1") end,
@@ -3281,10 +3503,10 @@ local function standard_pack_mutations_case()
           end
         end
         ctx.injected = true
-        ctx.hold_until = (G.TIMERS and G.TIMERS.REAL or 0) + PACK_HOLD_S
+        ctx.hold_until = require("util.utils").now() + PACK_HOLD_S
         return false
       end
-      return (G.TIMERS and G.TIMERS.REAL or 0) >= ctx.hold_until
+      return require("util.utils").now() >= ctx.hold_until
     end,
     assert = function()
       local bp = CardUtil.pack_area()
@@ -3346,13 +3568,285 @@ local function standard_pack_mutations_case()
   }
 end
 
--- Only these run under NEURO_SELFTEST_PACK; kept out of the default suite (heavy, real-engine).
-function M.build_pack()
+local function all_booster_keys()
+  local keys = {}
+  for key, center in pairs(G and G.P_CENTERS or {}) do
+    if type(key) == "string" and key:sub(1, 2) == "p_" and type(center) == "table" and center.set == "Booster" then
+      keys[#keys + 1] = key
+    end
+  end
+  table.sort(keys)
+  return keys
+end
+
+local function skip_open_pack_once(ctx)
+  if not ctx.skipped and G.booster_pack then
+    gfunc("skip_booster")
+    ctx.skipped = true
+  end
+end
+
+local function booster_pick_case(key)
   return {
+    name = "booster/" .. key .. "/open_pick", timeout_s = 35, act_delay = 0.2,
+    setup = function() clear_area(G.consumeables); clear_area(G.jokers); spawn_joker("j_joker"); money(20) end,
+    act = function(ctx) ctx.booster = open_booster(key) end,
+    wait_for = function(ctx)
+      local bp = CardUtil.pack_area()
+      if not ctx.size then
+        if not (bp and bp.cards and #bp.cards > 0 and settled()) then return false end
+        ctx.size, ctx.want, ctx.picks = #bp.cards, (G.GAME.pack_choices or 1), 0
+        return false
+      end
+      if not G.booster_pack then return settled() end
+      if not settled() then return false end
+      if ctx.picks < ctx.want and bp and bp.cards then
+        for i, c in ipairs(bp.cards) do
+          if CardUtil.can_take_pack_card(c) then
+            local mn, mh = CardUtil.consumable_target_range(c)
+            local data = { area = "booster_pack", index = i }
+            if mh and mh > 0 then
+              data.hand_indices = {}
+              for k = 1, math.min(mn or 1, #(G.hand and G.hand.cards or {})) do data.hand_indices[k] = k end
+            end
+            local _, e = run_action("use_card", data)
+            ctx.err = ctx.err or e
+            ctx.picks = ctx.picks + 1
+            return false
+          end
+        end
+      end
+      skip_open_pack_once(ctx)
+      return false
+    end,
+    assert = function(ctx)
+      if not ctx.size then return false, "pack never opened" end
+      if ctx.err then return false, "pick rejected: " .. tostring(ctx.err) end
+      if CardUtil.pack_area() ~= nil then return false, "pack_area() returned a stale area after close (dangling!)" end
+      return true, string.format("opened %d, picked %d/%d, closed clean (pack_area nil)", ctx.size, ctx.picks or 0, ctx.want or 1)
+    end,
+    teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
+  }
+end
+
+local function booster_skip_case(key)
+  return {
+    name = "booster/" .. key .. "/open_skip", timeout_s = 25, act_delay = 0.2,
+    setup = function() clear_area(G.consumeables); clear_area(G.jokers); money(20) end,
+    act = function(ctx) ctx.booster = open_booster(key) end,
+    wait_for = function(ctx)
+      if not ctx.skipped then
+        local bp = CardUtil.pack_area()
+        if not (bp and bp.cards and #bp.cards > 0 and G.booster_pack and settled()) then return false end
+        ctx.size = #bp.cards
+        skip_open_pack_once(ctx)
+        return false
+      end
+      return not G.booster_pack and settled()
+    end,
+    assert = function(ctx)
+      if not ctx.skipped then return false, "pack never opened to skip" end
+      if CardUtil.pack_area() ~= nil then return false, "pack_area() returned a stale area after skip (dangling!)" end
+      return true, string.format("opened %d, skipped, closed clean (pack_area nil)", ctx.size or 0)
+    end,
+    teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
+  }
+end
+
+local function pick_outcome_case(name, key, dest_name, spawn_fill)
+  return {
+    name = name, timeout_s = 35, act_delay = 0.2,
+    setup = function() clear_area(G.consumeables); clear_area(G.jokers); if spawn_fill then spawn_fill() end; money(20) end,
+    act = function(ctx) ctx.booster = open_booster(key) end,
+    wait_for = function(ctx)
+      local bp = CardUtil.pack_area()
+      if not ctx.picked then
+        if not (bp and bp.cards and #bp.cards > 0 and G.booster_pack and settled()) then return false end
+        for i, c in ipairs(bp.cards) do
+          if CardUtil.can_take_pack_card(c) then
+            ctx.picked = c
+            local _, e = run_action("use_card", { area = "booster_pack", index = i })
+            ctx.err = e
+            return false
+          end
+        end
+        ctx.no_takeable = true
+        return true
+      end
+      return not G.booster_pack and settled()
+    end,
+    assert = function(ctx)
+      if ctx.no_takeable then return false, "no takeable card rolled -- cannot verify outcome" end
+      if not ctx.picked then return false, "pack never opened" end
+      if ctx.err then return false, "pick rejected: " .. tostring(ctx.err) end
+      if CardUtil.pack_area() ~= nil then return false, "pack_area() stale after pick-close (dangling!)" end
+      local dest = G[dest_name]
+      local found = dest and dest.cards and index_of(dest, ctx.picked)
+      if not found then return false, "picked card never landed in G." .. dest_name .. " (silently lost)" end
+      return true, "picked card landed in G." .. dest_name .. " at " .. tostring(found) .. ", pack closed clean"
+    end,
+    teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
+  }
+end
+
+local function pack_pick_data(c, i)
+  local mn, mh = CardUtil.consumable_target_range(c)
+  local data = { area = "booster_pack", index = i }
+  if mh and mh > 0 then
+    data.hand_indices = {}
+    for k = 1, math.min(mn or 1, #(G.hand and G.hand.cards or {})) do data.hand_indices[k] = k end
+  end
+  return data
+end
+
+local function mega_sequence_case(key)
+  return {
+    name = "booster/" .. key .. "/mega_sequence", timeout_s = 40, act_delay = 0.2,
+    setup = function() clear_area(G.consumeables); clear_area(G.jokers); money(20) end,
+    act = function(ctx) ctx.booster = open_booster(key) end,
+    wait_for = function(ctx)
+      local bp = CardUtil.pack_area()
+      if not ctx.opened then
+        if not (bp and bp.cards and #bp.cards > 0 and G.booster_pack and settled()) then return false end
+        ctx.opened, ctx.want, ctx.pc0 = true, (G.GAME.pack_choices or 1), (G.GAME.pack_choices or 1)
+        if ctx.want < 2 then ctx.not_mega = true; return true end
+        return false
+      end
+      if ctx.not_mega then return true end
+      if not settled() then return false end
+      if not ctx.pick1_done then
+        for i, c in ipairs(bp and bp.cards or {}) do
+          if CardUtil.can_take_pack_card(c) then
+            local _, e = run_action("use_card", pack_pick_data(c, i)); ctx.err = ctx.err or e
+            ctx.pick1_done = true
+            return false
+          end
+        end
+        ctx.no_takeable = true; return true
+      end
+      if not ctx.mid_checked then
+        ctx.mid_open = (G.booster_pack ~= nil)
+        ctx.mid_pc = G.GAME.pack_choices
+        ctx.mid_checked = true
+        for i, c in ipairs(CardUtil.pack_area() and CardUtil.pack_area().cards or {}) do
+          if CardUtil.can_take_pack_card(c) then
+            local _, e = run_action("use_card", pack_pick_data(c, i)); ctx.err = ctx.err or e
+            break
+          end
+        end
+        return false
+      end
+      return not G.booster_pack and settled()
+    end,
+    assert = function(ctx)
+      if ctx.not_mega then return true, "pack rolled choose<2 (" .. tostring(ctx.want) .. "); mega-sequence N/A" end
+      if ctx.no_takeable then return false, "no takeable card for the mega sequence" end
+      if ctx.err then return false, "pick rejected: " .. tostring(ctx.err) end
+      if not ctx.mid_open then return false, "Mega closed after the FIRST pick (2nd choice lost)" end
+      if ctx.mid_pc ~= ctx.pc0 - 1 then
+        return false, string.format("pack_choices did not decrement by 1 (was %s, mid %s)", tostring(ctx.pc0), tostring(ctx.mid_pc))
+      end
+      if CardUtil.pack_area() ~= nil then return false, "pack_area() stale after 2nd pick (dangling!)" end
+      return true, string.format("stayed open after pick1 (choices %d->%d), closed after pick2", ctx.pc0, ctx.mid_pc)
+    end,
+    teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
+  }
+end
+
+local function interrupt_restore_case(key)
+  return {
+    name = "booster/" .. key .. "/interrupt_restore", timeout_s = 30, act_delay = 0.2,
+    setup = function() clear_area(G.consumeables); clear_area(G.jokers); money(20) end,
+    act = function(ctx) ctx.prev = G and G.STATE; ctx.booster = open_booster(key) end,
+    wait_for = function(ctx)
+      if not ctx.skipped then
+        local bp = CardUtil.pack_area()
+        if not (bp and bp.cards and #bp.cards > 0 and G.booster_pack and settled()) then return false end
+        skip_open_pack_once(ctx)
+        return false
+      end
+      return not G.booster_pack and settled()
+    end,
+    assert = function(ctx)
+      if not ctx.skipped then return false, "pack never opened" end
+      if G.STATE ~= ctx.prev then
+        return false, string.format("G.STATE not restored: opened from %s, closed to %s", tostring(ctx.prev), tostring(G.STATE))
+      end
+      if G.GAME and G.GAME.PACK_INTERRUPT ~= nil then return false, "PACK_INTERRUPT not consumed after close" end
+      if CardUtil.pack_area() ~= nil then return false, "pack_area() stale after close (dangling!)" end
+      return true, "STATE restored to " .. tostring(ctx.prev) .. ", PACK_INTERRUPT cleared"
+    end,
+    teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
+  }
+end
+
+local function blocked_skip_case(name, key, fill, blocked_area)
+  return {
+    name = name, timeout_s = 30, act_delay = 0.2,
+    setup = function() clear_area(G.consumeables); clear_area(G.jokers); fill(); money(20) end,
+    act = function(ctx) ctx.booster = open_booster(key) end,
+    wait_for = function(ctx)
+      if not ctx.skipped then
+        local bp = CardUtil.pack_area()
+        if not (bp and bp.cards and #bp.cards > 0 and G.booster_pack and settled()) then return false end
+        local takeable = 0
+        for _, c in ipairs(bp.cards) do if CardUtil.can_take_pack_card(c) then takeable = takeable + 1 end end
+        ctx.takeable = takeable
+        skip_open_pack_once(ctx)
+        return false
+      end
+      return not G.booster_pack and settled()
+    end,
+    assert = function(ctx)
+      if not ctx.skipped then return false, "pack never opened to skip" end
+      if (ctx.takeable or 0) > 0 then
+        SelfTest.trace("%s | NOTE takeable=%d despite full %s (negative edition?)", name, ctx.takeable, blocked_area)
+      end
+      if CardUtil.pack_area() ~= nil then return false, "pack_area() stale after blocked-skip (dangling!)" end
+      return true, string.format("full %s: takeable=%d, skip closed clean", blocked_area, ctx.takeable or 0)
+    end,
+    teardown = function() clear_area(G.consumeables); clear_area(G.jokers) end,
+  }
+end
+
+local function joker_limit() return (G.jokers and G.jokers.config and G.jokers.config.card_limit) or 5 end
+local function consumable_limit() return (G.consumeables and G.consumeables.config and G.consumeables.config.card_limit) or 2 end
+
+function M.build_booster()
+  local cases = {}
+  local function add(c) cases[#cases + 1] = c end
+  for _, key in ipairs(all_booster_keys()) do
+    add(booster_pick_case(key))
+    add(booster_skip_case(key))
+  end
+  return cases
+end
+
+function M.build_pack()
+  local cases = {
     standard_pack_mutations_case(),
     all_spectrals_case(),
     pack_launch_case("pack/launch/spectral_real", "p_spectral_normal_1"),
     pack_launch_case("pack/launch/arcana_real", "p_arcana_normal_1"),
+    pick_outcome_case("booster/buffoon/pick_lands_in_jokers", "p_buffoon_normal_1", "jokers"),
+    pick_outcome_case("booster/standard/pick_lands_in_deck", "p_standard_normal_1", "deck"),
+    mega_sequence_case("p_buffoon_mega_1"),
+    mega_sequence_case("p_arcana_mega_1"),
+    interrupt_restore_case("p_arcana_normal_1"),
+    interrupt_restore_case("p_buffoon_normal_1"),
+    blocked_skip_case("booster/buffoon/full_jokers_skip", "p_buffoon_normal_1",
+      function() for _ = 1, joker_limit() do spawn_joker("j_joker") end end, "jokers"),
+    blocked_skip_case("booster/arcana/full_consumables_skip", "p_arcana_normal_1",
+      function() for _ = 1, consumable_limit() do spawn_consumable("c_wheel_of_fortune") end end, "consumeables"),
+  }
+  for _, c in ipairs(M.build_booster()) do cases[#cases + 1] = c end
+  return cases
+end
+
+if rawget(_G, "NEURO_TEST") then
+  M._test = {
+    confirm_retry = confirm_retry,
+    needs_confirmation = needs_confirmation,
   }
 end
 

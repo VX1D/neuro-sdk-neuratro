@@ -1,6 +1,3 @@
--- run: luajit test_selftest.lua from neuro-game/; inert in-game (loaded by nothing)
--- engine-driving cases can't run here; this proves runner sequencing, timeout-fail-and-continue, teardown/guard restore, report, gating
-package.path = "./?.lua;;" .. package.path
 if not love then love = { timer = { getTime = function() return 0 end } } end
 _G.G = {
   NEURO = {}, FUNCS = {}, GAME = { current_round = {} },
@@ -12,16 +9,7 @@ _G.G = {
 
 local ST = require("core.selftest")
 
-local fails, total = 0, 0
-local function check(name, cond, detail)
-  total = total + 1
-  if cond then
-    print("PASS  " .. name)
-  else
-    fails = fails + 1
-    print("FAIL  " .. name .. (detail and ("  -- " .. tostring(detail)) or ""))
-  end
-end
+local check, done = require("tests.helpers").harness("selftest")
 
 local function drain(max_ticks, dt)
   for _ = 1, max_ticks or 200 do
@@ -31,7 +19,6 @@ local function drain(max_ticks, dt)
   return not ST.running()
 end
 
--- available() gating: MENU yes, mid-run no, unknown state no
 check("available in MENU", ST.available())
 G.STATE = 99
 check("not available in unknown state", not ST.available())
@@ -41,7 +28,6 @@ check("not available with active run stage", not ST.available())
 G.STAGE = G.STAGES.MAIN_MENU
 check("available again from menu", ST.available())
 
--- guards wrap and restore; sequencing; timeout marks fail and continues; teardown on error
 do
   local stat_calls, teardown_ran, reset_count = 0, false, 0
   _G.inc_career_stat = function() stat_calls = stat_calls + 1 end
@@ -105,7 +91,6 @@ do
   check("available again after finish", ST.available())
 end
 
--- report serialization (pure, no file write)
 do
   local md = ST.render_report(ST.results())
   check("report is a string", type(md) == "string")
@@ -116,14 +101,12 @@ do
   check("report has totals line", md:find("Cases: 4") ~= nil, md:match("Cases:[^\n]*"))
 end
 
--- status() is a cached string and reflects progress
 do
   local s = ST.status()
   check("status is string", type(s) == "string")
   check("status has counters", s:find("pass:") ~= nil and s:find("fail:") ~= nil, s)
 end
 
--- abort() restores guards and stops mid-suite
 do
   local stat_calls = 0
   _G.inc_career_stat = function() stat_calls = stat_calls + 1 end
@@ -143,7 +126,6 @@ do
   check("guards restored after abort", stat_calls == 1, tostring(stat_calls))
 end
 
--- crashing wait_for/assert are fails not runner crashes; setup crash skips act
 do
   local acted = false
   local cases = {
@@ -161,11 +143,40 @@ do
   check("setup crash skips act", not acted)
 end
 
--- empty/absent case lists rejected cleanly
 do
   local ok, err = ST.start({ sandbox = false, report = false, cases = {} })
   check("empty case list rejected", not ok and err ~= nil, tostring(err))
 end
 
-print(string.format("test_selftest: %d/%d passed", total - fails, total))
-if fails > 0 then os.exit(1) end
+do
+  local AR = require("core.action_result")
+  local function detail_for(thrower)
+    ST.start({ sandbox = false, report = false, cases = {
+      { name = "diag/case", timeout_s = 1, act = thrower, wait_for = function() return true end },
+    } })
+    drain(50, 0.5)
+    local res = ST.results()
+    return res[1] and res[1].detail or ""
+  end
+
+  local typed = detail_for(function()
+    error(AR.error("PRECONDITION_FAILED", "no discards left"))
+  end)
+  check("diagnostics: a typed action error keeps its reason code",
+    typed:find("PRECONDITION_FAILED", 1, true) ~= nil, typed)
+  check("diagnostics: a typed action error keeps its message",
+    typed:find("no discards left", 1, true) ~= nil, typed)
+  check("diagnostics: a typed action error is never a bare table address",
+    typed:find("table: 0x", 1, true) == nil, typed)
+
+  local plain = detail_for(function() error({ code = 7, why = "raw" }) end)
+  check("diagnostics: an untyped table error is still summarised, not an address",
+    plain:find("table: 0x", 1, true) == nil
+      and plain:find("why=raw", 1, true) ~= nil, plain)
+
+  local str = detail_for(function() error("plain boom") end)
+  check("diagnostics: a string error keeps its text",
+    str:find("plain boom", 1, true) ~= nil, str)
+end
+
+done()

@@ -1,6 +1,7 @@
 local M = {}
 
 local Actions = require("core.actions")
+local ActionRegistry = require("core.action_registry")
 
 M.active = false
 local idx = 0
@@ -10,7 +11,7 @@ local phase_at = 0
 local report_written = false
 
 local SETUP_TIMEOUT = 12
-local AWAIT_TIMEOUT = 45
+local HARNESS_PATIENCE = 45
 local RUN_START_TIMEOUT = 20
 local HOLD_AFTER = 4
 local run_starting = nil
@@ -51,10 +52,6 @@ local function start_run()
   pcall(G.FUNCS.start_run, nil, { stake = 1, seed = "NEUROREG" })
 end
 
-local function money()
-  return (G and G.GAME and tonumber(G.GAME.dollars)) or 0
-end
-
 local function spawn_joker(key)
   if not (G and G.jokers and _G.SMODS and SMODS.create_card) then return nil end
   local ok, card = pcall(function()
@@ -71,8 +68,9 @@ local function induce_popup()
   if not G then return end
   if G.OVERLAY_MENU then return end
   local center = G.P_CENTERS and G.P_CENTERS.j_joker
-  if center and type(create_UIBox_card_unlock) == "function" and G.FUNCS and G.FUNCS.overlay_menu then
-    pcall(function() G.FUNCS.overlay_menu({ definition = create_UIBox_card_unlock(center) }) end)
+  local build_unlock = rawget(_G, "create_UIBox_card_unlock")
+  if center and type(build_unlock) == "function" and G.FUNCS and G.FUNCS.overlay_menu then
+    pcall(function() G.FUNCS.overlay_menu({ definition = build_unlock(center) }) end)
   end
 end
 
@@ -80,7 +78,7 @@ local function open_run_setup()
   if not (G and G.FUNCS) then return end
   if require("core.state_kinds").is_run_setup_overlay() then return end
   local fn = G.FUNCS.setup_run
-  if type(fn) == "function" then pcall(fn, { config = {}, UIBox = require("facts.card_area_util").mock_UIBox }) end
+  if type(fn) == "function" then pcall(fn, { config = {}, UIBox = require("core.game_actions").mock_UIBox }) end
 end
 
 M.TASKS = {
@@ -93,21 +91,24 @@ M.TASKS = {
   },
   {
     name = "task/paste_seed", expect = "paste_seed", actions = { "paste_seed" },
-    query = "Open run setup is ready. Paste the seed ABCDE123 with paste_seed. Your move: paste_seed|{\"seed\":\"ABCDE123\"}.",
+    query = function() return "Open run setup is ready. Paste the seed ABCDE123 with paste_seed. Your move: "
+      .. ActionRegistry.example("paste_seed", { seed = "ABCDE123" }) .. "." end,
     setup = function(_) open_run_setup() end,
     ready = function(_) return require("core.state_kinds").is_run_setup_overlay() and Actions.is_action_valid("paste_seed") end,
     verify = function(_) return type(G.setup_seed) == "string" and #G.setup_seed > 0 end,
   },
   {
     name = "task/invent_seed", expect = "paste_seed", actions = { "paste_seed" },
-    query = "Invent your own 8-character seed (letters and digits) and paste it with paste_seed. Your move: paste_seed|{\"seed\":\"<your seed>\"}.",
+    query = function() return "Invent your own 8-character seed (letters and digits) and paste it with paste_seed. Your move: "
+      .. ActionRegistry.prompt("paste_seed") .. "." end,
     setup = function(c) open_run_setup(); c.prev = G.setup_seed end,
     ready = function(_) return require("core.state_kinds").is_run_setup_overlay() and Actions.is_action_valid("paste_seed") end,
     verify = function(c) return type(G.setup_seed) == "string" and #G.setup_seed > 0 and G.setup_seed ~= c.prev end,
   },
   {
     name = "task/reorder_jokers", needs_run = true, expect = "set_joker_order", actions = { "set_joker_order" },
-    query = "You have two jokers. Reorder them: move the joker in slot 1 to slot 2. Your move: set_joker_order|{\"from_index\":1,\"to_index\":2}.",
+    query = function() return "You have two jokers. Reorder them: move the joker in slot 1 to slot 2. Your move: "
+      .. ActionRegistry.example("set_joker_order", { from_index = 1, to_index = 2 }) .. "." end,
     setup = function(c)
       local n = #jokers()
       if n < 1 then
@@ -122,7 +123,8 @@ M.TASKS = {
   },
   {
     name = "task/sell_card", needs_run = true, expect = "sell_card", actions = { "sell_card" },
-    query = "Sell one of your jokers with sell_card. Your move: sell_card|{\"area\":\"jokers\",\"index\":1}.",
+    query = function() return "Sell one of your jokers with sell_card. Your move: "
+      .. ActionRegistry.example("sell_card", { area = "jokers", index = 1 }) .. "." end,
     setup = function(c)
       if #jokers() < 1 then spawn_joker("j_joker") end
       if #jokers() >= 1 then c.n0 = c.n0 or #jokers() end
@@ -150,6 +152,7 @@ function M.start()
   phase = "setup"
   phase_at = clk()
   report_written = false
+  run_starting = nil
   M.active = true
   if G and G.NEURO then G.NEURO.task_mode_active = true end
   trace("start: %d tasks", #M.TASKS)
@@ -186,7 +189,13 @@ local function write_report()
   trace("finish: pass=%d fail=%d", p, f)
   local lv = _G.love
   if lv and lv.filesystem and lv.filesystem.write then
-    pcall(function() lv.filesystem.createDirectory("tasks"); lv.filesystem.write("tasks/report.md", body) end)
+    local ok_write, write_err = pcall(function()
+      lv.filesystem.createDirectory("tasks")
+      assert(lv.filesystem.write("tasks/report.md", body), "write returned false")
+    end)
+    if not ok_write then
+      print("[neuro-game] small regression report write failed: " .. tostring(write_err))
+    end
   end
   print("[neuro-game] small regression check: PASS " .. p .. " / FAIL " .. f)
 end
@@ -195,7 +204,9 @@ function M.get_force()
   if not M.active or phase ~= "await" then return nil end
   local t = M.TASKS[idx]
   if not t then return nil end
-  return { query = t.query, actions = t.actions }
+  local query = t.query
+  if type(query) == "function" then query = query() end
+  return { query = query, actions = t.actions }
 end
 
 function M.on_action(name, ok)
@@ -239,8 +250,8 @@ function M.tick(_)
       phase_at = now
     end
   elseif phase == "await" then
-    if now - phase_at > AWAIT_TIMEOUT then
-      record(false, "LLM did not answer in time")
+    if now - phase_at > HARNESS_PATIENCE then
+      record(false, "no matching action observed before the harness moved on")
       advance()
     end
   elseif phase == "done" then

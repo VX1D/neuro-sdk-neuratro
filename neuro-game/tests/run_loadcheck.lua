@@ -1,13 +1,5 @@
--- Load-time smoke test: require EVERY mod module under a permissive love/SMODS/G stub and
--- report any that error at require time. Byte-compilation (luajit -bl) only checks syntax;
--- this catches module-level execution errors (bad require path, nil index at load, a stripped
--- dependency) -- the same class of failure as a broken SMODS entry, but for internals.
---
--- luajit tests/run_loadcheck.lua   (exit 0 = all modules load)
 
-package.path = "./?.lua;;" .. package.path
 
--- permissive love stub: any love.<subsystem>.<fn>(...) is a no-op returning a chainable stub
 local function noop() return nil end
 local function stub_table()
   return setmetatable({}, {
@@ -36,14 +28,11 @@ _G.G = {
 _G.SMODS = { current_mod = { path = "./" }, Mods = {} }
 _G.NFS = stub_table()
 
--- discover every module: every .lua under the mod except tests/ and the SMODS entry
--- (entry installs love hooks / requires the design harness; not a plain module)
 local SKIP = {
   ["neuro-game"] = true,        -- SMODS entry chunk, not a require()-able module
   ["golden_test"] = true,       -- gitignored offline harness
 }
 
--- relies on POSIX find (fine for this Linux-only offline gate)
 local ROOTS = { "core", "context", "force", "facts", "handlers", "hud", "render", "util" }
 
 local function list_lua_modules()

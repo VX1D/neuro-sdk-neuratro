@@ -1,6 +1,14 @@
+local json = require("util.neuro_json")
+
 local function is_object_table(value)
   if type(value) ~= "table" then
     return false
+  end
+  if json.is_array(value) then
+    return false
+  end
+  if json.is_object(value) then
+    return true
   end
   for k, _ in pairs(value) do
     if type(k) ~= "string" then
@@ -13,6 +21,12 @@ end
 local function is_array_table(value)
   if type(value) ~= "table" then
     return false
+  end
+  if json.is_object(value) then
+    return false
+  end
+  if json.is_array(value) then
+    return true
   end
   local count, max = 0, 0
   for k, _ in pairs(value) do
@@ -28,6 +42,15 @@ end
 local function is_integer(value)
   return type(value) == "number" and value == math.floor(value)
     and value ~= math.huge and value ~= -math.huge
+end
+
+local function utf8_length(value)
+  local length = 0
+  for i = 1, #value do
+    local byte = value:byte(i)
+    if byte < 0x80 or byte >= 0xC0 then length = length + 1 end
+  end
+  return length
 end
 
 local function enum_contains(enum, value)
@@ -85,7 +108,6 @@ local function validate_value(schema, value, label)
         end
       end
     end
-    -- SDK says not to trust uniqueItems client-side; enforce here
     if schema.minItems and #value < schema.minItems then
       return false, label .. " must have at least " .. tostring(schema.minItems) .. " item(s)."
     end
@@ -93,12 +115,22 @@ local function validate_value(schema, value, label)
       return false, label .. " must have at most " .. tostring(schema.maxItems) .. " item(s)."
     end
     if schema.uniqueItems then
+      local item_schema = schema.items
+      local item_type = type(item_schema) == "table" and item_schema.type or nil
+      local item_is_non_scalar = item_type == "object" or item_type == "array"
+        or (not item_type and type(item_schema) == "table"
+          and (item_schema.required or item_schema.properties))
+      if item_is_non_scalar then
+        return false, label .. " uses uniqueItems with non-scalar items; this schema is unsupported."
+      end
       local seen = {}
       for i = 1, #value do
         local v = value[i]
         if type(v) ~= "table" then
           if seen[v] then return false, label .. " items must be unique (duplicate: " .. tostring(v) .. ")." end
           seen[v] = true
+        else
+          return false, label .. " uses uniqueItems with non-scalar items; this schema is unsupported."
         end
       end
     end
@@ -106,11 +138,11 @@ local function validate_value(schema, value, label)
     if type(value) ~= "string" then
       return false, label .. " must be a string."
     end
-    -- values are ASCII, so #value (byte length) equals character length
-    if schema.minLength and #value < schema.minLength then
+    local length = (schema.minLength or schema.maxLength) and utf8_length(value)
+    if schema.minLength and length < schema.minLength then
       return false, label .. " must be at least " .. tostring(schema.minLength) .. " character(s)."
     end
-    if schema.maxLength and #value > schema.maxLength then
+    if schema.maxLength and length > schema.maxLength then
       return false, label .. " must be at most " .. tostring(schema.maxLength) .. " character(s)."
     end
   elseif t == "integer" then

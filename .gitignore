@@ -1,5 +1,6 @@
 # Build artifacts
 target/
+neuro-bridge-rs/target-repro/
 __pycache__/
 *.pyc
 
@@ -13,11 +14,14 @@ game_state.json
 
 # Logs
 *.log
+neuro-game/logs/
 
-# Environment / secrets / local config (neuro.conf.example ships; the real file does not)
+# Local config / overrides
 .env
 neuro.conf
 neuro_tuning.env
+# SMODS mod-config, written back into the tree by the game (Mods/neuro-game is a symlink here)
+neuro-game/config.lua
 
 # Test-only wrappers (not shipped)
 opencode-wrapper.py
@@ -61,9 +65,16 @@ nul
 # Local dev notes / audit reports (not shipped)
 /dev/
 neuro-game/dev/
+# Offline rasteriser output (scripts/raster.lua): draw-op logs and PNG contact sheets.
+# Names are derived from the request so re-running overwrites instead of piling up.
+neuro-game/.raster/
+
+# Local snapshot copies of the mod tree (not shipped)
+neuro-game/.local-backups/
 # Dev key-list scratch files (joker-key inventories, read by no code)
 neuro-game/basekeys.txt
 neuro-game/refkeys.txt
 
 # luac -p byproduct
 luac.out
+.local-backups-archive/

@@ -1,36 +1,57 @@
 local M = {}
+local BossModel = require("facts.boss.model")
 
-function M.debuffed_indices(cards)
+function M.count(cards)
+  if type(cards) ~= "table" then return 0 end
+  local n = 0
+  for _, c in ipairs(cards) do
+    if type(c) == "table" and c.debuff then n = n + 1 end
+  end
+  return n
+end
+
+local function blind_is(b, key)
+  if type(b) ~= "table" then return false end
+  if b.key == key then return true end
+  local center = b.config and b.config.blind
+  if type(center) == "table" and center.key == key then return true end
+  return b.name == BossModel.boss_name(key)
+end
+if _G.NEURO_TEST then
+  M.blind_is = blind_is
+end
+
+function M.pillar_active()
+  local b = G and G.GAME and G.GAME.blind
+  return not not (type(b) == "table" and not b.disabled and blind_is(b, "bl_pillar"))
+end
+
+function M.pillar_used_indices(cards)
   local out, n = {}, 0
-  if type(cards) == "table" then
+  if type(cards) == "table" and M.pillar_active() then
     for i, c in ipairs(cards) do
-      if type(c) == "table" and c.debuff then out[i] = true; n = n + 1 end
+      if type(c) == "table" and c.debuff and type(c.ability) == "table" and c.ability.played_this_ante then
+        out[i] = true; n = n + 1
+      end
     end
   end
   return out, n
 end
 
-function M.count(cards)
-  local _, n = M.debuffed_indices(cards)
+local function pillar_used_count(cards)
+  local _, n = M.pillar_used_indices(cards)
   return n
 end
 
-function M.blind_debuff(blind)
-  return (type(blind) == "table" and type(blind.debuff) == "table") and blind.debuff or {}
+function M.played_this_ante_count()
+  local n = 0
+  local cards = G and G.playing_cards
+  if type(cards) ~= "table" then return 0 end
+  for _, c in ipairs(cards) do
+    if type(c) == "table" and type(c.ability) == "table" and c.ability.played_this_ante then n = n + 1 end
+  end
+  return n
 end
-
-local BOSS_NAMES = {
-  bl_ox = "The Ox", bl_eye = "The Eye", bl_mouth = "The Mouth",
-  bl_pillar = "The Pillar", bl_flint = "The Flint",
-  bl_serpent = "The Serpent", bl_arm = "The Arm",
-  bl_final_leaf = "Verdant Leaf", bl_final_bell = "Cerulean Bell",
-}
-local function blind_is(b, key)
-  if type(b) ~= "table" then return false end
-  if b.key == key then return true end
-  return b.name == BOSS_NAMES[key]
-end
-M.blind_is = blind_is
 
 local function loc_hand(name)
   if not name then return name end
@@ -41,8 +62,8 @@ local function loc_hand(name)
   end
   return name
 end
+M.loc_hand = loc_hand
 
--- substitute #n# on fallback paths that bypass localize; a raw #1# must never ship
 local function subst_vars(txt, vars)
   if type(txt) ~= "string" or not txt:find("#%d+#") then return txt end
   return (txt:gsub("#(%d+)#", function(n)
@@ -54,7 +75,7 @@ local function subst_vars(txt, vars)
 end
 
 function M.boss_debuff_text(blind, vars)
-  if type(blind) ~= "table" then return "" end
+  if type(blind) ~= "table" or blind.disabled then return "" end
   vars = vars or blind.vars
   if type(blind.get_loc_debuff_text) == "function" then
     local ok, v = pcall(blind.get_loc_debuff_text, blind)
@@ -85,14 +106,7 @@ end
 function M.most_played_hand()
   local mp = G and G.GAME and G.GAME.current_round and G.GAME.current_round.most_played_poker_hand
   if mp and mp ~= "" then return tostring(mp) end
-  local best, best_n
-  if G and G.GAME and type(G.GAME.hands) == "table" then
-    for name, hd in pairs(G.GAME.hands) do
-      local n = type(hd) == "table" and tonumber(hd.played) or nil
-      if n and n > 0 and (not best_n or n > best_n) then best, best_n = name, n end
-    end
-  end
-  return best
+  return nil
 end
 
 function M.blind_effect_text(key, blind_def)
@@ -105,7 +119,7 @@ function M.blind_effect_text(key, blind_def)
   end
   local set = blind_def.set or "Blind"
   if type(blind_def.loc_vars) == "function" then
-    local ok, res = pcall(blind_def.loc_vars, blind_def)
+    local ok, res = pcall(blind_def.loc_vars, blind_def, {})
     if ok and type(res) == "table" then
       vars = res.vars or vars
       key = res.key or key
@@ -113,11 +127,14 @@ function M.blind_effect_text(key, blind_def)
     end
   end
   local txt = raw_desc(set, key or blind_def.key, vars)
-  if txt then return txt end
-  return M.boss_debuff_text(blind_def, vars)
+  if not txt then txt = M.boss_debuff_text(blind_def, vars) end
+  if txt and txt ~= "" and (key == "bl_wheel" or blind_is(blind_def, "bl_wheel")) and not txt:find("^%s*%d") then
+    local p = tonumber(G and G.GAME and G.GAME.probabilities and G.GAME.probabilities.normal) or 1
+    txt = tostring(p) .. txt
+  end
+  return txt or ""
 end
 
--- var order from Tag:get_uibox_table (tag.lua:570-585); also handles not-yet-created tags
 local function tag_vars(def, tag)
   local name = (tag and tag.name) or (def and def.name) or ""
   local key = (tag and tag.key) or (def and def.key)
@@ -146,10 +163,18 @@ end
 function M.tag_effect_text(key, tag)
   local def = G and G.P_TAGS and key and G.P_TAGS[key]
   local vars = tag_vars(def, tag)
-  local txt = raw_desc("Tag", key, vars)
+  local set = "Tag"
+  if def and type(def.loc_vars) == "function" then
+    local ok, res = pcall(def.loc_vars, def, {}, tag)
+    if ok and type(res) == "table" then
+      vars = res.vars or vars
+      key = res.key or key
+      set = res.set or set
+    end
+  end
+  local txt = raw_desc(set, key, vars)
   if txt then return txt end
   if def then
-    -- substitute #n# BEFORE safe_description, else its placeholder pass blanks every var to ?
     local function fallback_text(loc_txt)
       if type(loc_txt) ~= "table" then return nil end
       local raw = loc_txt.description or loc_txt.text or loc_txt.name
@@ -164,7 +189,7 @@ function M.tag_effect_text(key, tag)
     if d then
       local ok_u, Utils = pcall(require, "util.utils")
       if ok_u and Utils and Utils.safe_description then
-        d = Utils.safe_description(d, nil, 120)
+        d = Utils.safe_description(d)
       end
       if d and d ~= "" then return d end
     end
@@ -173,36 +198,48 @@ function M.tag_effect_text(key, tag)
 end
 
 local VOUCHER_DISP_VARS = {
-  ["Tarot Merchant"] = true, ["Tarot Tycoon"] = true,
-  ["Planet Merchant"] = true, ["Planet Tycoon"] = true,
+  v_tarot_merchant = true, v_tarot_tycoon = true,
+  v_planet_merchant = true, v_planet_tycoon = true,
 }
+local VOUCHER_FIFTH = { v_seed_money = true, v_money_tree = true }
 function M.voucher_effect_text(key)
   local center = G and G.P_CENTERS and key and G.P_CENTERS[key]
   if type(center) ~= "table" then return "" end
   local cfg = center.config or {}
   local vars
-  local name = center.name or ""
-  if VOUCHER_DISP_VARS[name] then vars = { cfg.extra_disp }
-  elseif name == "Seed Money" or name == "Money Tree" then
-    vars = { tonumber(cfg.extra) and cfg.extra / 5 or cfg.extra }
-  else vars = { cfg.extra } end
-  local txt = raw_desc("Voucher", center.key or key, vars)
+  local ckey = center.key or key
+  local set = "Voucher"
+  if type(center.loc_vars) == "function" then
+    local ok, res = pcall(center.loc_vars, center, {})
+    if ok and type(res) == "table" then
+      vars = res.vars
+      ckey = res.key or ckey
+      set = res.set or set
+    end
+  end
+  if not vars then
+    if VOUCHER_DISP_VARS[ckey] then vars = { cfg.extra_disp }
+    elseif VOUCHER_FIFTH[ckey] then
+      vars = { tonumber(cfg.extra) and cfg.extra / 5 or cfg.extra }
+    else vars = { cfg.extra } end
+  end
+  local txt = raw_desc(set, ckey, vars)
   if txt then return txt end
   return ""
 end
 
--- engine scoring set is a flat list OR a nested array-of-groups (misc_functions.lua:408)
+local function visit_leaf(c, fn)
+  if type(c) ~= "table" then return end
+  if type(c[1]) == "table" then
+    for _, inner in ipairs(c) do visit_leaf(inner, fn) end
+  else
+    fn(c)
+  end
+end
+
 function M.for_each_leaf_card(set, fn)
   if type(set) ~= "table" then return end
-  local function visit(c)
-    if type(c) ~= "table" then return end
-    if type(c[1]) == "table" then
-      for _, inner in ipairs(c) do visit(inner) end
-    else
-      fn(c)
-    end
-  end
-  for _, c in ipairs(set) do visit(c) end
+  for _, c in ipairs(set) do visit_leaf(c, fn) end
 end
 
 function M.all_debuffed(set)
@@ -226,26 +263,36 @@ function M.has_hand_restriction()
   return false
 end
 
--- check=true (cardarea.lua:193) guards Eye/Mouth state writes so this has no side effects
 function M.boss_would_debuff(played_cards, handname)
   local b = G and G.GAME and G.GAME.blind
-  if not (type(b) == "table" and not b.disabled and type(b.debuff_hand) == "function") then return false end
-  if type(played_cards) ~= "table" or #played_cards == 0 then return false end
+  if not (type(b) == "table" and not b.disabled) then return false, true end
+  if type(played_cards) ~= "table" or #played_cards == 0 then return false, true end
   local ph
-  pcall(function()
+  local ok_info = pcall(function()
     if G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
       local text, _, p = G.FUNCS.get_poker_hand_info(played_cards)
       ph = p
       if not handname or handname == "" then handname = text end
     end
   end)
-  if type(ph) ~= "table" or type(handname) ~= "string" or handname == "" then return false end
+  if not ok_info then require("util.metrics").incr("boss_debuff_probe_failed") end
+  if type(handname) ~= "string" or handname == "" then return false, ok_info end
+  -- The engine's own static branches (dump blind.lua:571-590: debuff.hand, The Eye's hands[],
+  -- The Mouth's only_hand) decide this without running debuff_hand. Demanding a live method here
+  -- left the Ready list silent on a hand that scores 0 while the Close list warned about it.
+  if M.boss_blocks_handname(handname) then return true, true end
+  if type(b.debuff_hand) ~= "function" or type(ph) ~= "table" then return false, ok_info end
   local blocked = false
-  pcall(function() blocked = b:debuff_hand(played_cards, ph, handname, true) and true or false end)
-  return blocked
+  local had_triggered = rawget(b, "triggered")
+  local ok = pcall(function() blocked = b:debuff_hand(played_cards, ph, handname, true) and true or false end)
+  b.triggered = had_triggered
+  if not ok then
+    require("util.metrics").incr("boss_debuff_probe_failed")
+    return false, false
+  end
+  return blocked, ok_info
 end
 
--- size rules not checked here: they constrain card count, not hand type
 function M.boss_blocks_handname(handname)
   local b = G and G.GAME and G.GAME.blind
   if not (type(b) == "table" and not b.disabled) or type(handname) ~= "string" then return false end
@@ -256,36 +303,6 @@ function M.boss_blocks_handname(handname)
   return false
 end
 
-function M.boss_hand_restriction_note()
-  local b = G and G.GAME and G.GAME.blind
-  if not (type(b) == "table" and not b.disabled) then return nil end
-  if blind_is(b, "bl_mouth") then
-    if b.only_hand then
-      return "Boss (The Mouth): only " .. loc_hand(b.only_hand)
-        .. " scores the rest of this round; every other hand type is debuffed to 0."
-    end
-    return "Boss (The Mouth): the first hand type you play locks every later hand this round to that same type (others score 0)."
-  elseif blind_is(b, "bl_eye") then
-    local used = {}
-    if type(b.hands) == "table" then
-      for hn, v in pairs(b.hands) do if v then used[#used + 1] = loc_hand(hn) end end
-    end
-    table.sort(used)
-    local note = "Boss (The Eye): each hand type scores only once this round; a repeated type is debuffed to 0."
-    if #used > 0 then note = note .. " Already used (now score 0): " .. table.concat(used, ", ") .. "." end
-    return note
-  end
-  local d = b.debuff
-  if type(d) == "table" then
-    local ge = tonumber(d.h_size_ge)
-    if ge and ge > 0 then return string.format("Boss: each hand must play at least %d cards or it is debuffed to 0.", ge) end
-    local le = tonumber(d.h_size_le)
-    if le and le > 0 then return string.format("Boss: each hand must play at most %d cards or it is debuffed to 0.", le) end
-  end
-  return nil
-end
-
--- Cerulean Bell's forced highlight survives unhighlight_all (cardarea.lua:233), so it's always in the played/discarded hand
 function M.forced_selection_index()
   if not (G and G.hand and type(G.hand.cards) == "table") then return nil end
   for i, c in ipairs(G.hand.cards) do
@@ -294,32 +311,45 @@ function M.forced_selection_index()
   return nil
 end
 
-function M.boss_play_note()
+function M.boss_draws_facedown()
   local b = G and G.GAME and G.GAME.blind
-  if not (type(b) == "table" and not b.disabled) then return nil end
-  if blind_is(b, "bl_serpent") then
-    return "Boss (The Serpent): after each play or discard you draw at most 3 cards (capped by remaining deck; hand size is ignored)."
-  elseif blind_is(b, "bl_arm") then
-    return "Boss (The Arm): each hand you play permanently lowers that hand type's level by 1, but never below level 1 (the Ready levels shown drop as you replay a type)."
-  elseif blind_is(b, "bl_final_leaf") then
-    return "Boss (Verdant Leaf): every card is debuffed (scores 0) until you SELL a joker -- sell one to lift it."
-  elseif blind_is(b, "bl_final_bell") then
-    local i = M.forced_selection_index()
-    if i then
-      return string.format("Boss (Cerulean Bell): card %d is force-selected (LOCK) and will always be part of the hand you play or discard -- include index %d in your selection.", i, i)
-    end
-    return "Boss (Cerulean Bell): one card is force-selected each draw (LOCK) and must be part of every hand you play or discard."
+  if not (type(b) == "table" and not b.disabled) then return false end
+  local obj = b.config and b.config.blind
+  if type(obj) == "table" and type(obj.stay_flipped) == "function" then return true end
+  if blind_is(b, "bl_wheel") or blind_is(b, "bl_mark") then return true end
+  if blind_is(b, "bl_fish") then
+    local round = G and G.GAME and G.GAME.current_round
+    return (tonumber(round and round.hands_left) or 0) > 0
   end
-  return nil
+  if blind_is(b, "bl_house") then return false end
+  return false
 end
 
-function M.flint_active()
+function M.fish_discards_faceup()
   local b = G and G.GAME and G.GAME.blind
-  return not not (b and not b.disabled and b.in_blind and blind_is(b, "bl_flint"))
+  return not not (type(b) == "table" and not b.disabled and blind_is(b, "bl_fish"))
 end
+
+function M.owns_joker(name)
+  local fj = rawget(_G, "find_joker")
+  if type(fj) ~= "function" then return false end
+  local ok, res = pcall(fj, name)
+  return ok and type(res) == "table" and next(res) ~= nil
+end
+
+local function active_boss_is(key)
+  local b = G and G.GAME and G.GAME.blind
+  return not not (b and not b.disabled and b.in_blind and blind_is(b, key))
+end
+
+function M.flint_active() return active_boss_is("bl_flint") end
+function M.tooth_active() return active_boss_is("bl_tooth") end
+function M.ox_active() return active_boss_is("bl_ox") end
 
 function M.flint_halve(chips, mult)
   return math.max(math.floor((chips or 0) * 0.5 + 0.5), 0), math.max(math.floor((mult or 0) * 0.5 + 0.5), 1)
 end
+
+if rawget(_G, "NEURO_TEST") then M._test = { pillar_used_count = pillar_used_count } end
 
 return M

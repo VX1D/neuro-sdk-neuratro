@@ -15,7 +15,6 @@ local function fresh_state()
 end
 S = fresh_state()
 
--- stat/unlock/save suppression: sandbox run must leave zero trace on the profile (save_run also honors G.F_NO_SAVING)
 local GUARD_NOOP = {
   "inc_career_stat", "check_for_unlock", "unlock_card", "win_game",
   "save_run", "save_with_action",
@@ -39,14 +38,12 @@ local function install_guards()
     if type(G.SETTINGS) == "table" and S.opts.gamespeed then
       push_restore(G.SETTINGS, "GAMESPEED", S.opts.gamespeed)
     end
-    -- llm_paused gates dispatcher intake, stall watchdog and force sending so the live loop can't drive the sandbox
     if type(G.NEURO) == "table" then
       push_restore(G.NEURO, "llm_paused", true)
     end
   end
 end
 
--- trace file in LOVE save dir, open/append/close per line so a crash loses nothing
 local function trace(fmt, ...)
   if S.opts.trace == false then return end
   local lv = rawget(_G, "love")
@@ -60,6 +57,17 @@ local function trace(fmt, ...)
   end)
 end
 M.trace = trace
+
+local function fail_log(line, overwrite)
+  local lv = rawget(_G, "love")
+  if not (lv and lv.filesystem) then return end
+  pcall(function()
+    lv.filesystem.createDirectory("selftest")
+    if overwrite or not lv.filesystem.append("selftest/failures.log", line .. "\n") then
+      lv.filesystem.write("selftest/failures.log", line .. "\n")
+    end
+  end)
+end
 
 local function restore_all()
   for i = #S.restores, 1, -1 do
@@ -83,23 +91,14 @@ local function record(name, ok, detail)
   S.last_result = (ok and "PASS " or "FAIL ") .. tostring(name)
   set_status(S.last_result)
   trace("%s %s -- %s", ok and "PASS" or "FAIL", tostring(name), tostring(detail or ""))
+  if not ok then
+    fail_log(string.format("%3d/%d  FAIL  %s  (%.2fs)  -- %s",
+      S.idx, #S.cases, tostring(name), S.clock - S.case_t0, tostring(detail or "")))
+  end
 end
 
--- permanent cosmetic events (game.lua:2381) are blocking=false + blockable=false and never complete, so they don't count as engine activity
 function M.engine_settled()
-  local em = G and G.E_MANAGER
-  if not (em and em.queues) then return true end
-  for k, q in pairs(em.queues) do
-    if k ~= "unlock" and type(q) == "table" then
-      for i = 1, #q do
-        local e = q[i]
-        if not (type(e) == "table" and e.blocking == false and e.blockable == false) then
-          return false
-        end
-      end
-    end
-  end
-  return true
+  return require("util.utils").engine_settled()
 end
 
 local function mod_dir()
@@ -133,7 +132,6 @@ local function write_report()
   if S.opts.report == false then return end
   local body = M.render_report(S.results)
   local fname = os.date("%Y-%m-%d") .. "-report.md"
-  -- prefer LOVE save storage so a normal in-game run doesn't write into the source checkout
   local lv = rawget(_G, "love")
   if lv and lv.filesystem then
     local ok = pcall(function()
@@ -145,7 +143,6 @@ local function write_report()
       return
     end
   end
-  -- offline harness (no love): fall back to the gitignored dev/selftest tree
   local dir = mod_dir() .. "/dev/selftest"
   local path = dir .. "/" .. fname
   local f = io.open(path, "w")
@@ -165,7 +162,7 @@ local function finish(note)
   trace("finish: %s  pass=%d fail=%d", tostring(note or "ok"), S.pass, S.fail)
   restore_all()
   pcall(write_report)
-  -- sandbox=false mutates the live run; restore_all re-enables saving, so leave the trashed run or autosave persists corruption
+  fail_log(string.format("=== DONE: %d pass, %d fail  (report: %s) ===", S.pass, S.fail, tostring(S.report_path or "n/a")))
   if G and G.FUNCS and type(G.FUNCS.go_to_menu) == "function" then
     pcall(G.FUNCS.go_to_menu)
   end
@@ -177,9 +174,62 @@ end
 
 local function end_case()
   local c = S.cases[S.idx]
-  if c and c.teardown then pcall(c.teardown, S.ctx) end
-  if S.reset then pcall(S.reset, S.ctx) end
+  local cleanup_errors = {}
+  if c and c.teardown then
+    local ok, err = pcall(c.teardown, S.ctx)
+    if not ok then cleanup_errors[#cleanup_errors + 1] = "teardown error: " .. tostring(err) end
+  end
+  if S.reset then
+    local ok, err = pcall(S.reset, S.ctx)
+    if not ok then cleanup_errors[#cleanup_errors + 1] = "reset error: " .. tostring(err) end
+  end
+  if #cleanup_errors > 0 then
+    record((c and c.name or "selftest") .. "/cleanup", false, table.concat(cleanup_errors, "; "))
+  end
+  S.ctx = nil
   S.phase = "case_next"
+end
+
+local function describe_error(err)
+  if type(err) == "string" then return err end
+  if type(err) ~= "table" then return tostring(err) end
+  if err.__action_error and err.reason_code then
+    local extra = ""
+    if err.state_mutated then extra = " [state mutated]" end
+    return string.format("%s: %s%s", tostring(err.reason_code),
+      tostring(err.message), extra)
+  end
+  if type(err.message) == "string" then return err.message end
+  if type(err.reason) == "string" then return err.reason end
+  local keys = {}
+  for k, v in pairs(err) do
+    if type(v) ~= "table" and type(v) ~= "function" then
+      keys[#keys + 1] = tostring(k) .. "=" .. tostring(v)
+    else
+      keys[#keys + 1] = tostring(k) .. "=<" .. type(v) .. ">"
+    end
+    if #keys >= 8 then break end
+  end
+  table.sort(keys)
+  if #keys == 0 then return "empty table error" end
+  return "table error {" .. table.concat(keys, ", ") .. "}"
+end
+
+local function traced_pcall(fn, arg)
+  local trace_text
+  local ok, err = xpcall(function() return fn(arg) end, function(e)
+    if type(e) == "string" and debug and debug.traceback then
+      trace_text = debug.traceback(e, 2)
+    end
+    return e
+  end)
+  if ok then return true end
+  local detail = describe_error(err)
+  if trace_text then
+    local head = trace_text:match("([^\n]*\n[^\n]*\n[^\n]*)") or trace_text
+    detail = detail .. " | " .. head:gsub("%s+", " ")
+  end
+  return false, detail
 end
 
 local function fail_case(detail)
@@ -201,9 +251,9 @@ local function begin_case()
   set_status("running: " .. tostring(c.name))
   trace("case %d/%d begin: %s", S.idx, #S.cases, tostring(c.name))
   if c.setup then
-    local ok, err = pcall(c.setup, S.ctx)
+    local ok, err = traced_pcall(c.setup, S.ctx)
     if not ok then
-      fail_case("setup error: " .. tostring(err))
+      fail_case("setup error: " .. err)
       return
     end
   end
@@ -255,9 +305,9 @@ local function step()
     if S.clock < S.act_at then return end
     local c = S.cases[S.idx]
     if c.act then
-      local ok, err = pcall(c.act, S.ctx)
+      local ok, err = traced_pcall(c.act, S.ctx)
       if not ok then
-        fail_case("act error: " .. tostring(err))
+        fail_case("act error: " .. err)
         return
       end
     end
@@ -327,7 +377,8 @@ function M.start(opts)
   if type(S.cases) ~= "table" or #S.cases == 0 then return false, "no cases to run" end
   do
     local ok_de, Config = pcall(require, "core.config")
-    local filt = ok_de and Config.get("NEURO_SELFTEST_FILTER") or ""
+    local filt = os.getenv("NEURO_SELFTEST_FILTER")
+    if filt == nil or filt == "" then filt = ok_de and Config.get("NEURO_SELFTEST_FILTER") or "" end
     if filt ~= "" then
       local pats = {}
       for p in tostring(filt):gmatch("[^,]+") do pats[#pats + 1] = p end
@@ -340,7 +391,6 @@ function M.start(opts)
       }
       local total0, kept, present = #S.cases, {}, {}
       for _, c in ipairs(S.cases) do present[c.name] = true end
-      -- rename guard: a scaffold that no longer resolves would silently break state threading
       for name in pairs(SCAFFOLD) do
         if not present[name] then trace("filter WARNING: scaffold case '%s' not found (state threading may break)", name) end
       end
@@ -371,10 +421,10 @@ function M.start(opts)
   S.opts.gamespeed = opts.gamespeed or (sandbox and 4 or nil)
   install_guards()
   S.running = true
-  -- mirrored to G.NEURO so the orchestrator can check selftest_active without requiring this module
   if G and G.NEURO then G.NEURO.selftest_active = true end
   trace("start: %d cases, sandbox=%s, state=%s", #S.cases, tostring(sandbox),
     tostring(G and G.STATE))
+  fail_log(string.format("=== self-test started %s: %d cases ===", os.date("%Y-%m-%d %H:%M:%S"), #S.cases), true)
   if sandbox then
     local ok_run, err = pcall(function()
       if G.OVERLAY_MENU and G.FUNCS.exit_overlay_menu then G.FUNCS.exit_overlay_menu() end
@@ -400,6 +450,7 @@ function M.tick(dt)
   S.clock = S.clock + (tonumber(dt) or 0)
   local ok, err = pcall(step)
   if not ok then
+    if S.ctx then end_case() end
     record("selftest/internal", false, tostring(err))
     finish()
   end
@@ -407,7 +458,9 @@ end
 
 function M.abort()
   if not S.running then return end
-  record("selftest/abort", false, string.format("aborted at case %d/%d", S.idx, #S.cases))
+  local detail = string.format("aborted at case %d/%d", S.idx, #S.cases)
+  if S.ctx then end_case() end
+  record("selftest/abort", false, detail)
   finish()
 end
 
@@ -425,6 +478,36 @@ end
 
 function M.report_path()
   return S.report_path
+end
+
+function M.draw_banner()
+  local lv = rawget(_G, "love")
+  if not (lv and lv.graphics) then return end
+  local g = lv.graphics
+  local sw = g.getWidth()
+  if S.running then
+    g.setColor(0, 0, 0, 0.7)
+    g.rectangle("fill", 0, 0, sw, 22)
+    g.setColor(1, 0.85, 0.3, 1)
+    g.print(string.format("SELF-TEST running  %d/%d  (pass %d / fail %d)  -- do not close",
+      math.min(S.idx, #S.cases), #S.cases, S.pass, S.fail), 12, 5)
+    return
+  end
+  if S.phase ~= "done" then return end
+  local ok = (S.fail == 0)
+  g.setColor(ok and 0.05 or 0.32, ok and 0.32 or 0.03, 0.05, 0.95)
+  g.rectangle("fill", 0, 0, sw, 70)
+  g.setColor(ok and 0.35 or 1.0, ok and 1.0 or 0.5, ok and 0.45 or 0.3, 1)
+  g.rectangle("fill", 0, 70, sw, 4)
+  g.setColor(1, 1, 1, 1)
+  g.push()
+  g.translate(16, 12)
+  g.scale(2, 2)
+  g.print(string.format("SELF-TEST DONE   %d PASS / %d FAIL", S.pass, S.fail), 0, 0)
+  g.pop()
+  g.setColor(ok and 0.7 or 1, 1, ok and 0.8 or 0.6, 1)
+  g.print(ok and "ALL PASS -- SAFE TO CLOSE THE APP"
+    or "FAILURES -- see selftest/failures.log -- SAFE TO CLOSE THE APP", 18, 48)
 end
 
 return M

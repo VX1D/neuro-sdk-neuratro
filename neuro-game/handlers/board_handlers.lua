@@ -1,8 +1,10 @@
 local Actions = require("core.actions")
 local Utils = require("util.utils")
 local CardArea = require("facts.card_area_util")
+local CardUtil = require("facts.card_util")
+local GameActions = require("core.game_actions")
 local safe_name_or = Utils.safe_name_or
-local mock_UIBox = CardArea.mock_UIBox
+local mock_UIBox = GameActions.mock_UIBox
 
 local function handle_select_blind(data)
   local blind = data.blind
@@ -17,6 +19,13 @@ local function handle_select_blind(data)
 
   if current and blind ~= current then
     return nil, string.format("'%s' is not selectable right now. Currently selectable: %s — use select_blind with blind='%s'.", tostring(blind), current, current)
+  end
+
+  if not G.blind_select then
+    return nil, "The blind selection screen is not open."
+  end
+  if not (G.FUNCS and type(G.FUNCS.select_blind) == "function") then
+    return nil, "The blind selection engine action is not available."
   end
 
   if blind == "small" then
@@ -90,7 +99,7 @@ local function handle_set_joker_order(data)
   end
   return function()
     local card = G.jokers.cards[from_idx]
-    local card_name = safe_name_or(card)
+    local card_name = CardUtil.is_face_down(card) and "face-down joker" or safe_name_or(card)
     table.remove(G.jokers.cards, from_idx)
     table.insert(G.jokers.cards, to_idx, card)
     for _, c in ipairs(G.jokers.cards) do if c.states and c.states.drag then c.states.drag.is = false end end
@@ -102,27 +111,15 @@ local function handle_set_joker_order(data)
 end
 
 local function handle_skip_blind(_data)
-  if not (G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states) then
-    return nil, "Blind selection is not ready yet."
+  local blocked = Actions.blind_skip_blocker()
+  if blocked then
+    return nil, blocked
   end
-
   local on_deck = Actions.get_selectable_blind_key()
-
-  if on_deck == "Boss" then
-    return nil, "Skipping boss blind is not supported. Select the boss blind instead."
-  end
-  if on_deck ~= "Small" and on_deck ~= "Big" then
-    return nil, "No skippable blind is currently selectable."
-  end
 
   local opt = G.blind_select_opts and G.blind_select_opts[string.lower(on_deck)]
   if not (opt and type(opt.get_UIE_by_ID) == "function") then
     return nil, "Blind UI option is unavailable; cannot skip right now."
-  end
-
-  local tag = opt:get_UIE_by_ID("tag_container")
-  if not (tag and tag.config and tag.config.ref_table) then
-    return nil, "Skip reward tag is unavailable; cannot skip right now."
   end
 
   return function()

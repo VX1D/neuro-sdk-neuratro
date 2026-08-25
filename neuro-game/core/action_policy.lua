@@ -1,19 +1,27 @@
-local INFO_ACTIONS = require("core.actions").INFO_ACTIONS
 local NON_PROGRESS = {
-  set_joker_order = true, copy_seed = true,
+  set_joker_order = true, set_joker_intents = true, set_plan = true, copy_seed = true,
   change_selected_back = true, change_stake = true, toggle_seeded_run = true,
-  paste_seed = true, change_viewed_back = true, change_viewed_collab = true,
-  sort_hand_suit = true, sort_hand_value = true,
+  paste_seed = true,
 }
-for name in pairs(INFO_ACTIONS) do NON_PROGRESS[name] = true end
+
+local FORFEIT = {
+  skip_booster = true,
+  skip_blind = true,
+  toggle_shop = true,
+}
+
+local SETTLING_NONPROGRESS = {
+  sell_card = true,
+}
 
 return {
   NON_PROGRESS = NON_PROGRESS,
+  FORFEIT = FORFEIT,
+  SETTLING_NONPROGRESS = SETTLING_NONPROGRESS,
   RIDE_ALONG = {
     set_joker_order = true,
-    simulate_hand = true,
-    sort_hand_suit = true,
-    sort_hand_value = true,
+    set_joker_intents = true,
+    set_plan = true,
     change_selected_back = true,
     change_stake = true,
     copy_seed = true,

@@ -1,0 +1,393 @@
+# Work receipts, one line per run label in tests/run_all.sh:
+#   <label> <TAB> <minimum checks the run must show> <TAB> <receipt pattern (ERE), optional>
+#
+# WHY: a run that executed no checks used to pass. Replacing a whole test file with a comment gave
+# `ok joker_text_once` with an empty summary and ALL GREEN; a faked summary plus a bare os.exit()
+# gave `ok wire_notation ==== wire-notation: 0/0 PASS, 0 FAIL ====` and the same green. The skip
+# ledger is opt-in, so a test that simply does nothing files no skip and is invisible.
+#
+# The minimum is 90% of what that run showed when this file was generated -- a floor, not a target,
+# so adding checks needs no edit here and removing more than a tenth of them does.
+#
+# The receipt is a line only a run that reached its end prints. Where it carries a number (states
+# rendered, files scanned, probes run, exports scanned) that number IS the count of work, which is
+# how the scanners that print no PASS/FAIL lines are floored on their own volume rather than given a
+# free pass for having an empty summary. The eight runs that used to report no count of any kind --
+# gameover_synth, json_wire, protocol, force_machine, tx_cache, reset, framing, schema_unique -- now
+# print a <TAG>_CHECKS= total counted where each claim is evaluated, and are floored on that instead
+# of on their printed line count, which a file gutted to bare print() calls reproduced exactly.
+#
+# The fourth field is the number of checks the run showed when this floor was recorded, and it is
+# what makes a SHRINKING floor visible. A regeneration that sees a smaller count now
+# refuses: it keeps the old floor and the old count, so the next gate run fails, unless the label is
+# named in CENSUS_DROP_OK -- and the accepted loss then reads here as 81 -> 4. Regeneration never
+# lowers a floor for any other reason either, so a floor raised by hand stays raised.
+#
+# Regenerate:  WRITE_CHECK_CENSUS=1 bash tests/run_all.sh && mv tests/check_census.txt.new tests/check_census.txt
+
+loadcheck	120	loadcheck: [0-9]+ modules	134
+gameplay_journal	43		48
+decision_evidence	27		30
+joker_observe	17		19
+directional	7		8
+agnostic_bound	6		7
+config	42		47
+render_ctx	59	render_ctx: [0-9]+ checks	66
+shop_rows	56		63
+hud_corridor	8		9
+motion_prims	35		39
+buy_polarity	17		19
+hud_surfaces	18		21
+login_anim	6	login-anim: [0-9]+ phase draws	7
+draw_exec	49	draw_exec: [0-9]+ checks	55
+dev_scenes	1089		1211
+dev_isolate	20		23
+raster	259		288
+raster_pack	31		35
+raster_packfin	3		4
+pack_episode	20		23
+raster_x	18		20
+raster_motion	51		57
+raster_anchor	45		50
+card_prop	113		126
+badge_chip	105		117
+draw_budget	28		32
+text_batch	8		9
+text_block	6		7
+ornament_mesh	21		24
+divider_ogive	7		8
+canvas_bake	44		49
+persona_hand	11		13
+hand_order	6		7
+hud_econ_cache	9		11
+panel_ring	62		69
+scallop_tan	5		6
+hot_reload	44		49
+pack_claim	28		32
+acquire_booster	31		35
+acquire_atlas	45		50
+acquire_timer	364		405
+acquire_scale	11		13
+acquire_sticker	14		16
+acquire_sprite	65		73
+pack_geom	283		315
+pack_stdhero	13		15
+acquire_geom	296		329
+acquire_morph	86		96
+showcase_corr	16		18
+mini_quad	20		23
+acquire_layout	1157		1286
+acquire_access	49		55
+acquire_pcall	20		23
+use_card_rcpt	31		35
+acquire_anim	15		17
+voucher_show	68		76
+voucher_tray	11		13
+acquire_verbs	84		94
+toast_countdown	39		44
+edition_shader	63		70
+deadlock	105	Results: [0-9]+ PASS	117
+gameover_synth	14	GAMEOVER_SYNTH_CHECKS=[0-9]+	16
+roundtrip	16744	force-roundtrip: [0-9]+ probes	18605
+staging	11	staging-roundtrip: [0-9]+/[0-9]+ cases	13
+staging_repl	6		7
+io_failure	1		2
+inbox_rot	8		9
+inbox_malformed	17		19
+target_name	9		10
+glow_timing	129		144
+glow_band	17		19
+glow_pool	26		29
+event_flags	18		21
+engine_check	120	engine-check: [0-9]+ files	134
+gate_clocks	117	gate-clock-check: [0-9]+ files	131
+gate_clock_ct	130		145
+clock_stalls	38		43
+clock_carry_int	2		3
+paused_overlay	6		7
+blind_juice	3		4
+anim_settle	36		40
+gfx_drain	20		23
+engine_intf	56		63
+palette_ctr	90		100
+buy_clock	18		20
+fuzz	3600	force-fuzz: [0-9]+ iters	4000
+anti_regress	821		913
+rules_scope	49		55
+ui_text_memo	13		15
+carousel_memo	5		6
+carousel_phase	13		15
+ui_reaper	9		10
+json_wire	48	JSON_CHECKS=[0-9]+	54
+protocol	27	PROTOCOL_CHECKS=[0-9]+	30
+wire_envelope	45		51
+append_idem	10		12
+bridge_reset	112		125
+bridge_wire	61	[0-9]+ passed	68
+force_machine	24	FORCE_MACHINE_CHECKS=[0-9]+	27
+wire_rewrite	14		16
+force_overlap	5		6
+torn_tier	5		6
+no_name	6		7
+stall_sig	2		3
+liveness_esc	41		46
+wire_guard	44		49
+tx_settle	18		20
+unmodelled	58		65
+deliv_bound	6		7
+decision_delta	55		62
+context_lifetime	25		28
+reg_gate	2		3
+confirm_rb	9		11
+resv_owner	2		3
+tport_reset	5		6
+provider_err	10		12
+force_sdk_life	35		39
+force_super_wire	10		12
+force_cadence	9		11
+engine_gate	17		19
+force_atomic	23		26
+force_window	33		37
+force_win_obj	12		14
+force_win_shdw	14		16
+force_win_out	25		28
+force_decision	18		20
+sdk_integration	73		82
+sdk_reconnect	39		44
+journal_recov	16		18
+tx_cache	21	TX_CACHE_CHECKS=[0-9]+	24
+reset	27	RESET_CHECKS=[0-9]+	30
+reset_staged	9		10
+framing	1125	FRAMING_CHECKS=[0-9]+	1250
+filter	14		16
+containment	24		27
+readiness	48		54
+hand_facts	58		65
+boss_mech	63		71
+boss_records	35		39
+boss_plan	32		36
+sf_index	17		19
+hand_perfect	37456		41618
+hand_estimate	10		12
+hand_order_shuffle	6		7
+readable_hygiene	5346		5940
+sdk_compliance	90		100
+schema_surface	21		24
+label_refs	19		22
+action_ack	29		33
+action_reg_ctr	49		55
+force_win_rej	6		7
+rereg_window	14		16
+action_receipt	18		21
+receipt_disp	29		33
+exec_contract	27		30
+exec_noops	34		38
+highlight_owner	1		1
+force_pack_slot	1		2
+force_query_prefix	4		5
+crash_save	2		3
+utils_norm	1		1
+visible_hands	1		1
+mod_paths	2		3
+sell_receipt	3		4
+pack_area	9		10
+crash_guards	13		15
+metrics	10		12
+trans_guard	42		47
+block_play_force	24		27
+builder_auth	9		11
+settle_defer	24		27
+router_latch	12		14
+silence_paths	26		29
+rules_gate	13		15
+play_guard	83		93
+play_size	39		44
+adv_limits	57		64
+hand_identity	8		9
+confirm_compose	16		18
+weak_final	13		15
+latch_prec	13		15
+loop_escape	90		101
+press_scope	18		20
+gate_pressure	14		16
+schema_gate	15		17
+force_ack	133		148
+force_liveness	33		37
+force_live_wire	24		27
+force_wire_audit	6		7
+sdk_wire_audit	11		13
+gate_ledgers	37		42
+abandon_oblig	37		42
+result_ledger	58		65
+inbound_oblig	156		174
+protocol_fuzz	198		220
+ack_taxonomy	18		21
+action_registry	46		52
+registry_measure	22		25
+registry_reconcile	21		24
+schema_unique	3	schema-validate-unique: PASS, [0-9]+ checks	4
+set_plan_gate	9		10
+plan_tx	38		43
+plan_provenance	41		46
+plan_tx_stale	6		7
+plan_gate_surv	21		24
+shop_lock_visibility	18		21
+play_hints	13		15
+audit_dedup	12		14
+edition_split	17		19
+badge_fx	30		34
+badge_native	30		34
+dynamic_mult	28		32
+scaling_curve	5		6
+round_eval_earn	19		22
+filter_edge_cases	40		45
+contained_ty	9		11
+plan_cont	9		11
+sell_guard	88		98
+pack_sell	8		9
+joker_intent	54		61
+ctx_prune	57		64
+voucher_deliv	6		7
+voucher_confirm	8		9
+stable_epoch	21		24
+stable_live	6		7
+inline_accum	3		4
+gloss_epoch	11		13
+interest_gate	25		28
+interest_price	9		11
+shop_visit	29		33
+shop_entry	36		40
+slot_buffer	4		5
+plan_direct	2		3
+buy_name	8		9
+setup_deck	6		7
+hint_key_shapes	16		18
+round_unit	3		4
+fact_owner	6		7
+shop_afford	9		11
+synth_game	9926		11029
+scoring	36		40
+ability_field	49		55
+cond_labels	99		111
+extra_gates	329		366
+self_plan	66		74
+facedown	27		31
+ctx_quality	981		1090
+ctx_readable	715		795
+ctx_cache_rewind	3		4
+rewards	64		72
+consumables	160		178
+pack_planet	6		7
+shop_planet	9		11
+xmult_state	4		5
+order_req	13		15
+placeholder_guess_order	3		4
+vanilla_fidel	10		12
+fx_bijection	7		8
+cross_scope	10		12
+held_scope	9		10
+fx_coverage	12		14
+boss_ceiling	7		8
+card_scan	3357		3730
+carddex	53		59
+selftest	44		49
+selftest_build	117	selftest_build\] [0-9]+ default	131
+action_contract	13		15
+payload_render	64		72
+avail_lazy	9		11
+selb_ui_guard	23		26
+force_avail	26		29
+lifecycle_ctr	19		22
+plan_scope	12		14
+semantic_ctr	11		13
+joker_tag_req	8		9
+registry_full	10		12
+action_surface	22		25
+prose_offer	13		15
+registry_default	2		3
+transition_track	2		3
+failure_taxonomy	32		36
+first_run_rep	23		26
+contract_drift	47		53
+dup_scan	2700	dup-scan: .*[0-9]+ states	3000
+emit_scan	2700	over [0-9]+ sequences	3000
+stale_scan	2700	stale-scan: .*[0-9]+ states	3000
+correction_scan	51333	over [0-9]+ corrections	57037
+offer_scan	2369	offer-scan: .*[0-9]+ states	2633
+deadexport	943	[0-9]+ exports scanned	1048
+deadexp_scope	16		18
+hint_registry	14		16
+context_delivery	9		11
+correction_ch	29		33
+guard_confirm	43		48
+confirm_turn	11		13
+retry_budget	27		31
+result_oblig	23		26
+derivable_par	8		9
+ctx_cache_deck	9		11
+hint_reask	10		12
+hidden_deriv	27		30
+round_eval_ante	2		3
+ui_memo	4		5
+notation	108		121
+wire_notation	7		8
+shop_landing	9		10
+pack_facts	9		11
+chip_values	8		9
+fixture_lv	7		8
+force_fresh	9		10
+force_census	7		8
+force_budget	6		7
+wire_frame	14		16
+reask_parity	10		12
+act_examples	14		16
+confirm_hidden	13		15
+close_order	3		4
+cache_board	9		11
+deadexp_style	2		3
+untagged_name	17		19
+zeroed_parity	10		12
+shop_tag_ix	11		13
+bs_resource	5		6
+possess_vis	9		11
+held_bound	5		6
+startup_ledg	11		13
+startup_win	13		15
+ts_origin	9		11
+drawpool	8		9
+drawnote	3		4
+decision_truth	23		26
+offer_choice	130		145
+ready_value	19		22
+section_ref	13		15
+joker_text_once	9		10
+sh_rules_cad	23		23
+joker_hits	37		42
+joker_proj	53		59
+retriggers	36		40
+joker_agg0	2		3
+roster_uncond	14		16
+joker_order_f	32		32
+hint_channel	15		17
+gate_contract	39		44
+hint_cadence	90		100
+once_scope	81		91
+shop_primer	20		23
+prose_truth	37		42
+tag_facts	9		10
+live_source	107		119
+modded	45		51
+truth_claims	13		15
+selftest_cases	22		25
+ctx_dump	106	context-dump: [0-9]+ scenarios	118
+hand_shape	18		18
+hand_level	12		12
+draw_odds	10		11
+draw_pile_acc	9		9
+scoring_cap	9		9
+joker_hidden	22		22
+deck_commit	12		12
+retained_scope	9		11
+boss_reveal	14		14
+count_agree	6		6
+harness_hyg	15		17

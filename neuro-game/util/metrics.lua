@@ -1,6 +1,5 @@
 local M = {}
 
-M._on = false
 M._counters = {}
 M._gauges = {}
 M._timings = {}
@@ -11,20 +10,47 @@ local function wall()
   return os.clock()
 end
 
-function M.set_enabled(b) M._on = not not b end
+local METRICS_FILE = "neuro_metrics.jsonl"
+local FLUSH_INTERVAL = 30
+local FLUSH_CAP = 2 * 1024 * 1024
+local _flush_next_at = 0
+local _flush_bytes = nil
+
+local function encode_counters()
+  local ok, Json = pcall(require, "util.neuro_json")
+  if not (ok and Json and type(Json.encode) == "function") then return nil end
+  local ok_enc, body = pcall(Json.encode, { t = wall(), counters = M._counters, gauges = M._gauges })
+  if not ok_enc or type(body) ~= "string" then return nil end
+  return body .. "\n"
+end
+
+function M.flush(force)
+  if not (love and love.filesystem and love.filesystem.append) then return false end
+  local now = wall()
+  local wait = _flush_next_at - now
+  if not force and wait > 0 and wait <= FLUSH_INTERVAL then return false end
+  _flush_next_at = now + FLUSH_INTERVAL
+  if _flush_bytes == nil then
+    local info = love.filesystem.getInfo and love.filesystem.getInfo(METRICS_FILE)
+    _flush_bytes = (info and info.size) or 0
+  end
+  if _flush_bytes >= FLUSH_CAP then return false end
+  local line = encode_counters()
+  if not line then return false end
+  _flush_bytes = _flush_bytes + #line
+  local ok = pcall(love.filesystem.append, METRICS_FILE, line)
+  return ok
+end
 
 function M.incr(name, by)
-  if not M._on then return end
   M._counters[name] = (M._counters[name] or 0) + (by or 1)
 end
 
 function M.set(name, value)
-  if not M._on then return end
   M._gauges[name] = value
 end
 
 function M.record_timing(label, seconds)
-  if not M._on then return end
   local ms = seconds * 1000
   local t = M._timings[label]
   if not t then
@@ -38,12 +64,10 @@ function M.record_timing(label, seconds)
 end
 
 function M.time_begin(label)
-  if not M._on then return end
   M._starts[label] = wall()
 end
 
 function M.time_end(label)
-  if not M._on then return end
   local s = M._starts[label]
   if not s then return end
   M._starts[label] = nil

@@ -1,10 +1,12 @@
 local M = {}
 
-
+local next_sort_id = 0
 local function make_card(overrides)
+  next_sort_id = next_sort_id + 1
   local c = {
     cost = 0,
     sell_cost = 1,
+    sort_id = next_sort_id,
     ability = { set = "Default", name = "Mock" },
     config = { center = {} },
     base = { value = "10", suit = "Hearts" },
@@ -13,6 +15,186 @@ local function make_card(overrides)
     for k, v in pairs(overrides) do c[k] = v end
   end
   return c
+end
+
+-- Engine port: evaluate_poker_hand (game-dump/functions/misc_functions.lua:408) and
+-- G.FUNCS.get_poker_hand_info (game-dump/functions/state_events.lua:555). Without it
+-- facts/hand_facts.lua:900 fills no ready_set, so every payload the corpus measured was missing
+-- the section that names what can be played.
+local RANK_ID = { ["2"] = 2, ["3"] = 3, ["4"] = 4, ["5"] = 5, ["6"] = 6, ["7"] = 7, ["8"] = 8,
+  ["9"] = 9, ["10"] = 10, Jack = 11, Queen = 12, King = 13, Ace = 14, J = 11, Q = 12, K = 13, A = 14 }
+local SUIT_LIST = { "Hearts", "Diamonds", "Clubs", "Spades" }
+
+local function card_id(c)
+  if type(c) ~= "table" then return 0 end
+  if type(c.get_id) == "function" then
+    local ok, v = pcall(c.get_id, c)
+    if ok and tonumber(v) then return tonumber(v) end
+  end
+  local b = c.base or {}
+  return tonumber(b.id) or RANK_ID[tostring(b.value)] or 0
+end
+
+local function card_is_suit(c, s)
+  if type(c) ~= "table" then return false end
+  if type(c.is_suit) == "function" then
+    local ok, v = pcall(c.is_suit, c, s)
+    if ok then return v and true or false end
+  end
+  return c.base ~= nil and c.base.suit == s
+end
+
+local function card_nominal(c)
+  local b = (type(c) == "table" and c.base) or {}
+  return tonumber(b.nominal) or card_id(c)
+end
+
+local function get_flush(hand)
+  if #hand < 5 then return {} end
+  for _, suit in ipairs(SUIT_LIST) do
+    local t = {}
+    for i = 1, #hand do if card_is_suit(hand[i], suit) then t[#t + 1] = hand[i] end end
+    if #t >= 5 then return { t } end
+  end
+  return {}
+end
+
+local function get_straight(hand)
+  if #hand < 5 then return {} end
+  local t, IDS = {}, {}
+  for i = 1, #hand do
+    local id = card_id(hand[i])
+    if id > 1 and id < 15 then
+      IDS[id] = IDS[id] or {}
+      IDS[id][#IDS[id] + 1] = hand[i]
+    end
+  end
+  local straight_length, straight = 0, false
+  for j = 1, 14 do
+    local group = IDS[j == 1 and 14 or j]
+    if group then
+      straight_length = straight_length + 1
+      for _, v in ipairs(group) do t[#t + 1] = v end
+    else
+      straight_length = 0
+      if not straight then t = {} end
+      if straight then break end
+    end
+    if straight_length >= 5 then straight = true end
+  end
+  if not straight then return {} end
+  return { t }
+end
+
+local function get_X_same(num, hand)
+  local vals = {}
+  for i = 1, 14 do vals[i] = {} end
+  for i = #hand, 1, -1 do
+    local curr = { hand[i] }
+    for j = 1, #hand do
+      if i ~= j and card_id(hand[i]) == card_id(hand[j]) then curr[#curr + 1] = hand[j] end
+    end
+    if #curr == num then
+      local id = card_id(curr[1])
+      if vals[id] then vals[id] = curr end
+    end
+  end
+  local ret = {}
+  for i = #vals, 1, -1 do if next(vals[i]) then ret[#ret + 1] = vals[i] end end
+  return ret
+end
+
+local function get_highest(hand)
+  local highest
+  for _, v in ipairs(hand) do
+    if not highest or card_nominal(v) > card_nominal(highest) then highest = v end
+  end
+  if #hand > 0 then return { { highest } } end
+  return {}
+end
+
+local function concat_groups(a, b)
+  local out = {}
+  for i = 1, #a do out[#out + 1] = a[i] end
+  for i = 1, #b do out[#out + 1] = b[i] end
+  return out
+end
+
+local function evaluate_poker_hand(hand)
+  local results = {
+    ["Flush Five"] = {}, ["Flush House"] = {}, ["Five of a Kind"] = {}, ["Straight Flush"] = {},
+    ["Four of a Kind"] = {}, ["Full House"] = {}, ["Flush"] = {}, ["Straight"] = {},
+    ["Three of a Kind"] = {}, ["Two Pair"] = {}, ["Pair"] = {}, ["High Card"] = {}, top = nil,
+  }
+  local parts = {
+    _5 = get_X_same(5, hand), _4 = get_X_same(4, hand), _3 = get_X_same(3, hand),
+    _2 = get_X_same(2, hand), _flush = get_flush(hand), _straight = get_straight(hand),
+    _highest = get_highest(hand),
+  }
+  local function top(name) if not results.top then results.top = results[name] end end
+
+  if next(parts._5) and next(parts._flush) then results["Flush Five"] = parts._5; top("Flush Five") end
+  if next(parts._3) and next(parts._2) and next(parts._flush) then
+    table.insert(results["Flush House"], concat_groups(parts._3[1], parts._2[1])); top("Flush House")
+  end
+  if next(parts._5) then results["Five of a Kind"] = parts._5; top("Five of a Kind") end
+  if next(parts._flush) and next(parts._straight) then
+    local ret = {}
+    for _, v in ipairs(parts._flush[1]) do ret[#ret + 1] = v end
+    for _, v in ipairs(parts._straight[1]) do
+      local in_flush = false
+      for _, vv in ipairs(parts._flush[1]) do if vv == v then in_flush = true end end
+      if not in_flush then ret[#ret + 1] = v end
+    end
+    results["Straight Flush"] = { ret }; top("Straight Flush")
+  end
+  if next(parts._4) then results["Four of a Kind"] = parts._4; top("Four of a Kind") end
+  if next(parts._3) and next(parts._2) then
+    table.insert(results["Full House"], concat_groups(parts._3[1], parts._2[1])); top("Full House")
+  end
+  if next(parts._flush) then results["Flush"] = parts._flush; top("Flush") end
+  if next(parts._straight) then results["Straight"] = parts._straight; top("Straight") end
+  if next(parts._3) then results["Three of a Kind"] = parts._3; top("Three of a Kind") end
+  if (#parts._2 == 2) or (#parts._3 == 1 and #parts._2 == 1) then
+    table.insert(results["Two Pair"], concat_groups(parts._2[1], parts._2[2] or parts._3[1]))
+    top("Two Pair")
+  end
+  if next(parts._2) then results["Pair"] = parts._2; top("Pair") end
+  if next(parts._highest) then results["High Card"] = parts._highest; top("High Card") end
+
+  if results["Five of a Kind"][1] then
+    results["Four of a Kind"] = { results["Five of a Kind"][1], results["Five of a Kind"][2],
+      results["Five of a Kind"][3], results["Five of a Kind"][4] }
+  end
+  if results["Four of a Kind"][1] then
+    results["Three of a Kind"] = { results["Four of a Kind"][1], results["Four of a Kind"][2],
+      results["Four of a Kind"][3] }
+  end
+  if results["Three of a Kind"][1] then
+    results["Pair"] = { results["Three of a Kind"][1], results["Three of a Kind"][2] }
+  end
+  return results
+end
+
+local HAND_RANK = { "Flush Five", "Flush House", "Five of a Kind", "Straight Flush", "Four of a Kind",
+  "Full House", "Flush", "Straight", "Three of a Kind", "Two Pair", "Pair", "High Card" }
+
+local function get_poker_hand_info(cards)
+  local poker_hands = evaluate_poker_hand(cards or {})
+  local text, scoring_hand = "NULL", {}
+  for _, name in ipairs(HAND_RANK) do
+    if next(poker_hands[name]) then text = name; scoring_hand = poker_hands[name][1]; break end
+  end
+  local disp_text = text
+  if text == "Straight Flush" then
+    local min = 10
+    for j = 1, #scoring_hand do
+      local id = card_id(scoring_hand[j])
+      if id < min then min = id end
+    end
+    if min >= 10 then disp_text = "Royal Flush" end
+  end
+  return text, disp_text, poker_hands, scoring_hand, disp_text
 end
 
 local SAVE_KEYS = {
@@ -26,11 +208,11 @@ local SAVE_KEYS = {
 
 local NEURO_SAVE_FIELDS = {
   "persona", "deck_chosen", "reserved_dollars",
-  "shop_reroll_count", "rules_sent",
+  "shop_reroll_count",
   "blind_info_sig", "blind_info_seen",
   "state_entry_hints",
-  "force_inflight", "force_state", "force_action_names",
-  "force_action_set", "force_sent_at",
+  "force_inflight", "force_state", "force_window",
+  "force_sent_at",
   "last_failed_action", "last_failed_reason", "last_failed_at",
   "once_serials",
   "gameover_hold", "gameover_hold_until", "gameover_recovery", "gameover_exited_at",
@@ -77,6 +259,14 @@ end
 
 local function apply_mock(mock)
   G.NEURO = G.NEURO or {}
+  if mock.P_BLINDS == nil then
+    G.P_BLINDS = {
+      bl_small = { name = "Small Blind" },
+      bl_big = { name = "Big Blind" },
+      bl_boss = { name = "Boss Blind" },
+      bl_hook = { name = "The Hook" },
+    }
+  end
   for k, v in pairs(mock) do
     if v == EXPLICIT_NIL then v = nil end
     local nf = k:match("^NEURO_(.+)$")
@@ -86,6 +276,14 @@ local function apply_mock(mock)
       G[k] = v
     end
   end
+  if G.blind_select and not (G.FUNCS and G.FUNCS.select_blind) then
+    G.FUNCS = G.FUNCS or {}
+    G.FUNCS.select_blind = function() end
+  end
+  G.FUNCS = G.FUNCS or {}
+  if not G.FUNCS.toggle_shop then G.FUNCS.toggle_shop = function() end end
+  if not G.FUNCS.cash_out then G.FUNCS.cash_out = function() end end
+  if not G.FUNCS.skip_booster then G.FUNCS.skip_booster = function() end end
 end
 
 local function non_progress_set()
@@ -111,6 +309,7 @@ local function base_game()
   return {
     dollars = 10,
     bankrupt_at = 0,
+    round = 7,
     current_round = {
       hands_left = 4,
       discards_left = 3,
@@ -134,6 +333,16 @@ end
 local function cards5()
   local t = {}
   for i = 1, 5 do t[i] = make_card() end
+  return t
+end
+local function varied_cards(n)
+  n = n or 5
+  local vals = { "2", "7", "10", "J", "K", "3", "Q" }
+  local suits = { "Spades", "Hearts", "Diamonds", "Clubs", "Spades", "Hearts", "Diamonds" }
+  local t = {}
+  for i = 1, n do
+    t[i] = make_card({ base = { value = vals[i], suit = suits[i] } })
+  end
   return t
 end
 
@@ -163,6 +372,30 @@ local SCENARIOS = {
         GAME = base_game(),
         hand = { cards = cards5(), highlighted = {} },
         jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  -- Amber Acorn (dump game.lua:298) flips the jokers face down, so force_selecting_hand.lua:294 is
+  -- the one SELECTING_HAND force that offers set_joker_order. It is here because the surface sweeps
+  -- that read this corpus must classify it from the game state, not from corpus membership.
+  { state = "SELECTING_HAND", desc = "Amber Acorn: the boss that names reordering",
+    mock = function()
+      local g = base_game()
+      g.blind = { name = "Amber Acorn", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_final_acorn" }
+      return {
+        GAME = g,
+        hand = { cards = cards5(), highlighted = {} },
+        jokers = { cards = {
+          { sort_id = 801, ability = { set = "Joker", name = "A" }, sell_cost = 1,
+            config = { center = { key = "j_a", set = "Joker" } } },
+          { sort_id = 802, ability = { set = "Joker", name = "B" }, sell_cost = 1,
+            config = { center = { key = "j_b", set = "Joker" } } },
+        }, config = { card_limit = 5 } },
         consumeables = { cards = {}, config = { card_limit = 2 } },
         OVERLAY_MENU = nil,
         NEURO_PERSONA = "neuro",
@@ -281,7 +514,6 @@ local SCENARIOS = {
       }
     end,
   },
-
 
   { state = "SHOP", desc = "Reroll blocked: $5 reroll $5 leaves $0, cheapest item $3 (anti-waste guard)",
     forbid_actions = { "reroll_shop" },
@@ -404,6 +636,7 @@ local SCENARIOS = {
       g.dollars = 0
       return {
         GAME = g,
+        shop = {},
         hand = { cards = cards5(), highlighted = {} },
         jokers = { cards = {}, config = { card_limit = 5 } },
         consumeables = { cards = {}, config = { card_limit = 2 } },
@@ -505,6 +738,7 @@ local SCENARIOS = {
       g.dollars = 0
       return {
         GAME = g,
+        shop = {},
         hand = { cards = {}, highlighted = {} },
         jokers = { cards = {}, config = { card_limit = 5 } },
         consumeables = { cards = {}, config = { card_limit = 2 } },
@@ -518,7 +752,6 @@ local SCENARIOS = {
       }
     end,
   },
-
 
   { state = "BLIND_SELECT", desc = "Small blind selectable",
     mock = function()
@@ -615,7 +848,6 @@ local SCENARIOS = {
     end,
   },
 
-
   { state = "TAROT_PACK", desc = "Has pack cards",
     mock = function()
       return {
@@ -646,7 +878,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "TAROT_PACK", desc = "No pack area at all (nil)",
+  { state = "TAROT_PACK", desc = "No pack area at all (nil)", no_force = true, allow_no_progress = true,
     mock = function()
       return {
         GAME = base_game(),
@@ -676,11 +908,11 @@ local SCENARIOS = {
     end,
   },
 
-
   { state = "ROUND_EVAL", desc = "Normal: cash_out available", no_force = true,
     mock = function()
       return {
         GAME = base_game(),
+        round_eval = true,
         hand = { cards = cards5(), highlighted = {} },
         jokers = { cards = {}, config = { card_limit = 5 } },
         consumeables = { cards = {}, config = { card_limit = 2 } },
@@ -694,6 +926,7 @@ local SCENARIOS = {
     mock = function()
       return {
         GAME = base_game(),
+        round_eval = true,
         hand = EXPLICIT_NIL,
         jokers = EXPLICIT_NIL,
         consumeables = EXPLICIT_NIL,
@@ -702,7 +935,6 @@ local SCENARIOS = {
       }
     end,
   },
-
 
   { state = "GAME_OVER", desc = "No overlay (setup_run must work)", no_force = true,
     mock = function()
@@ -756,7 +988,6 @@ local SCENARIOS = {
     end,
   },
 
-
   { state = "MENU", desc = "Normal: has G.GAME", no_force = true,
     mock = function()
       return {
@@ -798,7 +1029,6 @@ local SCENARIOS = {
     end,
   },
 
-
   { state = "SPLASH", desc = "Normal: minimal state", no_force = true,
     mock = function()
       return {
@@ -824,7 +1054,6 @@ local SCENARIOS = {
       }
     end,
   },
-
 
   { state = "RUN_SETUP", desc = "Normal: G.GAME set, no overlay", no_force = true,
     mock = function()
@@ -1147,7 +1376,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "SELECTING_HAND", desc = "Has consumable but hand is empty",
+  { state = "SELECTING_HAND", desc = "Has consumable but hand is empty", require_actions = { "use_card" },
     mock = function()
       local con = make_card({ ability = { set = "Planet", name = "Jupiter", consumeable = { hand_type = "Flush" } } })
       return {
@@ -1270,7 +1499,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "BLIND_SELECT", desc = "No blind_states (nil round_resets)", no_force = true,
+  { state = "BLIND_SELECT", desc = "No blind_states (nil round_resets)", no_force = true, allow_no_progress = true,
     mock = function()
       local g = base_game()
       g.round_resets = nil
@@ -1288,7 +1517,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "BLIND_SELECT", desc = "All blind_states are Upcoming (none selectable)", no_force = true,
+  { state = "BLIND_SELECT", desc = "All blind_states are Upcoming (none selectable)", no_force = true, allow_no_progress = true,
     mock = function()
       local g = base_game()
       g.round_resets.blind_states = { Small = "Upcoming", Big = "Upcoming", Boss = "Upcoming" }
@@ -1521,6 +1750,7 @@ local SCENARIOS = {
     mock = function()
       return {
         GAME = EXPLICIT_NIL,
+        round_eval = true,
         hand = EXPLICIT_NIL,
         jokers = EXPLICIT_NIL,
         consumeables = EXPLICIT_NIL,
@@ -1578,6 +1808,7 @@ local SCENARIOS = {
     mock = function()
       return {
         GAME = EXPLICIT_NIL,
+        shop = {},
         hand = { cards = {}, highlighted = {} },
         jokers = { cards = {}, config = { card_limit = 5 } },
         consumeables = { cards = {}, config = { card_limit = 2 } },
@@ -1682,7 +1913,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "SELECTING_HAND", desc = "Has jokers + consumable, 0 hands, 0 discards", no_force = true,
+  { state = "SELECTING_HAND", desc = "Has jokers + consumable, 0 hands, 0 discards", require_actions = { "use_card" },
     mock = function()
       local g = base_game()
       g.current_round.hands_left = 0
@@ -1694,6 +1925,22 @@ local SCENARIOS = {
         GAME = g,
         hand = { cards = cards5(), highlighted = {} },
         jokers = { cards = jokers, config = { card_limit = 5 } },
+        consumeables = { cards = { con }, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "Empty hand AND empty deck, consumable held",
+    require_actions = { "use_card" },
+    mock = function()
+      local con = make_card({ ability = { set = "Planet", name = "Jupiter", consumeable = { hand_type = "Flush" } } })
+      return {
+        GAME = base_game(),
+        hand = { cards = {}, highlighted = {} },
+        deck = { cards = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
         consumeables = { cards = { con }, config = { card_limit = 2 } },
         OVERLAY_MENU = nil,
         NEURO_PERSONA = "neuro",
@@ -1940,6 +2187,181 @@ local SCENARIOS = {
       }
     end,
   },
+
+  { state = "SELECTING_HAND", desc = "The Psychic: 7 held cards under the five-card cap",
+    mock = function()
+      local g = base_game()
+      g.blind = { name = "The Psychic", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_psychic" }
+      local cards = varied_cards(7)
+      return {
+        GAME = g,
+        hand = { cards = cards, highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "The Eye: Straight already played this round",
+    mock = function()
+      local g = base_game()
+      g.blind = { name = "The Eye", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_eye", hands = { ["Straight"] = true } }
+      return {
+        GAME = g,
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "The Mouth: round locked to Flush",
+    mock = function()
+      local g = base_game()
+      g.blind = { name = "The Mouth", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_mouth", only_hand = "Flush" }
+      return {
+        GAME = g,
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "The Ox: most played hand is Two Pair",
+    mock = function()
+      local g = base_game()
+      g.current_round.most_played_poker_hand = "Two Pair"
+      g.blind = { name = "The Ox", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_ox" }
+      return {
+        GAME = g,
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "The Serpent: only 3 deck cards left for the after-play draw",
+    mock = function()
+      local g = base_game()
+      g.blind = { name = "The Serpent", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_serpent" }
+      return {
+        GAME = g,
+        deck = { cards = { {}, {}, {} } },
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "The Needle: exactly 1 hand this round",
+    mock = function()
+      local g = base_game()
+      g.current_round.hands_left = 1
+      g.blind = { name = "The Needle", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_needle" }
+      return {
+        GAME = g,
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "The Pillar: two held cards were played earlier this ante",
+    mock = function()
+      local g = base_game()
+      g.blind = { name = "The Pillar", chips = 800, mult = 2, boss = true, debuff = {},
+        in_blind = true, key = "bl_pillar" }
+      local cards = varied_cards()
+      cards[2] = make_card({ ability = { set = "Default", name = "Mock", played_this_ante = true },
+        debuff = true })
+      cards[4] = make_card({ ability = { set = "Default", name = "Mock", played_this_ante = true },
+        debuff = true })
+      return {
+        GAME = g,
+        hand = { cards = cards, highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SHOP", desc = "Seed Money + Money Tree owned ($20 interest cap, first $100 counts)",
+    mock = function()
+      local g = base_game()
+      g.used_vouchers = { ["v_seed_money"] = true, ["v_money_tree"] = true }
+      g.interest_cap = 100
+      return {
+        GAME = g,
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = { make_card() }, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        shop_jokers = { cards = { make_card({ cost = 4 }) } },
+        shop_vouchers = { cards = {} },
+        shop_booster = { cards = {} },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+        NEURO_SHOP_REROLL_COUNT = 0,
+        NEURO_RESERVED_DOLLARS = 0,
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "Ghost Deck selected (deck reference prose)",
+    mock = function()
+      local g = base_game()
+      g.selected_back = { key = "b_ghost", name = "Ghost Deck" }
+      return {
+        GAME = g,
+        P_CENTERS = { b_ghost = { key = "b_ghost", name = "Ghost Deck" } },
+        hand = { cards = varied_cards(), highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
+  { state = "SELECTING_HAND", desc = "Painted Deck selected (+1 hand size, card_limit 9)",
+    mock = function()
+      local g = base_game()
+      g.selected_back = { key = "b_painted", name = "Painted Deck" }
+      return {
+        GAME = g,
+        P_CENTERS = { b_painted = { key = "b_painted", name = "Painted Deck" } },
+        hand = { cards = varied_cards(), config = { card_limit = 9 }, highlighted = {} },
+        jokers = { cards = {}, config = { card_limit = 5 } },
+        consumeables = { cards = {}, config = { card_limit = 2 } },
+        OVERLAY_MENU = nil,
+        NEURO_PERSONA = "neuro",
+      }
+    end,
+  },
+
 }
 
 local function names_str(list)
@@ -1972,7 +2394,6 @@ function M.run()
       G.NEURO.state_entry_hints = nil
       G.NEURO.blind_info_sig = nil
       G.NEURO.blind_info_seen = nil
-      G.NEURO.rules_sent = true
 
       local force = Dispatcher.get_force_for_state(sc.state)
       local actions = force and force.actions or nil
@@ -2045,5 +2466,6 @@ end
 
 M.SCENARIOS = SCENARIOS
 M.apply_mock = apply_mock
+M.get_poker_hand_info = get_poker_hand_info
 
 return M

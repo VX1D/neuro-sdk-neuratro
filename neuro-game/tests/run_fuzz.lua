@@ -1,5 +1,3 @@
--- standalone runner for the randomized force fuzzer (luajit tests/run_fuzz.lua [iters])
-package.path = "./?.lua;;" .. package.path
 love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
 _G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 0 } }
 

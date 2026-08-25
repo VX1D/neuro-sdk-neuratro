@@ -1,114 +1,210 @@
+local GameFacts = require("facts.game_facts")
 local Utils = require("util.utils")
-local Tuning = require("core.tuning")
 local CardArea = require("facts.card_area_util")
+local GameActions = require("core.game_actions")
 local CardUtil = require("facts.card_util")
-local CtxEconomy = require("context.ctx_economy")
+local StateKinds = require("core.state_kinds")
+local CtxEconomy = require("facts.economy_facts")
 local ForceHelpers = require("force.force_helpers")
-local NeuroAnim = require("render.neuro-anim")
+local function anim() return Utils.lazy_require("render.neuro-anim") end
+local Showcase = require("hud.showcase")
+local ActionResult = require("core.action_result")
+local ActionReceipt = require("core.action_receipt")
+local Lifecycle = require("core.neuro_lifecycle")
+local GameplayJournal = require("core.gameplay_journal")
 local safe_name_or = Utils.safe_name_or
 local validate_area_card = CardArea.validate_area_card
 local get_area = CardArea.get_area
-local mock_UIBox = CardArea.mock_UIBox
+local mock_UIBox = GameActions.mock_UIBox
 local shop_spend_floor = CtxEconomy.spend_floor
+
+local function area_contains(area, target)
+  for _, card in ipairs((area and area.cards) or {}) do
+    if card == target then return true end
+  end
+  return false
+end
+
+local function refuse(data, code, message, card, name, cost)
+  Showcase.enqueue_refusal({
+    code = code, card = card, name = name, cost = cost, action_id = data._action_id })
+  return ActionResult.reject(code, message)
+end
+
+local function record_joker_purchase(purchased_card, price)
+  if not (G and G.NEURO and purchased_card and purchased_card.sort_id ~= nil) then return end
+  G.NEURO.joker_bought_cost = G.NEURO.joker_bought_cost or {}
+  G.NEURO.joker_bought_cost[purchased_card.sort_id] = price
+  pcall(require("core.rewards").announce_rare_joker, purchased_card)
+end
+
+local function voucher_buy_reason(card_name, cost, left)
+  return string.format(
+    "Buying %s for $%d, leaving $%d. A voucher lasts the whole run and cannot be sold or undone."
+      .. " Send buy_from_shop again to confirm, or pick something else.",
+    card_name, cost, math.max(0, left))
+end
 
 local function handle_buy_from_shop(data)
   local _, card, err = validate_area_card(data)
-  if err then return nil, err end
-  local card_name = safe_name_or(card)
+  local name_err = (not err) and CardArea.check_target_name(card, data.name, data.index, data.area) or nil
+  if (err or name_err) and type(data.name) == "string" and data.name ~= "" then
+    local rc, ri = CardArea.find_card_by_name(get_area(data.area), data.name)
+    if rc and ri then
+      data.index, card, err, name_err = ri, rc, nil, nil
+    end
+  end
+  if err then return ActionResult.reject("TARGET_UNAVAILABLE", err) end
+  if name_err then return ActionResult.reject("STALE_TARGET", name_err) end
+  local card_name = Utils.real_name_or(card)
   local cost = tonumber(card.cost or 0) or 0
   local dollars = tonumber(G.GAME and G.GAME.dollars or 0) or 0
-  local reserved = tonumber(G and G.NEURO and G.NEURO.reserved_dollars or 0) or 0
+  local reserved = GameFacts.reserved_dollars()
   local floor = shop_spend_floor()
-  local spendable = dollars - reserved - floor
+  local spendable = CtxEconomy.spendable()
   if cost > spendable then
     local credit = (floor < 0) and string.format(" (Credit Card lets you go to -$%d)", math.abs(floor)) or ""
     if reserved > 0 then
-      return nil, string.format("Can't afford %s ($%d): $%d cash, $%d reserved for pending buys%s.", card_name, cost, dollars, reserved, credit)
+      return refuse(data, "INSUFFICIENT_FUNDS",
+        string.format("Can't afford %s ($%d): $%d cash, $%d reserved for pending buys%s.", card_name, cost, dollars, reserved, credit),
+        card, card_name, cost)
     else
-      return nil, string.format("Can't afford %s ($%d): you only have $%d%s.", card_name, cost, dollars, credit)
+      return refuse(data, "INSUFFICIENT_FUNDS",
+        string.format("Can't afford %s ($%d): you only have $%d%s.", card_name, cost, dollars, credit),
+        card, card_name, cost)
     end
   end
   local cfg = { ref_table = card }
-  local is_booster = card and card.ability and card.ability.set == "Booster"
-  local is_voucher = card and card.ability and card.ability.set == "Voucher"
+  local set = CardUtil.card_set(card)
+  local is_booster = set == "Booster"
+  local is_voucher = set == "Voucher"
+  if is_voucher and not (G.NEURO and G.NEURO._candidate_probe) then
+    local sig = "buy_voucher:" .. tostring((G.NEURO and G.NEURO.state_enter_serial) or 0)
+      .. ":" .. tostring(card.sort_id or card_name)
+    local decision = tonumber(G.NEURO and G.NEURO.decision_serial) or 0
+    if G.NEURO and G.NEURO.last_voucher_reject == sig
+      and (tonumber(G.NEURO.last_voucher_review_serial) or 0) == decision then
+      G.NEURO.last_voucher_reject = nil
+      G.NEURO.last_voucher_review_serial = nil
+    else
+      if G.NEURO then
+        G.NEURO.last_voucher_reject = sig
+        G.NEURO.last_voucher_review_serial = decision
+      end
+      return ActionResult.reject("CONFIRMATION_REQUIRED",
+        voucher_buy_reason(card_name, cost, dollars - cost))
+    end
+  end
   if data.use and card and card.ability and card.ability.consumeable then
     local needs = tonumber(card.ability.consumeable.max_highlighted or 0) or 0
     if needs > 0 then
-      return nil, string.format("%s targets hand cards and can't be used straight from the shop; buy it without use, then use_card with hand_indices.", card_name)
+      return ActionResult.reject("INVALID_SELECTION",
+        string.format("%s targets hand cards and can't be used straight from the shop; buy it without use, then use_card with hand_indices.", card_name))
     end
   end
-  -- vouchers must go via buy_and_use/use_card/redeem(): plain buy path has no Voucher branch, emplaces it as a dead joker
+  if card and card.ability and card.ability.consumeable and not data.use and not is_booster
+      and not CardUtil.is_negative(card) then
+    local cs = CardUtil.consumable_slot_status()
+    if cs and cs.full then
+      local _, mh = CardUtil.consumable_target_range(card)
+      if mh and mh > 0 then
+        return refuse(data, "NO_SLOT",
+          string.format("Consumable slots are full and %s targets hand cards (can't be used from the shop) -- free a slot first, then buy it.", card_name),
+          card, card_name, cost)
+      end
+      return refuse(data, "NO_SLOT",
+        string.format("Consumable slots are full -- a plain buy of %s would do nothing. Add \"use\":true to buy-and-use it now, or free a slot.", card_name),
+        card, card_name, cost)
+    end
+  end
   if data.use or is_booster or is_voucher then
     cfg.id = "buy_and_use"
   end
 
   if cfg.id ~= "buy_and_use" and not CardUtil.can_buy_card_space(card, data.area) then
-    return nil, string.format("No slot space to buy %s now.", card_name)
+    local remedy = "free a slot first, then buy it"
+    if CardUtil.is_joker_like_card(card) then
+      local js = CardUtil.joker_slot_status()
+      remedy = string.format("joker slots are %d/%d full -- sell a joker to free one, then buy it",
+        js.count, js.limit)
+    end
+    return refuse(data, "NO_SLOT",
+      string.format("No slot space to buy %s now: %s.", card_name, remedy), card, card_name, cost)
   end
 
+  local buy_and_use = (data.use and not is_booster and not is_voucher) and true or false
+  local purchase_kind = is_voucher and "voucher" or is_booster and "booster"
+    or buy_and_use and "buy_and_use" or set == "Joker" and "joker"
+    or CardUtil.is_consumable_card(card) and "consumable" or "other"
+  local gameplay_event = {
+    kind = "shop_buy",
+    public_subject = GameplayJournal.public_card_label(card, data.area, data.index),
+    area = data.area,
+    purchase_kind = purchase_kind,
+    paid = cost,
+  }
   local function queue_purchase_showcase()
-    if not G then return end
-    local q = G.NEURO.purchase_showcase_queue
-    if type(q) ~= "table" then q = {} end
-
-    local desc = Utils.card_description(card)
-    if (not desc or desc == "") and card and card.config and card.config.center then
-      desc = Utils.safe_description(card.config.center.loc_txt, card)
-    end
-    if not desc or desc == "" then desc = "-" end
-
-    q[#q + 1] = {
+    local at = Utils.now()
+    Showcase.enqueue_purchase({
       card = card,
       name = card_name,
-      desc = tostring(desc),
       cost = cost,
-      area = tostring(data.area or "shop"),
-      at = Utils.now(),
-    }
-    while #q > 2 do
-      table.remove(q, 1)
-    end
-    G.NEURO.purchase_showcase_queue = q
+      area = buy_and_use and "shop_use" or tostring(data.area or "shop"),
+      at = at,
+    })
+    if is_voucher then Showcase.enqueue_voucher(card, at) end
   end
 
   local buy_area_name = data.area
   local buy_index = data.index
+  local pre_pack_area = CardUtil.pack_area()
+  local use_observed = false
+  local original_raw_use = rawget(card, "use_consumeable")
+  local original_use = card.use_consumeable
+  local observed_use
 
-  -- reserve synchronously: a second buy validated before this deferred exec must see the commitment; released by event or watchdog, zeroed on SHOP enter/exit
-  G.NEURO = G.NEURO or {}
-  G.NEURO.reserved_dollars = (tonumber(G.NEURO.reserved_dollars or 0) or 0) + cost
+  local reservation_epoch
   local released = false
+  local explicit_failure
   local function release_reservation()
     if released or not (G and G.NEURO) then return end
     released = true
-    G.NEURO.reserved_dollars = math.max(0, (tonumber(G.NEURO.reserved_dollars or 0) or 0) - cost)
+    if (tonumber(G.NEURO._reservation_epoch or 0) or 0) ~= reservation_epoch then return end
+    G.NEURO.reserved_dollars = math.max(0, GameFacts.reserved_dollars() - cost)
   end
 
   return function()
-    -- guard the whole body: a throw before the release events are scheduled would strand the dollar reservation until the next SHOP enter/exit
+    if type(original_use) == "function" then
+      observed_use = function(self, ...)
+        if self == card then use_observed = true end
+        if rawget(card, "use_consumeable") == observed_use then card.use_consumeable = original_raw_use end
+        return original_use(self, ...)
+      end
+      card.use_consumeable = observed_use
+    end
+    G.NEURO = G.NEURO or {}
+    reservation_epoch = tonumber(G.NEURO._reservation_epoch or 0) or 0
+    G.NEURO.reserved_dollars = GameFacts.reserved_dollars() + cost
+    local shop_buy_delay = require("core.staging").lift_safe_delay(
+      Utils.gate_seconds("shop_buy_block", "NEURO_SHOP_BUY_DELAY"))
     local ok_body, ret = pcall(function()
-    pcall(CardArea.set_highlight, card, true)
-    local shop_buy_block = Tuning.get("NEURO_SHOP_BUY_BLOCK")
-    local shop_buy_delay = Tuning.get("NEURO_SHOP_BUY_DELAY")
-    local t = Utils.now()
-    G.NEURO.last_action_at = t + shop_buy_block
-    -- pcall: a throw here (card desc parse) runs before release events are scheduled and would leak the reservation
-    pcall(queue_purchase_showcase)
+    GameActions.try_highlight(card, true)
+    local shop_buy_block = Utils.gate_seconds("shop_buy_block", "NEURO_SHOP_BUY_BLOCK")
+    Lifecycle.mark_action_at(Lifecycle.action_now() + shop_buy_block)
     if G and G.E_MANAGER and Event then
       G.E_MANAGER:add_event(Event({
         trigger   = "after",
+        timer     = "TOTAL",
         delay     = shop_buy_delay,
         blockable = false,
+        blocking  = false,
         func      = function()
           local function flag_buy_failed()
-            ForceHelpers.correct_optimistic("buy_from_shop", "the purchase could not be completed", data._action_id,
-              "Your buy_from_shop did not go through (couldn't afford or no space); money and inventory are unchanged.")
+            explicit_failure = "purchase callback refused the prepared target"
           end
-          -- card is unhighlighted here, so the highlight watchdog below can't catch a swallowed failure -- must correct the optimistic ok
           local ok_exec = pcall(function()
-            CardArea.set_highlight(card, false)
+            GameActions.set_highlight(card, false)
             release_reservation()
-            -- authoritative last gate on LIVE money: never breach the floor (catches 2nd of two rapid buys after the 1st deducted)
             local live_dollars = tonumber(G.GAME and G.GAME.dollars or 0) or 0
             if live_dollars - cost < floor then flag_buy_failed() return end
 
@@ -127,15 +223,20 @@ local function handle_buy_from_shop(data)
             local buy_cfg = { ref_table = buy_card }
             local fn
             if is_booster or is_voucher then
-              -- vanilla opens/redeems shop packs and vouchers via use_card; cost is deducted in Card:open()/redeem(), so buy_from_shop+buy_and_use would charge twice
               fn = G.FUNCS and G.FUNCS.use_card
             else
               if data.use then buy_cfg.id = "buy_and_use" end
               fn = G.FUNCS and G.FUNCS.buy_from_shop
             end
             if not fn then flag_buy_failed() return end
-            fn({ config = buy_cfg, UIBox = mock_UIBox })
-            if NeuroAnim and NeuroAnim.on_buy then NeuroAnim.on_buy(buy_card) end
+            if fn({ config = buy_cfg, UIBox = mock_UIBox }) == false then
+              flag_buy_failed()
+              return
+            end
+            record_joker_purchase(buy_card, cost)
+            if data._action_id == nil then pcall(queue_purchase_showcase) end
+            local NA = anim()
+            if NA and NA.on_buy then NA.on_buy(buy_card) end
           end)
           if not ok_exec then flag_buy_failed() end
           return true
@@ -143,13 +244,15 @@ local function handle_buy_from_shop(data)
       }))
       G.E_MANAGER:add_event(Event({
         trigger   = "after",
-        delay     = shop_buy_delay + Tuning.get("NEURO_SHOP_BUY_WATCHDOG_GRACE"),
+        timer     = "TOTAL",
+        delay     = shop_buy_delay
+          + Utils.gate_seconds("shop_buy_watchdog_grace", "NEURO_SHOP_BUY_WATCHDOG_GRACE"),
         blockable = false,
+        blocking  = false,
         func      = function()
           if card and card.highlighted and G and G.NEURO then
-            pcall(CardArea.set_highlight, card, false)
-            ForceHelpers.correct_optimistic("buy_from_shop", "Purchase did not complete (event lost).", data._action_id,
-              "Your buy_from_shop did not go through (event lost); money and inventory are unchanged.")
+            GameActions.try_highlight(card, false)
+            explicit_failure = "purchase event did not complete"
           end
           release_reservation()
           return true
@@ -159,7 +262,7 @@ local function handle_buy_from_shop(data)
       release_reservation()
       local cur_dollars = tonumber(G.GAME and G.GAME.dollars or 0) or 0
       if cur_dollars - cost < floor then
-        pcall(CardArea.set_highlight, card, false)
+        GameActions.try_highlight(card, false)
         return string.format("Could not buy %s: $%d would drop you below your money floor.", card_name, cost)
       end
       local fn
@@ -170,41 +273,278 @@ local function handle_buy_from_shop(data)
         fn = G.FUNCS and G.FUNCS.buy_from_shop
       end
       if not fn then
-        pcall(CardArea.set_highlight, card, false)
+        GameActions.try_highlight(card, false)
         ForceHelpers.record_failure("buy_from_shop", "the purchase could not be completed")
+        explicit_failure = "purchase callback unavailable"
         return string.format("Could not buy %s: purchase is unavailable right now.", card_name)
       end
-      fn({ config = cfg, UIBox = mock_UIBox })
-      if NeuroAnim and NeuroAnim.on_buy then NeuroAnim.on_buy(card) end
+      if fn({ config = cfg, UIBox = mock_UIBox }) == false then
+        explicit_failure = "purchase callback refused the prepared target"
+      else
+        record_joker_purchase(card, cost)
+      end
+      local NA = anim()
+      if NA and NA.on_buy then NA.on_buy(card) end
     end
     return string.format("Buying: %s for $%d", Utils.real_name_or(card), cost)
     end)
-    if ok_body then return ret end
+    if ok_body and data._action_id == nil then
+      if rawget(card, "use_consumeable") == observed_use then card.use_consumeable = original_raw_use end
+      return ret
+    end
+    if ok_body then
+      return ActionReceipt.create({
+        id = tostring(data._action_id),
+        name = "buy_from_shop",
+        run_generation = G and G.NEURO and G.NEURO.run_generation,
+        deadline = ActionReceipt.now() + math.max(3,
+          shop_buy_delay
+            + Utils.gate_seconds("shop_buy_watchdog_grace", "NEURO_SHOP_BUY_WATCHDOG_GRACE") + 1),
+        timeout_outcome = "failed",
+        correction = "The accepted purchase did not complete; the item remains in the shop. Re-check money and slots, then choose again.",
+        applied_message = ret,
+        debug = { area = buy_area_name, index = buy_index, card = card_name },
+        probe = function()
+          if explicit_failure then return "failed", { reason = explicit_failure } end
+          local left_shop = not area_contains(get_area(buy_area_name), card)
+          local destination = set == "Joker" and G and G.jokers or G and G.consumeables
+          local voucher_key = card and card.config and card.config.center and card.config.center.key
+          local voucher_used = is_voucher and voucher_key and G and G.GAME and G.GAME.used_vouchers
+            and G.GAME.used_vouchers[voucher_key]
+          local pack_started = is_booster and CardUtil.pack_area() ~= nil
+            and CardUtil.pack_area() ~= pre_pack_area
+          local transferred = not is_booster and not is_voucher and not data.use
+            and area_contains(destination, card)
+          if left_shop and (transferred or voucher_used or pack_started or data.use and use_observed) then
+            return "applied", {
+              target_left_shop = true,
+              transferred = transferred,
+              voucher_used = not not voucher_used,
+              pack_started = pack_started,
+              use_observed = use_observed,
+            }
+          end
+          return "pending"
+        end,
+        on_applied = queue_purchase_showcase,
+        cleanup = function()
+          if rawget(card, "use_consumeable") == observed_use then card.use_consumeable = original_raw_use end
+          release_reservation()
+          GameActions.try_highlight(card, false)
+        end,
+      })
+    end
+    if rawget(card, "use_consumeable") == observed_use then card.use_consumeable = original_raw_use end
     release_reservation()
-    error(ret, 0)   -- rethrow so the dispatcher corrects the optimistic ok and clears force state
+    error(ret, 0)
+  end, nil, gameplay_event
+end
+
+local function record_joker_sold()
+  local N = G and G.NEURO
+  if not N then return end
+  local epoch = tonumber(N.shop_visit_epoch) or 0
+  local rec = N.jokers_sold
+  if type(rec) ~= "table" or rec.epoch ~= epoch then
+    rec = { epoch = epoch, count = 0 }
+    N.jokers_sold = rec
   end
+  rec.count = (rec.count or 0) + 1
+  N.jokers_sold_run = (tonumber(N.jokers_sold_run) or 0) + 1
+end
+
+local GUARDED_SELL_STATES = { SHOP = true, BLIND_SELECT = true, SELECTING_HAND = true }
+
+local function sell_is_guarded(state_name)
+  return GUARDED_SELL_STATES[state_name] == true or StateKinds.is_pack_state(state_name)
+end
+
+local TAG_SELL_LEAD = {
+  CORE = "you tagged it CORE.",
+  SCALING = "you tagged it SCALING.",
+  HOLD = "you tagged it HOLD.",
+  CHANGE = "you tagged it CHANGE.",
+}
+
+local function joker_sell_reason(card_name, tag, note, sell_value, remaining)
+  local N = G and G.NEURO
+  local build = N and N.plan and N.plan.build
+  local epoch = tonumber(N and N.shop_visit_epoch) or 0
+  local rec = N and N.jokers_sold
+  local sold = (type(rec) == "table" and rec.epoch == epoch and rec.count) or 0
+  local lead = TAG_SELL_LEAD[tag]
+  local remaining_s = remaining == 1 and "" or "s"
+  local parts = {
+    lead and string.format("Selling %s for $%d, leaving %d joker%s: %s", card_name, sell_value, remaining, remaining_s, lead)
+      or string.format("Selling %s for $%d leaves %d joker%s and removes this joker's listed effect from the roster.", card_name, sell_value, remaining, remaining_s)
+  }
+  if type(note) == "string" and note ~= "" then
+    parts[#parts + 1] = "You noted about this joker: \"" .. note .. "\"."
+  end
+  if sold >= 1 then
+    parts[#parts + 1] = string.format(
+      "You have already sold %d joker%s this shop -- you are dismantling your build.", sold, sold == 1 and "" or "s")
+  end
+  if type(build) == "string" and build ~= "" then
+    parts[#parts + 1] = "Your build plan: \"" .. build .. "\"."
+  end
+  parts[#parts + 1] = "Send sell_card again to confirm, or keep the joker and act elsewhere."
+  return table.concat(parts, " ")
 end
 
 local function handle_sell_card(data)
   local _, card, err = validate_area_card(data)
-  if err then return nil, err end
+  if err then return ActionResult.reject("TARGET_UNAVAILABLE", err) end
   local card_name = safe_name_or(card)
+  local name_err = CardArea.check_target_name(card, data.name, data.index, data.area)
+  if name_err then return ActionResult.reject("STALE_TARGET", name_err) end
   if card.ability and card.ability.eternal then
     return nil, string.format("Cannot sell %s — it is Eternal. Eternal jokers can never be sold or destroyed.", card_name)
   end
+  local is_joker = (card.ability and card.ability.set == "Joker") and true or false
+  local state_now = require("core.state").get_state_name()
+  if is_joker and not (G.NEURO and G.NEURO._candidate_probe)
+    and sell_is_guarded(state_now) then
+    local entry = G.NEURO and G.NEURO.joker_intents and G.NEURO.joker_intents[card.sort_id]
+    local tag = entry and entry.tag or nil
+    local sig = "sell:" .. tostring((G.NEURO and G.NEURO.state_enter_serial) or 0)
+      .. ":" .. tostring(card.sort_id or card_name)
+    local decision = tonumber(G.NEURO and G.NEURO.decision_serial) or 0
+    if G.NEURO and G.NEURO.last_sell_reject == sig
+      and (tonumber(G.NEURO.last_sell_review_serial) or 0) == decision then
+      G.NEURO.last_sell_reject = nil
+      G.NEURO.last_sell_review_serial = nil
+    else
+      if G.NEURO then
+        G.NEURO.last_sell_reject = sig
+        G.NEURO.last_sell_review_serial = decision
+      end
+      local remaining = math.max(0, #((G and G.jokers and G.jokers.cards) or {}) - 1)
+      return ActionResult.reject("CONFIRMATION_REQUIRED",
+        joker_sell_reason(card_name, tag, entry and entry.note, card.sell_cost or 0, remaining))
+    end
+  end
   local sell_value = card.sell_cost or 0
+  local source_area = get_area(data.area)
+  local gameplay_event = {
+    kind = "shop_sell",
+    public_subject = GameplayJournal.public_card_label(card, data.area, data.index),
+    area = data.area,
+    received = tonumber(sell_value),
+  }
+  local function queue_sell_showcase()
+    Showcase.enqueue_purchase({
+      card = card,
+      name = card_name,
+      cost = sell_value,
+      area = "sell",
+      at = Utils.now(),
+    })
+  end
   return function()
     local fn = G.FUNCS and G.FUNCS.sell_card
     if not fn then
       ForceHelpers.record_failure("sell_card", "the card could not be sold")
-      return string.format("Could not sell %s: selling is unavailable right now.", card_name)
+      local message = string.format("Could not sell %s: selling is unavailable right now.", card_name)
+      if data._action_id ~= nil then return ActionReceipt.outcome("failed", message) end
+      return message
     end
-    if not pcall(fn, { config = { ref_table = card }, UIBox = mock_UIBox }) then
+    local sell_ok, sell_result = pcall(fn, { config = { ref_table = card }, UIBox = mock_UIBox })
+    if not sell_ok or sell_result == false then
       ForceHelpers.record_failure("sell_card", "the card could not be sold")
-      return string.format("Could not sell %s: the sell did not go through.", card_name)
+      local message = string.format("Could not sell %s: the sell did not go through.", card_name)
+      if data._action_id ~= nil then return ActionReceipt.outcome("failed", message) end
+      return message
     end
-    return string.format("Sold: %s for $%d", card_name, sell_value)
-  end
+    Showcase.note_removal(card)
+    if data._action_id == nil then
+      if is_joker then record_joker_sold() end
+      queue_sell_showcase()
+      return string.format("Sold: %s for $%d", card_name, sell_value)
+    end
+    return ActionReceipt.create({
+      id = tostring(data._action_id),
+      name = "sell_card",
+      run_generation = G and G.NEURO and G.NEURO.run_generation,
+      deadline = ActionReceipt.now() + 3,
+      timeout_outcome = "failed",
+      correction = "The accepted sale did not complete; the selected card is still present. Inspect the current state and choose again.",
+      applied_message = string.format("Sold: %s for $%d", card_name, sell_value),
+      debug = { area = data.area, index = data.index, card = card_name },
+      probe = function()
+        if not area_contains(source_area, card) then return "applied", { target_left_area = true } end
+        return "pending"
+      end,
+      on_applied = function()
+        if is_joker then record_joker_sold() end
+        queue_sell_showcase()
+      end,
+    })
+  end, nil, gameplay_event
 end
 
-return { handle_buy_from_shop = handle_buy_from_shop, handle_sell_card = handle_sell_card }
+local function pending_sell_card_name()
+  if not (G and G.NEURO and G.jokers and G.jokers.cards) then return nil end
+  local sig = G.NEURO.last_sell_reject
+  if type(sig) ~= "string" or sig == "" then return nil end
+  local serial, target = sig:match("^sell:([^:]*):(.+)$")
+  if serial == nil then return nil end
+  if serial ~= tostring(G.NEURO.state_enter_serial or 0) then return nil end
+  if (tonumber(G.NEURO.last_sell_review_serial) or 0) ~= (tonumber(G.NEURO.decision_serial) or 0) then return nil end
+  for _, card in ipairs(G.jokers.cards) do
+    if tostring(card and card.sort_id) == target or safe_name_or(card) == target then
+      return safe_name_or(card)
+    end
+  end
+  return nil
+end
+
+local function pending_voucher_name()
+  if not (G and G.NEURO) then return nil end
+  local sig = G.NEURO.last_voucher_reject
+  if type(sig) ~= "string" or sig == "" then return nil end
+  local serial, target = sig:match("^buy_voucher:([^:]*):(.+)$")
+  if serial == nil then return nil end
+  if serial ~= tostring(G.NEURO.state_enter_serial or 0) then return nil end
+  if (tonumber(G.NEURO.last_voucher_review_serial) or 0) ~= (tonumber(G.NEURO.decision_serial) or 0) then return nil end
+  for _, card in ipairs((G.shop_vouchers and G.shop_vouchers.cards) or {}) do
+    if tostring(card and card.sort_id) == target or Utils.real_name_or(card) == target then
+      return Utils.real_name_or(card)
+    end
+  end
+  return nil
+end
+
+local GUARDED_CONFIRMATIONS = {
+  { action = "sell_card", live = pending_sell_card_name,
+    sentence = "A sell_card confirmation is open for %s: sending sell_card for that joker again completes the sale. " },
+  { action = "buy_from_shop", live = pending_voucher_name,
+    sentence = "A buy_from_shop confirmation is open for the voucher %s: sending buy_from_shop for that voucher again completes the purchase, and a voucher lasts the whole run and cannot be sold or undone. " },
+}
+
+local function pending_confirmation_note(offered)
+  local set = {}
+  for key, value in pairs(type(offered) == "table" and offered or {}) do
+    if type(key) == "number" then
+      if type(value) == "string" then set[value] = true end
+    elseif value then
+      set[key] = true
+    end
+  end
+  local parts = {}
+  for _, entry in ipairs(GUARDED_CONFIRMATIONS) do
+    if set[entry.action] then
+      local ok, name = pcall(entry.live)
+      if ok and type(name) == "string" and name ~= "" then
+        parts[#parts + 1] = string.format(entry.sentence, name)
+      end
+    end
+  end
+  return table.concat(parts)
+end
+
+return { handle_buy_from_shop = handle_buy_from_shop, handle_sell_card = handle_sell_card,
+  TAG_SELL_LEAD = TAG_SELL_LEAD, pending_sell_card_name = pending_sell_card_name,
+  GUARDED_SELL_STATES = GUARDED_SELL_STATES,
+  pending_confirmation_note = pending_confirmation_note,
+  GUARDED_CONFIRMATIONS = GUARDED_CONFIRMATIONS }

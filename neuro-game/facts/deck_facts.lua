@@ -10,9 +10,9 @@ M.DECK_INFO = {
   ["Yellow Deck"]    = "Started with +$10. Standard 52-card pool, no composition changes. ",
   ["Green Deck"]     = "At end of round: +$2 per remaining hand, +$1 per remaining discard. No interest. ",
   ["Black Deck"]     = "+1 joker slot (6 total), -1 hand per round. ",
-  ["Magic Deck"]     = "Crystal Ball voucher active (+1 consumable slot). Started with 2 Fool tarots (copy last tarot used). ",
+  ["Magic Deck"]     = "Crystal Ball voucher active (+1 consumable slot). Started with 2 Fool tarots (copy last Tarot or Planet used). ",
   ["Nebula Deck"]    = "Telescope voucher active (Celestial packs always show your most played hand's planet), -1 consumable slot. ",
-  ["Ghost Deck"]     = "Spectral cards may appear in shop and from packs. Started with Hex spectral (add Polychrome to a random joker). ",
+  ["Ghost Deck"]     = "Spectral cards may appear in shop and from packs. Started with Hex spectral (adds Polychrome to a random joker and destroys all your other jokers). ",
   ["Zodiac Deck"]    = "Tarot Merchant, Planet Merchant, and Overstock vouchers all active: the shop shows an extra item slot (Overstock) and Tarot/Planet cards appear in the shop more often. ",
   ["Plasma Deck"]    = "Chips and mult are each set to floor((chips+mult)/2) before scoring: score = floor((chips+mult)/2)^2. Blind targets are x2 base. ",
   ["Erratic Deck"]   = "All ranks and suits were randomized at start. ",
@@ -20,9 +20,24 @@ M.DECK_INFO = {
   ["Painted Deck"]   = "+2 hand size (see 10 cards), -1 joker slot. ",
   ["Checkered Deck"] = "Only Spades and Hearts (Clubs became Spades, Diamonds became Hearts): 4 copies of each rank -- 2 Spades and 2 Hearts (52 cards). ",
   ["Anaglyph Deck"]  = "Earn a Double Tag after every Boss Blind (gives copy of next tag). Standard 52-card pool. ",
-  ["Twin deck"]      = "8 Kings in 48 cards (16.7%). Start: 2 'The Twins' tarots. ",
-  ["Invader deck"]   = "6 random Gleeb (Glorpsuit) cards added each blind. Gleeb cards give 10x base chips when scored and break at end of round. Deck grows each round. Envious Joker gives +6 mult per Gleeb scored. Mix hands (5 different suits) possible with Gleeb as 5th suit. ",
-  ["Euchre deck"]    = "Only 9-K and Aces, 28 cards total, 8 Jacks (4 wild). Hand size 5, 7 cards per suit. Wild Jacks count as any suit for flushes. Straights are only 9-K or 10-A runs. ",
+}
+
+M.HUD_INFO = {
+  ["Red Deck"]       = "+1 discard per round",
+  ["Blue Deck"]      = "+1 hand per round",
+  ["Yellow Deck"]    = "started with +$10",
+  ["Green Deck"]     = "cash per unused hand and discard, no interest",
+  ["Black Deck"]     = "+1 joker slot, -1 hand",
+  ["Magic Deck"]     = "+1 consumable slot, started with 2 Fools",
+  ["Nebula Deck"]    = "Telescope active, -1 consumable slot",
+  ["Ghost Deck"]     = "spectral cards can appear, started with Hex",
+  ["Zodiac Deck"]    = "Tarot, Planet and Overstock vouchers active",
+  ["Plasma Deck"]    = "chips and mult balance before scoring, x2 blind size",
+  ["Erratic Deck"]   = "random ranks and suits",
+  ["Abandoned Deck"] = "no face cards, 40 cards",
+  ["Painted Deck"]   = "+2 hand size, -1 joker slot",
+  ["Checkered Deck"] = "only Spades and Hearts",
+  ["Anaglyph Deck"]  = "Double Tag after every Boss Blind",
 }
 
 function M.short_desc(b)
@@ -66,12 +81,43 @@ local KEY_TO_NAME = {
   b_anaglyph = "Anaglyph Deck",
 }
 
-function M.describe_deck(back)
+local function resolve(back)
   local center = DeckNames.deck_center_of(back)
-  local key = center and center.key
-  local by_key = key and KEY_TO_NAME[key] and M.DECK_INFO[KEY_TO_NAME[key]]
-  local name = (center and get_back_display_name(center)) or (back and back.name) or ""
-  return by_key or M.DECK_INFO[name] or (center and M.short_desc(center)) or M.short_desc(back)
+  local key = (center and center.key) or (type(back) == "table" and back.key) or nil
+  local name = (key and KEY_TO_NAME[key])
+    or (center and get_back_display_name(center))
+    or (type(back) == "table" and back.name) or ""
+  return center, name
+end
+
+function M.describe_deck(back)
+  local center, name = resolve(back)
+  return M.DECK_INFO[name] or (center and M.short_desc(center)) or M.short_desc(back)
+end
+
+function M.describe_deck_hud(back)
+  local center, name = resolve(back)
+  return M.HUD_INFO[name]
+    or (center and M.short_desc(center)) or M.short_desc(back)
+    or M.DECK_INFO[name]
+end
+
+M.STAKE_INFO = {
+  { key = "stake_white",  effect = "none (baseline difficulty)" },
+  { key = "stake_red",    effect = "Small Blind pays no reward" },
+  { key = "stake_green",  effect = "score requirements scale up faster each ante" },
+  { key = "stake_black",  effect = "Eternal Jokers can appear in the shop" },
+  { key = "stake_blue",   effect = "-1 discard per round" },
+  { key = "stake_purple", effect = "score requirements scale up even faster" },
+  { key = "stake_orange", effect = "Perishable Jokers can appear in the shop" },
+  { key = "stake_gold",   effect = "Rental Jokers can appear in the shop" },
+}
+
+local STAKE_EFFECT_BY_KEY = {}
+for _, s in ipairs(M.STAKE_INFO) do STAKE_EFFECT_BY_KEY[s.key] = s.effect end
+
+function M.stake_effect_text(key)
+  return key and STAKE_EFFECT_BY_KEY[key] or nil
 end
 
 function M.list_selectable_backs()
@@ -83,7 +129,7 @@ function M.list_selectable_backs()
       local key = tostring(deck.key or deck.name or "?")
       local name = deck.loc_txt and deck.loc_txt.name or deck.name
       name = tostring(name or key)
-      local eff = Utils.safe_description(deck.loc_txt, nil, 70)
+      local eff = M.describe_deck(deck) or Utils.safe_description(deck.loc_txt)
       rows[#rows + 1] = { key = key, name = name, eff = (eff ~= "" and eff) or nil }
     end
   end

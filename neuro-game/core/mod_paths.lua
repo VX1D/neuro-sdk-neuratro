@@ -6,7 +6,6 @@ local function trim(s)
   return s:match("^%s*(.-)%s*$")
 end
 
--- return true means attempted, not guaranteed
 function Paths.ensure_dir(dir)
   if not dir or dir == "" then return false end
   if love and love.filesystem and love.filesystem.createDirectory then
@@ -151,7 +150,8 @@ function Paths.write_ipc_marker(ipc_dir)
   end
 end
 
-function Paths.cookie_path()
+function Paths.mod_relative(suffix)
+  suffix = tostring(suffix or "")
   local mod_path = Paths.resolve_mod_path()
   if mod_path then
     local norm = mod_path:gsub("\\", "/")
@@ -163,9 +163,13 @@ function Paths.cookie_path()
         norm = norm:sub(#norm_save + 1)
       end
     end
-    return norm .. "assets/cookie.png"
+    return norm .. suffix
   end
-  return "Mods/neuro-game/assets/cookie.png"
+  return "Mods/neuro-game/" .. suffix
+end
+
+function Paths.cookie_path()
+  return Paths.mod_relative("assets/cookie.png")
 end
 
 return Paths
