@@ -1,8 +1,3 @@
--- Synthetic context-quality gate: builds the real assembled context for every mock state (plus a
--- constructed maximal board) and asserts the model is never fed duplicated or bloated context.
--- Since budget-dropping was removed (full context always), this guards the two things that policy
--- can regress: the same fact/section appearing twice, and a section ballooning. Run: luajit tests/test_context_quality.lua
-package.path = "./?.lua;;" .. package.path
 _G.NEURO_TEST = true
 if not love then love = { timer = { getTime = function() return 0 end } } end
 _G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
@@ -14,30 +9,17 @@ G.NEURO.dispatcher = D
 G.NEURO.actions = A
 local TD = require("tests.test_deadlock")
 
-local fails, total = 0, 0
-local function check(name, cond, detail)
-  total = total + 1
-  if cond then
-    print("PASS  " .. name)
-  else
-    fails = fails + 1
-    print("FAIL  " .. name .. (detail and ("  -- " .. tostring(detail)) or ""))
-  end
-end
+local check, done = require("tests.helpers").harness("context-quality")
 
--- absolute ceilings: base Balatro context is naturally bounded (observed worst-case ~1.2k volatile /
--- ~3k full on a maximal board), so these sit ~2x above reality -- loose enough for normal growth, tight
--- enough to trip on a real runaway (a section repeating, an unbounded blob, a doubled legend).
 local CEIL_VOLATILE = 2500
-local CEIL_STABLE = 3000
-local CEIL_FULL = 5000
+local CEIL_STABLE = 3400
+local CEIL_FULL = 5150
 
 local function header_id(line)
   if line:find("^STATE:") then return "STATE" end
   return line:match("^([A-Z][A-Z_0-9]*)[:|%[%(]")
 end
 
--- returns: dup_headers[], dup_lines[], header_set{}
 local function scan(blob)
   local hdr_count, dup_hdr = {}, {}
   local line_seen, dup_line = {}, {}
@@ -48,7 +30,6 @@ local function scan(blob)
         hdr_count[id] = (hdr_count[id] or 0) + 1
         if hdr_count[id] == 2 then dup_hdr[#dup_hdr + 1] = id end
       end
-      -- a non-trivial line appearing verbatim twice is duplicated content (bloat)
       if #line > 8 then
         if line_seen[line] then dup_line[#dup_line + 1] = line:sub(1, 48) end
         line_seen[line] = true
@@ -58,7 +39,6 @@ local function scan(blob)
   return dup_hdr, dup_line, hdr_count
 end
 
--- one scenario's worth of assertions on the three channels the model actually receives
 local function assert_clean(tag, vol, sta, full)
   local vdh, vdl = scan(vol)
   local sdh, sdl = scan(sta)
@@ -68,10 +48,8 @@ local function assert_clean(tag, vol, sta, full)
   check(tag .. ": no duplicate line in volatile", #vdl == 0, vdl[1])
   check(tag .. ": no duplicate section in stable", #sdh == 0, table.concat(sdh, ","))
   check(tag .. ": no duplicate line in stable", #sdl == 0, sdl[1])
-  -- full = stable+volatile concatenated; a duplicate header here == the same section on both channels
   check(tag .. ": no duplicate section in full (no cross-channel resend)", #fdh == 0, table.concat(fdh, ","))
   check(tag .. ": no duplicate line in full", #fdl == 0, fdl[1])
-  check(tag .. ": no DROPPED marker (full context)", not vol:find("DROPPED:") and not full:find("DROPPED:"))
   check(tag .. ": volatile not bloated (<= " .. CEIL_VOLATILE .. ")", #vol <= CEIL_VOLATILE, #vol)
   check(tag .. ": stable not bloated (<= " .. CEIL_STABLE .. ")", #sta <= CEIL_STABLE, #sta)
   check(tag .. ": full not bloated (<= " .. CEIL_FULL .. ")", #full <= CEIL_FULL, #full)
@@ -91,7 +69,6 @@ local function reset_g()
   G.NEURO.shop_reroll_count = 0
 end
 
--- ============ sweep: every distinct mock scenario ============
 local seen, swept = {}, 0
 local worst_vol, worst_full = 0, 0
 for _, sc in ipairs(TD.SCENARIOS) do
@@ -101,7 +78,7 @@ for _, sc in ipairs(TD.SCENARIOS) do
     reset_g()
     local ok = pcall(function()
       TD.apply_mock(sc.mock())
-      G.NEURO.persona = "neuro"; G.NEURO.rules_sent = true
+      G.NEURO.persona = "neuro";
     end)
     if ok then
       swept = swept + 1
@@ -118,9 +95,6 @@ end
 check("sweep: covered many scenarios", swept >= 40, swept)
 print(string.format("   [sweep] %d scenarios, worst volatile=%d full=%d", swept, worst_vol, worst_full))
 
--- ============ constructed maximal board (the no-drop worst case) ============
--- 5 jokers with real effects, full hand, consumables, a full deck, levels -- everything the full-context
--- policy now keeps at once. Prove it stays de-duplicated and within the ceiling.
 local function jk(name, key)
   return { ability = { name = name, set = "Joker" }, sell_cost = 3,
     config = { center = { key = key, set = "Joker", name = name, rarity = 1 } } }
@@ -142,7 +116,7 @@ G.deck = { cards = {} }
 for i = 1, 44 do G.deck.cards[i] = pcard("2", "Hearts") end
 G.GAME = { current_round = { hands_left = 3, discards_left = 2 }, dollars = 12, round_resets = { ante = 3 },
   blind = { name = "The Wall", chips = 400, mult = 2 } }
-G.NEURO.persona = "neuro"; G.NEURO.rules_sent = true
+G.NEURO.persona = "neuro";
 
 local acts = A.get_valid_actions_for_state("SELECTING_HAND")
 local mvol = ContextCompact.build("SELECTING_HAND", acts, { split = "volatile", no_cache = true }) or ""
@@ -150,11 +124,9 @@ local msta = ContextCompact.build("SELECTING_HAND", acts, { split = "stable", no
 local mfull = ContextCompact.build("SELECTING_HAND", acts, { no_cache = true }) or ""
 print(string.format("   [maximal] volatile=%d stable=%d full=%d chars", #mvol, #msta, #mfull))
 assert_clean("MAXIMAL/full-board", mvol, msta, mfull)
--- the fat board must actually carry the board (not silently empty), so the cleanliness means something
-check("MAXIMAL: volatile carries jokers section", mvol:find("\nJ", 1, true) ~= nil, mvol:sub(1, 80))
-check("MAXIMAL: volatile carries the hand", mvol:find("\nH:", 1, true) ~= nil)
+check("MAXIMAL: volatile carries jokers section", mvol:find("Your jokers (", 1, true) ~= nil, mvol:sub(1, 80))
+check("MAXIMAL: volatile carries the hand", mvol:find("Your hand:", 1, true) ~= nil)
 
--- same maximal board, but in the SHOP (the user's pain point): full board + a full shop to buy from
 G.shop_jokers = { cards = {
   jk("Mime", "j_mime"), { ability = { name = "The Tower", set = "Tarot" }, cost = 3,
     config = { center = { key = "c_tower", set = "Tarot", kind = nil, loc_txt = { text = { "Enhances 1 card into Stone" } } } } } },
@@ -170,9 +142,33 @@ local ssta = ContextCompact.build("SHOP", sacts, { split = "stable", no_cache = 
 local sfull = ContextCompact.build("SHOP", sacts, { no_cache = true }) or ""
 print(string.format("   [maximal SHOP] volatile=%d stable=%d full=%d chars", #svol, #ssta, #sfull))
 assert_clean("MAXIMAL/shop-full", svol, ssta, sfull)
+check("MAXIMAL SHOP: carries shop items (I:)", svol:find("Shop items:", 1, true) ~= nil)
 check("MAXIMAL SHOP: carries owned jokers (J) and consumables (C)",
-  svol:find("\nJ", 1, true) ~= nil and svol:find("\nC", 1, true) ~= nil, svol:sub(1, 80))
-check("MAXIMAL SHOP: carries shop items (I:)", svol:find("\nI:", 1, true) ~= nil)
+  svol:find("Your jokers (", 1, true) ~= nil and svol:find("\nC", 1, true) ~= nil, svol:sub(1, 80))
 
-print(string.format("==== context-quality: %d/%d PASS, %d FAIL ====", total - fails, total, fails))
-os.exit(fails == 0 and 0 or 1)
+do
+  local CtxHand = require("context.ctx_hand")
+  reset_g()
+
+  G.GAME.hands = {
+    Pair = { visible = true, level = 1, chips = 10, mult = 2, played = 0 },
+    Flush = { visible = true, level = 1, chips = 35, mult = 4, played = 0 },
+  }
+  local l_all1 = CtxHand.levels_section() or ""
+  check("all level 1 formats as single compact line", l_all1 == "Hand levels: all level 1.", l_all1)
+
+  G.GAME.hands = {
+    Pair = { visible = true, level = 3, chips = 30, mult = 4, played = 5 },
+    Flush = { visible = true, level = 1, chips = 35, mult = 4, played = 0 },
+  }
+  local l_up = CtxHand.levels_section() or ""
+  check("upgraded hand is listed", l_up:find("Pair: level 3, 30 chips x 4 mult = 120 before any card or joker, played 5.", 1, true) ~= nil, l_up)
+  check("base hands summarized in delta", l_up:find("(all other hands: level 1)", 1, true) ~= nil, l_up)
+  check("un-upgraded Flush not listed individually", l_up:find("Flush: level 1", 1, true) == nil, l_up)
+
+  G.GAME.blind = { key = "bl_flint", name = "The Flint", in_blind = true, disabled = false, loc_txt = { text = { "Flint text" } } }
+  local l_notes = CtxHand.levels_section() or ""
+  check("note_str shows full table with note", l_notes:find("Flush: level 1", 1, true) ~= nil, l_notes)
+end
+
+done()

@@ -1,25 +1,22 @@
--- Adversarial scan over the full base roster (137 jokers + 52 consumables): drives the real context row builders
--- and injects hostile ability values (embedded commas/pipes/newlines, 1e18, table/nil) to assert CSV field-count integrity, delimiter safety, no int64 wrap, no crash. luajit tests/test_card_scan.lua
-package.path = "./?.lua;;" .. package.path
 _G.NEURO_TEST = true
 if not love then love = { timer = { getTime = function() return 0 end } } end
 _G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
 
 local CardUtil = require("facts.card_util")
 local CtxHelpers = require("context.ctx_helpers")
+local SemanticRegistry = require("core.semantic_registry")
 local CtxJokers = require("context.ctx_jokers")
 local CtxMisc = require("context.ctx_misc")
 
 local fails, total = 0, 0
 local function check(name, cond, detail)
   total = total + 1
-  if not cond then  -- print only failures to keep the scan output readable
+  if not cond then
     fails = fails + 1
     print("FAIL  " .. name .. (detail and ("  -- " .. tostring(detail)) or ""))
   end
 end
 
--- {key, name, cfg{}, extra{}} from the Balatro joker centers
 local JOKERS = {
   {"j_joker","Joker",{mult=1},{}}, {"j_greedy_joker","Greedy Joker",{},{s_mult=3}},
   {"j_lusty_joker","Lusty Joker",{},{s_mult=3}}, {"j_jolly","Jolly Joker",{},{mult=8}},
@@ -105,21 +102,42 @@ local function cons_card(c)
     config = { center = { key = c[1], set = c[2] } }, sell_cost = 2 }
 end
 
--- INVARIANT: each data row splits into exactly `cols` CSV fields, has no newline, and no int64-wrapped negative
-local function scan_rows(tag, section_str, cols)
-  if section_str == nil then return end
-  local first = true
+local function scan_prose_rows(tag, section_str)
+  check(tag .. ": section rendered text", type(section_str) == "string" and section_str ~= "",
+    tostring(section_str))
+  if type(section_str) ~= "string" or section_str == "" then return end
+  local first, rows = true, 0
   for line in (section_str .. "\n"):gmatch("([^\n]*)\n") do
-    if line ~= "" and not first then  -- skip header
-      if line:find("^%d") then        -- a data row (starts with an index)
-        -- unescaped comma in a column shifts every later column -> wrong field count
-        local n = select(2, line:gsub(",", ",")) + 1
-        check(tag .. ": row has exactly " .. cols .. " CSV fields", n == cols, "got " .. n .. " :: " .. line)
+    if line ~= "" and not first then
+      if line:find("^%d") then
+        rows = rows + 1
         check(tag .. ": row has no embedded newline / pipe-as-delimiter", not line:find("[\r\n]"))
+        check(tag .. ": row starts with an index marker", line:find("^%d+%. ") ~= nil, line)
       end
     end
     first = false
   end
+  check(tag .. ": section lists the staged card as a row", rows >= 1, section_str)
+end
+
+local function scan_pack_prose_rows(tag, section_str)
+  check(tag .. ": pack section rendered text", type(section_str) == "string" and section_str ~= "",
+    tostring(section_str))
+  if type(section_str) ~= "string" or section_str == "" then return end
+  local first, rows = true, 0
+  for line in (section_str .. "\n"):gmatch("([^\n]*)\n") do
+    if line ~= "" and not first then
+      if line:find("^%d") then
+        rows = rows + 1
+        check(tag .. ": row has no embedded newline", not line:find("[\r\n]"))
+        check(tag .. ": row starts with an index marker", line:find("^%d+%. ") ~= nil, line)
+        check(tag .. ": row states takeable yes/no",
+          line:find("Takeable now: yes", 1, true) ~= nil or line:find("Takeable now: no", 1, true) ~= nil, line)
+      end
+    end
+    first = false
+  end
+  check(tag .. ": pack section lists the staged card as a row", rows >= 1, section_str)
 end
 
 local function no_crash(tag, fn)
@@ -127,7 +145,7 @@ local function no_crash(tag, fn)
   check(tag .. ": no crash", ok, err)
 end
 
-local HOSTILE = { false, true }  -- pass 2: inject adversarial values
+local HOSTILE = { false, true }
 for _, hostile in ipairs(HOSTILE) do
   for _, j in ipairs(JOKERS) do
     local card = joker_card(j)
@@ -139,13 +157,13 @@ for _, hostile in ipairs(HOSTILE) do
       card.edition = { name = "Fo,il", foil = true }
     end
     no_crash("joker " .. j[1] .. (hostile and " [hostile]" or ""), function()
-      CtxHelpers.card_effect_summary(card); CtxHelpers.joker_tags(card)
+      SemanticRegistry.render("card_effect_summary", card); CtxHelpers.joker_tags(card)
       CtxHelpers.ability_signature(card.ability); CardUtil.card_set(card)
     end)
     G.jokers = { cards = { card }, config = { card_limit = 5 } }
     local ok, sec = pcall(CtxJokers.jokers_section)
     check("joker " .. j[1] .. (hostile and " [hostile]" or "") .. ": jokers_section ok", ok, sec)
-    if ok then scan_rows("joker " .. j[1] .. (hostile and " [hostile]" or ""), sec, 5) end
+    if ok then scan_prose_rows("joker " .. j[1] .. (hostile and " [hostile]" or ""), sec) end
   end
 end
 
@@ -163,11 +181,10 @@ for _, hostile in ipairs(HOSTILE) do
     G.consumeables = { cards = { card }, config = { card_limit = 2 } }
     local ok, sec = pcall(CtxMisc.consumables_section)
     check("cons " .. c[1] .. (hostile and " [hostile]" or "") .. ": consumables_section ok", ok, sec)
-    if ok then scan_rows("cons " .. c[1] .. (hostile and " [hostile]" or ""), sec, 7) end  -- i,n,t,$,sel,ok,d
+    if ok then scan_prose_rows("cons " .. c[1] .. (hostile and " [hostile]" or ""), sec) end
   end
 end
 
--- pack rows (PC:): Buffoon=jokers, Arcana/Celestial/Spectral=consumables, Standard=playing cards
 G.GAME.pack_choices = 1
 local packcards = {}
 for _, j in ipairs(JOKERS) do packcards[#packcards + 1] = { joker_card(j), j[1] } end
@@ -177,7 +194,6 @@ for _, v in ipairs({ "A", "K", "Q", "T", "9", "2" }) do
     packcards[#packcards + 1] = { { base = { value = v, suit = s }, config = { center = { key = "c_base" } }, ability = {} }, "playing_" .. v .. s:sub(1, 1) }
   end
 end
--- enhanced/edition/seal playing card: a distinct name/token path
 packcards[#packcards + 1] = { { base = { value = "A", suit = "Spades" }, edition = { foil = true },
   seal = "Gold", config = { center = { key = "m_steel" } }, ability = { name = "Steel Card" } }, "playing_enhanced" }
 for _, pc in ipairs(packcards) do
@@ -186,19 +202,33 @@ for _, pc in ipairs(packcards) do
   local ok, sec = pcall(CtxMisc.pack_section, "SMODS_BOOSTER_OPENED")
   check("pack " .. key .. ": pack_section ok", ok, sec)
   if ok and sec then
-    scan_rows("pack " .. key, sec, 5)                       -- PC: i,n,t,f,ok -> 5 fields
-    check("pack " .. key .. ": ok column is Y or N", sec:find(",[YN]\n") ~= nil or sec:find(",[YN]$") ~= nil, sec)
+    scan_pack_prose_rows("pack " .. key, sec)
   end
 end
 
--- self-proof the scan bites: an injected comma/pipe name must be folded or the field count breaks
 do
   local c = joker_card(JOKERS[1]); c.ability.name = "A,B|C"
   check("meta: hostile name genuinely contains a delimiter", c.ability.name:find(",") ~= nil)
   G.jokers = { cards = { c }, config = { card_limit = 5 } }
-  local row = (CtxJokers.jokers_section() or ""):match("\n(1,[^\n]*)")
-  check("meta: render folds the delimiter -> row stays exactly 5 fields (proves the sweep bites)",
-    row ~= nil and (select(2, row:gsub(",", ",")) + 1) == 5, row)
+  local row = (CtxJokers.jokers_section() or ""):match("\n(1%. [^\n]*)")
+  check("meta: render folds the delimiter -> raw name never leaks (proves the sweep bites)",
+    row ~= nil and not row:find("A,B|C", 1, true) and not row:find("A,B", 1, true) and row:find("A;B/C", 1, true) ~= nil, row)
+end
+
+do
+  local Utils = require("util.utils")
+  check("mask: Not Discovered detected", Utils.is_masked_name("Not Discovered") == true)
+  check("mask: Locked detected", Utils.is_masked_name("Locked") == true)
+  check("mask: real name passes", Utils.is_masked_name("Burnt Joker") == false)
+  G.localization = { descriptions = { Joker = { j_burnt = { name = "Burnt Joker" } } } }
+  local card = {
+    config = { center = { set = "Joker", key = "j_burnt", discovered = false } },
+    ability = { set = "Joker", name = "Burnt Joker" },
+    generate_UIBox_ability_table = function() error("force ui-path failure -> nil ui_name") end,
+  }
+  local nm = Utils.safe_name(card)
+  check("mask: undiscovered center resolves to real name", nm == "Burnt Joker", tostring(nm))
+  G.localization = nil
 end
 
 print(string.format("==== card-scan: %d/%d PASS, %d FAIL (%d jokers + %d consumables x clean+hostile) ====",

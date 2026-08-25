@@ -1,6 +1,5 @@
 local S = require("hud.state")
 local Prims = require("hud.prims")
-local clamp = Prims.clamp
 local round = Prims.round
 local Cards = require("hud.cards")
 local Utils = require("util.utils")
@@ -15,7 +14,8 @@ local Motion = Prims.Motion
 local smoothstep01 = Prims.smoothstep01
 local print_tracked = Prims.print_tracked
 local tracked_width = Prims.tracked_width
-local carousel_clock = HudShared.carousel_clock
+local CAROUSEL_PERIOD = HudShared.CAROUSEL_PERIOD
+local draw_cached_tracked_text = HudShared.draw_cached_tracked_text
 
 local Vouchers = {}
 
@@ -28,32 +28,61 @@ local GAP_TOP = 20
 local IN_D = 0.35
 local GLOW_D = 1.8
 local TRACK_SM = 1
-local EXT_D = 0.30
-local EXT_OVER_MAX = 6
 local SWEEP_DELAY, SWEEP_D = 0.05, 0.45
 local SWEEP_W, SWEEP_SLANT = 18, 10
+local ANIM_LIFE = math.max(IN_D, GLOW_D, SWEEP_DELAY + SWEEP_D)
 local COUNT_PULSE_D = 0.4
 local ROT_SLIDE_D = 0.35
 local ROT_ACQ_HOLD = 2.5
 local MAX_SEG_PAIRS = 12
 
-local _GOLD, _ACC, _BG, _FR, _FRD, _WHITE, _DIM, _MONEY
+local _GOLD, _ACC, _BG, _FR, _FRD, _WHITE, _DIM, _MONEY, _GLOW
 local _SLIDE, _BADGE_W, _PULSE = 0, 0, 0
+local _TH, _MO, _FRAME_OPTS = {}, {}, {}
+local _CNT_C = { 0, 0, 0 }
+
+local _cnt_str, _cnt_w, _cnt_n, _cnt_idx, _cnt_font = "0", 0, nil, nil, nil
+local function count_label(n, rot_idx, fs)
+  if n == _cnt_n and rot_idx == _cnt_idx and fs == _cnt_font then
+    return _cnt_str, _cnt_w
+  end
+  local s = n > VIS and (tostring(rot_idx) .. "/" .. n) or tostring(n)
+  local w = fs:getWidth(s)
+  _cnt_str, _cnt_w, _cnt_n, _cnt_idx, _cnt_font = s, w, n, rot_idx, fs
+  return s, w
+end
+local _TITLE_BLOCK = {
+  shadow_color = { 0, 0, 0 },
+  main_color = false,
+  shadow_alpha = 0.5,
+  main_alpha = 0.95,
+  shadow_dx = 1,
+  shadow_dy = 1,
+}
+
+local _name_cache = {}
 
 local function voucher_name(key)
+  local cached = _name_cache[key]
+  if cached ~= nil then return cached end
+  local name
   local c = G and G.P_CENTERS and G.P_CENTERS[key]
-  if c then
-    if c.loc_txt and c.loc_txt.name and c.loc_txt.name ~= "" then return tostring(c.loc_txt.name) end
-    if c.name and c.name ~= "" then return tostring(c.name) end
+  if c and c.loc_txt and c.loc_txt.name and c.loc_txt.name ~= "" then
+    name = tostring(c.loc_txt.name)
+  elseif c and c.name and c.name ~= "" then
+    name = tostring(c.name)
+  elseif Utils.humanize_identifier then
+    name = Utils.humanize_identifier(key)
+  else
+    name = (tostring(key):gsub("^v_", ""))
   end
-  if Utils.humanize_identifier then return Utils.humanize_identifier(key) end
-  return (tostring(key):gsub("^v_", ""))
+  _name_cache[key] = name
+  return name
 end
 
 local function voucher_effect(key)
   local fx = S.voucher_fx[key]
   if fx ~= nil then return fx end
-  -- don't cache before loc data loads: S.voucher_fx is never invalidated, an empty would stick forever
   if not (G and G.P_CENTERS and G.P_CENTERS[key]) then return "" end
   local ok, txt = pcall(DebuffFacts.voucher_effect_text, key)
   fx = (ok and type(txt) == "string") and txt:gsub("%s+", " ") or ""
@@ -73,7 +102,6 @@ end
 local function effect_segments(key)
   local cached = S.voucher_seg[key]
   if cached ~= nil then return cached end
-  -- never negative-cache before the center loads (would be permanent)
   if not (G and G.P_CENTERS and G.P_CENTERS[key]) then return false end
   local fx = voucher_effect(key)
   if fx == "" then S.voucher_seg[key] = false; return false end
@@ -103,6 +131,10 @@ local function effect_segments(key)
   return seg
 end
 
+local _keys_a, _keys_b, _in_order = {}, {}, {}
+
+local drop_last_codepoint = Utils.drop_last_codepoint
+
 local function fit_segments(key, segs, max_px, fs)
   local fit = S.voucher_seg_fit[key]
   if not fit then fit = {}; S.voucher_seg_fit[key] = fit end
@@ -119,8 +151,8 @@ local function fit_segments(key, segs, max_px, fs)
       local avail = max_px - cum
       local t = str
       local tw = fs:getWidth(t .. "..")
-      while tw > avail and #t > 3 do
-        t = t:sub(1, #t - 3)
+      while tw > avail and #t > 0 do
+        t = drop_last_codepoint(t)
         tw = fs:getWidth(t .. "..")
       end
       if tw <= avail and #t > 0 then
@@ -141,25 +173,63 @@ local function draw_effect_segments(fit, tx, ey, a)
   local cx = tx
   for i = 1, fit.n, 3 do
     local str, gold, w = fit[i], fit[i + 1], fit[i + 2]
-    shadow_text(str, cx, ey, gold and _MONEY or _DIM, (gold and 0.95 or 0.88) * a, 0.4 * a)
+    shadow_text(str, cx, ey, gold and _MONEY or _DIM, (gold and 0.95 or 0.92) * a, 0.4 * a)
     cx = cx + w
   end
-end
-
-local function play_acquire_sound()
-  if Motion.reduced then return end
-  local ps = rawget(_G, "play_sound")
-  if type(ps) == "function" then pcall(ps, "gold_seal", 1.05, 0.5) end
-end
-
-local function accent_pulse()
-  if Motion.reduced then return 0.5 end
-  return _PULSE
 end
 
 local function tray_height(n, rn)
   if n <= 0 then return 0 end
   return rn(HEADER_H) + math.min(n, VIS) * rn(ROW_H) + rn(8)
+end
+
+local function tray_frame(ctx)
+  if not (ctx and ctx.p_x and ctx.p_y and ctx.pw and ctx.panel_h) then return nil end
+  if not (G and G.GAME and G.NEURO) then return nil end
+  local sn = G.NEURO.state or ""
+  if StateKinds.is_menu_state(sn) or G.OVERLAY_MENU then
+    if not G.NEURO.dev_preview_active then return nil end
+  end
+  local frac = S.drawer_slide_current or 0
+  if frac <= 0.004 then return nil end
+  local n = #(S.voucher_order or {})
+  if n == 0 then return nil end
+  local body_h = S.drawer_h_current or 0
+  if body_h <= 1 then return nil end
+
+  local rn = ctx.rn or function(v) return v end
+  local pad = rn(PAD)
+  local gap = rn(GAP_TOP)
+  local tray_w = math.min(rn(BASE_W), ctx.pw)
+  local tray_x = ctx.p_x + ctx.pw - tray_w
+  local y0 = ctx.p_y + ctx.panel_h
+  if ctx.sh then
+    local clip_h = math.min(gap + body_h + rn(4), ctx.sh - y0)
+    if clip_h <= 1 then return nil end
+  end
+
+  local ease = smoothstep01(frac)
+  local slide = (1 - ease) * (body_h + gap)
+  local ty = y0 + gap - slide
+  local header_h = rn(HEADER_H)
+  local gy = ty + header_h
+  local row_h = rn(ROW_H)
+  local cell_w = tray_w - pad * 2
+
+  return { tray_x = tray_x, tray_w = tray_w, pad = pad, gy = gy, row_h = row_h,
+    cell_w = cell_w, rn = rn }
+end
+
+function Vouchers.flight_target(ctx)
+  local fr = tray_frame(ctx)
+  if not fr then return nil end
+  local rn = fr.rn
+  local inset = rn(5)
+  local art_h = fr.row_h - inset * 2
+  local art_w = round(art_h * (71 / 95))
+  local rx = fr.tray_x + fr.pad
+  return { x = rx, y = fr.gy, w = fr.cell_w, h = fr.row_h,
+    art_x = rx, art_y = fr.gy + inset, art_w = art_w, art_h = art_h }
 end
 
 function Vouchers.update(now, rn, _sw, _sh)
@@ -175,29 +245,41 @@ function Vouchers.update(now, rn, _sw, _sh)
 
   if G.GAME ~= S.voucher_game_ref then
     S.voucher_order, S.voucher_anim = {}, {}
+    _name_cache = {}
     S.known_voucher_keys = nil
     S.voucher_game_ref = G.GAME
     S.voucher_count_pulse_at = 0
-    S.voucher_rot_idx, S.voucher_rot_prev = 1, 1
-    -- seed epoch so a loaded multi-voucher save doesn't rotate immediately
-    S.voucher_rot_epoch = carousel_clock(now)
-    S.voucher_rot_hold_until, S.voucher_rot_slide_at = 0, 0
-    S.drawer_ext_from, S.drawer_ext_target, S.drawer_ext_at = 0, 0, 0
     S.drawer_h_current = 0
   end
   local first_obs = S.known_voucher_keys == nil
-  local cur = {}
-  for k, v in pairs(G.GAME.used_vouchers) do if v then cur[k] = true end end
+  local cur = (S.known_voucher_keys == _keys_a) and _keys_b or _keys_a
+  for k in pairs(cur) do cur[k] = nil end
+  local gate = S.voucher_drawer_gate
+  for k, v in pairs(G.GAME.used_vouchers) do
+    if v then
+      local gv = gate and gate[k]
+      local held = gv ~= nil and gv.release_at == nil and now < (gv.safety_at or 0)
+        and not (S.known_voucher_keys and S.known_voucher_keys[k])
+      if not held then
+        if gv then gate[k] = nil end
+        cur[k] = true
+      end
+    end
+  end
   local added = false
   if first_obs then
     local seed = {}
     for k in pairs(cur) do seed[#seed + 1] = k end
     table.sort(seed)
     S.voucher_order = seed
+    S.voucher_rot_idx, S.voucher_rot_prev = 1, 1
+    S.voucher_rot_hold_until, S.voucher_rot_slide_at = 0, 0
+    S.voucher_rot_anchor, S.voucher_rot_epoch = now, 0
   else
     local order = S.voucher_order
-    local in_order = {}
-    for _, k in ipairs(order) do in_order[k] = true end
+    local in_order = _in_order
+    for k in pairs(in_order) do in_order[k] = nil end
+    for i = 1, #order do in_order[order[i]] = true end
     for k in pairs(cur) do
       if not S.known_voucher_keys[k] and not in_order[k] then
         order[#order + 1] = k
@@ -206,7 +288,6 @@ function Vouchers.update(now, rn, _sw, _sh)
       end
     end
     if added then
-      play_acquire_sound()
       S.voucher_count_pulse_at = now
     end
     for i = #order, 1, -1 do
@@ -220,7 +301,7 @@ function Vouchers.update(now, rn, _sw, _sh)
   S.known_voucher_keys = cur
 
   local n = #S.voucher_order
-  local epoch = carousel_clock(now)
+  local epoch = math.floor((now - S.voucher_rot_anchor) / CAROUSEL_PERIOD)
   if n <= VIS then
     S.voucher_rot_idx, S.voucher_rot_prev = 1, 1
     S.voucher_rot_slide_at = 0
@@ -237,7 +318,7 @@ function Vouchers.update(now, rn, _sw, _sh)
       S.voucher_rot_epoch = epoch
       S.voucher_rot_slide_at = 0
     elseif now < (S.voucher_rot_hold_until or 0) then
-      S.voucher_rot_epoch = epoch      -- keep epoch synced during hold (no jump when it ends)
+      S.voucher_rot_epoch = epoch
     elseif epoch ~= S.voucher_rot_epoch then
       S.voucher_rot_prev = S.voucher_rot_idx
       S.voucher_rot_idx = (S.voucher_rot_idx % n) + 1
@@ -248,66 +329,30 @@ function Vouchers.update(now, rn, _sw, _sh)
 
   local sn = (G.NEURO and G.NEURO.state) or ""
   local in_run = not StateKinds.is_menu_state(sn) and not G.OVERLAY_MENU
-  -- read the dev_preview flag directly to avoid requiring hud.dev_scenario here
   if not in_run then in_run = (G.NEURO and G.NEURO.dev_preview_active) or false end
   local target = (n > 0 and in_run) and 1 or 0
-  if target ~= S.drawer_slide_target then
-    S.drawer_slide_from = S.drawer_slide_frac
-    S.drawer_slide_target = target
-    S.drawer_slide_at = now
-  end
-  S.drawer_slide_frac = S.drawer_slide_from
-    + (target - S.drawer_slide_from) * Motion.anim01(now - S.drawer_slide_at, Motion.dur(Motion.MED))
+  Motion.tween(S, "drawer_slide", target, now, Motion.MED)
 
   local tray_h = tray_height(n, rn)
-  if S.drawer_ext_target == 0 and S.drawer_h_current <= 0 then
-    S.drawer_ext_from, S.drawer_ext_target, S.drawer_ext_at = tray_h, tray_h, now - 1
-  elseif tray_h ~= S.drawer_ext_target then
-    S.drawer_ext_from = S.drawer_h_current
-    S.drawer_ext_target = tray_h
-    S.drawer_ext_at = now
-  end
-  local ext_d = Motion.dur(EXT_D)
-  local t = (ext_d > 0) and math.min(1, (now - S.drawer_ext_at) / ext_d) or 1
-  local delta = S.drawer_ext_target - S.drawer_ext_from
-  local h
-  if t >= 1 then
-    h = S.drawer_ext_target
-  elseif delta > 0 then
-    local u = t - 1
-    local e = 1 + u * u * (2.70158 * u + 1.70158)
-    h = S.drawer_ext_from + delta * e
-    local cap = S.drawer_ext_target + rn(EXT_OVER_MAX)
-    if h > cap then h = cap end
-  else
-    h = S.drawer_ext_from + delta * smoothstep01(t)
-  end
-  S.drawer_h_current = h
-  -- reserve from the TARGET, not the animated height (pure fn of count, slide frac)
-  S.drawer_reserve = smoothstep01(S.drawer_slide_frac) * (S.drawer_ext_target + rn(GAP_TOP) + rn(4))
+  S.drawer_h_current = tray_h
+  S.drawer_reserve = smoothstep01(S.drawer_slide_current) * (tray_h + rn(GAP_TOP) + rn(4))
 end
 
 local function draw_row(ctx, key, x, y, w, h, ga, now)
   local rn, fs = ctx.rn, ctx.font_small
-  local a, ox = ga, 0
+  local a = ga
   local glow = 0
   local anim = S.voucher_anim[key]
   if anim then
     local age = now - anim.at
-    local d_in = Motion.dur(IN_D)
-    local e = Motion.anim01(age, d_in)
-    a = ga * e
-    ox = rn(22) * (1 - e)
-    local d_glow = Motion.dur(GLOW_D)
-    if d_glow > 0 and age < d_glow then
-      local r = 1 - age / d_glow
+    a = ga * Motion.anim01(age, IN_D)
+    if age < GLOW_D then
+      local r = 1 - age / GLOW_D
       glow = r * r
     end
-    if age > math.max(d_in, d_glow, SWEEP_DELAY + SWEEP_D) then S.voucher_anim[key] = nil end
+    if age > ANIM_LIFE then S.voucher_anim[key] = nil end
   end
   if a <= 0.01 then return end
-  x = x + ox
-
   if glow > 0 then
     set_col(_GOLD, 0.10 * glow * ga)
     love.graphics.rectangle("fill", x - rn(3), y + 1, w + rn(6), h - 2, rn(3), rn(3))
@@ -354,7 +399,7 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
     love.graphics.setLineWidth(1)
     love.graphics.rectangle("line", bx, by, bw, bh)
     love.graphics.setFont(fs)
-    print_tracked("II", bx + rn(4), by + math.floor((bh - fs_h) / 2), TRACK_SM, fs)
+    print_tracked("II", bx + rn(4), by + math.floor((bh - fs_h) / 2), rn(TRACK_SM), fs)
     tw = tw - bw - rn(4)
   end
   if tw <= rn(10) then return end
@@ -371,11 +416,11 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
     local fx = voucher_effect(key)
     if fx ~= "" then
       local fxt = ctx.trunc(fx, tw, fs)
-      shadow_text(fxt, tx, ey, _DIM, 0.88 * a, 0.4 * a)
+      shadow_text(fxt, tx, ey, _DIM, 0.92 * a, 0.4 * a)
     end
   end
 
-  if anim and not Motion.reduced then
+  if anim then
     local st = (now - anim.at - SWEEP_DELAY) / SWEEP_D
     if st > 0 and st < 1 then
       local sx1, sy1, sw1, sh1 = love.graphics.getScissor()
@@ -389,11 +434,11 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
   end
 end
 
-local function draw_connection(rn, x, ty, pb_y, ga, evil)
+local function draw_connection(rn, x, ty, pb_y, ga, evil, neuro)
   local plate_y = ty - rn(2)
   local ph = rn(7)
   local py = plate_y - ph
-  local wire = evil and _ACC or _GOLD
+  local wire = (evil or neuro) and _ACC or _GOLD
 
   if py - pb_y > rn(2) then
     if evil then
@@ -402,6 +447,12 @@ local function draw_connection(rn, x, ty, pb_y, ga, evil)
       love.graphics.line(x, pb_y, x, py)
       local my = math.floor((pb_y + py) / 2)
       Prims.draw_diamond(x, my, rn(1), wire, 0.85 * ga)
+    elseif neuro then
+      set_col(wire, 0.60 * ga)
+      love.graphics.setLineWidth(math.max(1, rn(2)))
+      love.graphics.line(x, pb_y, x, py)
+      local my = math.floor((pb_y + py) / 2)
+      Prims.draw_heart(x, my, rn(3), _GLOW, 0.85 * ga)
     else
       set_col(_GOLD, 0.70 * ga)
       love.graphics.setLineWidth(math.max(1, rn(2)))
@@ -430,7 +481,7 @@ function Vouchers.draw(ctx)
   if StateKinds.is_menu_state(sn) or G.OVERLAY_MENU then
     if not G.NEURO.dev_preview_active then return end
   end
-  local frac = S.drawer_slide_frac or 0
+  local frac = S.drawer_slide_current or 0
   if frac <= 0.004 then return end
   local n = #(S.voucher_order or {})
   if n == 0 then return end
@@ -450,10 +501,10 @@ function Vouchers.draw(ctx)
   _DIM = pal.D_DIM or { 0.7, 0.7, 0.7 }
   _MONEY = pal.D_MONEY or _GOLD
   _PULSE = ctx.pulse or 0
-  local persona_key = (Palette.persona and Palette.persona()) or ""
+  local persona_key = (Palette.displayed_persona and Palette.displayed_persona()) or ""
   local evil = persona_key == "evil"
   local neuro = persona_key == "neuro"
-  local _GLOW = pal.GLOW or _ACC
+  _GLOW = pal.GLOW or _ACC
   local shr, shg, shb = _ACC[1], _ACC[2], _ACC[3]
   if neuro then
     local st2 = Motion.pulse(now, 1.25)
@@ -476,7 +527,7 @@ function Vouchers.draw(ctx)
   local clip_h = math.min(gap + body_h + rn(4), ctx.sh - y0)
   if clip_h <= 1 then return end
 
-  local ease = Motion.reduced and 1 or smoothstep01(frac)
+  local ease = smoothstep01(frac)
   local ga = ease
   local slide = (1 - ease) * (body_h + gap)
   _SLIDE = slide
@@ -486,36 +537,32 @@ function Vouchers.draw(ctx)
   love.graphics.push()
   love.graphics.translate(0, -slide)
   local ty = y0 + gap
-  local rad = rn(8)
-
-  Prims.panel_shell(tray_x, ty, tray_w, body_h, rad, rn(3), rn(3), 0.50 * ga, _BG, 0.97 * ga)
+  _TH.persona_evil, _TH.persona_neuro = evil, neuro
+  _TH.bg, _TH.FR, _TH.FRD, _TH.GOLD, _TH.pg = _BG, _FR, _FRD, _GOLD, _GLOW
+  _MO.pulse, _MO.shimr, _MO.shimg, _MO.shimb = _PULSE, shr, shg, shb
+  _FRAME_OPTS.a, _FRAME_OPTS.rad, _FRAME_OPTS.title_h, _FRAME_OPTS.quiet =
+    ga, rn(9), rn(HEADER_H), true
+  local rad = HudShared.persona_frame(_TH, _MO, tray_x, ty, tray_w, body_h, rn(1), _FRAME_OPTS)
   if body_h > rn(12) then
     love.graphics.setColor(0, 0, 0, 0.25 * ga)
     love.graphics.rectangle("fill", tray_x + rn(3), ty + body_h - rn(5), tray_w - rn(6), rn(3))
     love.graphics.setColor(1, 1, 1, 0.05 * ga)
     love.graphics.rectangle("fill", tray_x + rad, ty + 1, tray_w - rad * 2, 1)
   end
-  set_col(_FR, 0.95 * ga)
-  love.graphics.setLineWidth(clamp(rn(2), 1, 2))
-  love.graphics.rectangle("line", tray_x, ty, tray_w, body_h, rad, rad)
-  love.graphics.setLineWidth(1)
   if evil and body_h > rn(20) then
     HudShared.evil_frame(tray_x, ty, tray_w, body_h, rn(1), rn(HEADER_H), _GOLD, _GLOW, _BG, _PULSE, now, ga, 0)
-    Prims.ash_motes(tray_x + math.floor(tray_w * 0.5), ty + math.floor(body_h * 0.58),
-      math.floor(tray_w * 0.4), math.floor(body_h * 0.34), rn(1), now, Motion.reduced, 0.5, 3)
     local chx = tray_x + tray_w - rn(16)
     local k2 = 0
     if S.voucher_count_pulse_at > 0 then
-      k2 = math.max(0, 1 - Motion.anim01(now - S.voucher_count_pulse_at, Motion.dur(COUNT_PULSE_D)))
+      k2 = math.max(0, 1 - Motion.anim01(now - S.voucher_count_pulse_at, COUNT_PULSE_D))
     end
-    local ch_sway = (not Motion.reduced) and math.sin(now * 1.4) * rn(2) * (1 + 3 * k2) or 0
+    local ch_sway = math.sin(now * 1.4) * rn(2) * (1 + 3 * k2)
     Prims.chains(chx, ty + body_h - 1, ty + body_h - 1 + rn(7), rn(1), _ACC, ga, ch_sway)
-    Prims.wax_seal(chx + ch_sway, ty + body_h + rn(9), rn(3), rn(1), _GOLD, 0.9 * ga, _PULSE, true)
+    Prims.wax_seal(chx + ch_sway, ty + body_h + rn(9), rn(3), rn(1), _GOLD, 0.9 * ga, _PULSE, true, now)
   end
   if neuro and body_h > rn(20) then
-    Prims.neuro_frame_deco(tray_x, ty, tray_w, body_h, rad, rn(1), rn(HEADER_H), _ACC, _GLOW, shr, shg, shb, ga)
     local chx = tray_x + tray_w - rn(16)
-    local ch_sway = (not Motion.reduced) and math.sin(now * 1.6) * rn(2) or 0
+    local ch_sway = math.sin(now * 1.6) * rn(2)
     love.graphics.setColor(shr, shg, shb, 0.65 * ga)
     love.graphics.setLineWidth(1)
     love.graphics.line(chx, ty + body_h - 1, chx + ch_sway, ty + body_h + rn(6))
@@ -525,30 +572,34 @@ function Vouchers.draw(ctx)
   local fs = ctx.font_small
   local fs_h = fs:getHeight()
   love.graphics.setFont(fs)
-  _BADGE_W = tracked_width("II", TRACK_SM, fs) + rn(8)
+  _BADGE_W = tracked_width("II", rn(TRACK_SM), fs) + rn(8)
   local header_h = rn(HEADER_H)
   local hy = ty + math.floor((header_h - 2 - fs_h) / 2)
   local title_x = tray_x + pad + rn(12)
-  love.graphics.setColor(0, 0, 0, 0.5 * ga)
-  print_tracked("VOUCHERS", title_x + 1, hy + 1, TRACK_SM, fs)
-  set_col(_ACC, 0.95 * ga)
-  local title_end = print_tracked("VOUCHERS", title_x, hy, TRACK_SM, fs)
+  _TITLE_BLOCK.font, _TITLE_BLOCK.track = fs, rn(TRACK_SM)
+  _TITLE_BLOCK.main_color, _TITLE_BLOCK.tint_alpha = _ACC, ga
+  _TITLE_BLOCK.dynamic_color = false -- alpha is the draw tint; the cached RGB stays fixed
+  local title_cached = draw_cached_tracked_text(
+    ctx, "voucher_header_title", "VOUCHERS", title_x, hy, _TITLE_BLOCK)
+  local title_end = title_x + tracked_width("VOUCHERS", rn(TRACK_SM), fs)
+  if not title_cached then
+    love.graphics.setColor(0, 0, 0, 0.5 * ga)
+    print_tracked("VOUCHERS", title_x + 1, hy + 1, rn(TRACK_SM), fs)
+    set_col(_ACC, 0.95 * ga)
+    title_end = print_tracked("VOUCHERS", title_x, hy, rn(TRACK_SM), fs)
+  end
 
-  local cnt = n > VIS and (tostring(S.voucher_rot_idx) .. "/" .. n) or tostring(n)
+  local cnt, cw = count_label(n, S.voucher_rot_idx, fs)
   local k = 0
   if S.voucher_count_pulse_at > 0 then
-    k = 1 - Motion.anim01(now - S.voucher_count_pulse_at, Motion.dur(COUNT_PULSE_D))
+    k = 1 - Motion.anim01(now - S.voucher_count_pulse_at, COUNT_PULSE_D)
   end
-  local cw = fs:getWidth(cnt)
   local cx = tray_x + tray_w - pad - cw
   local cy = hy - round(rn(3) * k)
-  love.graphics.setColor(0, 0, 0, 0.5 * ga)
-  love.graphics.print(cnt, cx + 1, cy + 1)
-  love.graphics.setColor(
-    _GOLD[1] + (1 - _GOLD[1]) * k,
-    _GOLD[2] + (1 - _GOLD[2]) * k,
-    _GOLD[3] + (1 - _GOLD[3]) * k, 0.95 * ga)
-  love.graphics.print(cnt, cx, cy)
+  _CNT_C[1] = _GOLD[1] + (1 - _GOLD[1]) * k
+  _CNT_C[2] = _GOLD[2] + (1 - _GOLD[2]) * k
+  _CNT_C[3] = _GOLD[3] + (1 - _GOLD[3]) * k
+  shadow_text(cnt, cx, cy, _CNT_C, 0.95 * ga, 0.5 * ga, 1)
 
   local ly = hy + math.floor(fs_h / 2)
   set_col(_GOLD, 0.35 * ga)
@@ -558,7 +609,7 @@ function Vouchers.draw(ctx)
   local lw2 = (cx - rn(6)) - rx1
   if lw2 >= rn(4) then love.graphics.rectangle("fill", rx1, ly, lw2, 1) end
 
-  local ap = accent_pulse()
+  local ap = _PULSE
   if evil then
     Prims.evil_divider(tray_x + rn(6), ty + header_h, tray_w - rn(12), rn(1), _ACC, _GOLD, ga, ap, nil, true)
   elseif neuro then
@@ -586,7 +637,7 @@ function Vouchers.draw(ctx)
     local rotating = n > VIS
     local rfrac = 1
     if rotating and S.voucher_rot_slide_at > 0 then
-      rfrac = Motion.anim01(now - S.voucher_rot_slide_at, Motion.dur(ROT_SLIDE_D))
+      rfrac = Motion.anim01(now - S.voucher_rot_slide_at, ROT_SLIDE_D)
     end
     local base = rotating and (rfrac < 1 and S.voucher_rot_prev or S.voucher_rot_idx) or 1
     local count = shown
@@ -609,9 +660,9 @@ function Vouchers.draw(ctx)
   end
 
   love.graphics.setScissor(tray_x - rn(3), y0, tray_w + rn(8), clip_h)
-  local pb_y = y0 + slide  -- panel bottom edge, in translated coordinates
-  draw_connection(rn, tray_x + rn(26), ty, pb_y, ga, evil)
-  draw_connection(rn, tray_x + tray_w - rn(26), ty, pb_y, ga, evil)
+  local pb_y = y0 + slide  -- already in translated coordinates, not screen space
+  draw_connection(rn, tray_x + rn(26), ty, pb_y, ga, evil, neuro)
+  draw_connection(rn, tray_x + tray_w - rn(26), ty, pb_y, ga, evil, neuro)
 
   love.graphics.pop()
   love.graphics.setScissor()

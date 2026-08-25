@@ -2,16 +2,22 @@ local HUD = {}
 
 local Palette = require("render.palette")
 local CardUtil = require("facts.card_util")
-local Tuning = require("core.tuning")
+local ModifierBadges = require("render.modifier_badges")
+local DeckNames = require("facts.deck_names")
+local DeckFacts = require("facts.deck_facts")
+local Tuning = require("core.config")
 local Utils = require("util.utils")
 local Staging = require("core.staging")
-local CtxEconomy = require("context.ctx_economy")
+local CtxEconomy = require("facts.economy_facts")
 local S = require("hud.state")
+local Episode = require("hud.episode")
 local Paths = require("core.mod_paths")
 local NeuroAnim = require("render.neuro-anim")
 
+local H = require("render.hud_shared")
 local Prims = require("hud.prims")
 local round = Prims.round
+local floor = math.floor
 local TextColors = require("hud.text_colors")
 local Assets = require("hud.assets")
 local Emotes = require("hud.emotes")
@@ -21,11 +27,7 @@ local Vouchers = require("hud.vouchers")
 local Motion = Prims.Motion
 local DEFAULT_MOTION = Prims.DEFAULT_MOTION
 local smoothstep01 = Prims.smoothstep01
-local ease_out_cubic01 = Prims.ease_out_cubic01
-local NEURO_PERSONA = Prims.NEURO_PERSONA
 local neuro_now = Prims.now
-
-local neuro_log = Utils.neuro_log
 
 local get_neuro_logo = Assets.get_neuro_logo
 
@@ -39,7 +41,6 @@ local STATE_LABELS = {
   SPECTRAL_PACK  = "OPENING PACK",
   STANDARD_PACK  = "OPENING PACK",
   BUFFOON_PACK   = "OPENING PACK",
-  -- SMODS routes every booster through one state; label it like the vanilla packs (else it falls to THINKING/IDLE)
   SMODS_BOOSTER_OPENED = "OPENING PACK",
   GAME_OVER      = "GAME OVER",
   SPLASH         = "STARTING",
@@ -50,7 +51,13 @@ local STATE_LABELS = {
 local get_panel_fonts = Assets.get_panel_fonts
 local font_cache_id = Assets.font_cache_id
 
-local card_edition_tag = Cards.card_edition_tag
+local _pcall_fails = {}
+local function site_fail(site)
+  _pcall_fails[site] = (_pcall_fails[site] or 0) + 1
+  Utils.diag_once("hud_overlay:" .. site, "hud_overlay " .. site .. " failed")
+end
+HUD._pcall_fails = _pcall_fails
+
 local card_display_name = Cards.card_display_name
 local card_description = Cards.card_description
 local rarity_color = Cards.rarity_color
@@ -60,41 +67,109 @@ local get_panel_emote = Emotes.get
 local pick_footer_emote = Emotes.pick_footer
 
 local PANEL_Y_DEFAULT = 120
-local PANEL_H_LERP_SPEED = 6.0
-local PANEL_H_GROW_SPEED = 9.0   -- growth animates too (unfold), slightly quicker than the shrink
-local PANEL_SLIDE_D = Motion.dur(Motion.MED)
-local FOOTER_SLOT_DURATION = Showcase.FOOTER_SLOT_DURATION
-local FOOTER_EMOTE_EVERY = Showcase.FOOTER_EMOTE_EVERY
-local JOKER_SHOWCASE_DURATION = Showcase.JOKER_SHOWCASE_DURATION
-local JOKER_SHOWCASE_FADE_IN = Showcase.JOKER_SHOWCASE_FADE_IN
-local JOKER_SHOWCASE_FADE_OUT = Showcase.JOKER_SHOWCASE_FADE_OUT
+local PANEL_SLIDE_D = Motion.MED
+local PANEL_FOLLOW_RATE = PANEL_SLIDE_D / 4
+local PANEL_MARGIN = H.PANEL_MARGIN
+local RP_OVERHANG = 8
+local ANCHORS = {
+  ["auto"]         = { side = "right", band = "auto" },
+  ["top-left"]     = { side = "left",  band = "top" },
+  ["middle-left"]  = { side = "left",  band = "middle" },
+  ["bottom-left"]  = { side = "left",  band = "bottom" },
+  ["top-right"]    = { side = "right", band = "top" },
+  ["middle-right"] = { side = "right", band = "middle" },
+  ["bottom-right"] = { side = "right", band = "bottom" },
+}
+local AUTO_ANCHOR = ANCHORS["auto"]
+local function clamp_num(v, lo, hi)
+  if v < lo then return lo end
+  if v > hi then return hi end
+  return v
+end
+local function panel_available_height(anchor, offset_y, sh, reserve)
+  local a = ANCHORS[anchor] or AUTO_ANCHOR
+  reserve = math.max(0, tonumber(reserve) or 0)
+  local dy = sh * (tonumber(offset_y) or 0) / 100
+  if a.band == "auto" then
+    local y = clamp_num(math.max(PANEL_Y_DEFAULT, floor(sh * 0.38)) + dy,
+      PANEL_MARGIN, sh - PANEL_MARGIN - reserve)
+    return math.max(1, sh - y - PANEL_MARGIN - reserve)
+  end
+  if a.band == "top" then
+    local y = clamp_num(PANEL_MARGIN + dy, PANEL_MARGIN, sh - PANEL_MARGIN - reserve)
+    return math.max(1, sh - y - PANEL_MARGIN - reserve)
+  end
+  return math.max(1, sh - PANEL_MARGIN * 2 - reserve)
+end
+local function panel_layout(anchor, offset_x, offset_y, sw, sh, panel_w, panel_h, reserve)
+  local a = ANCHORS[anchor] or AUTO_ANCHOR
+  reserve = math.max(0, tonumber(reserve) or 0)
+  panel_w = math.max(1, tonumber(panel_w) or 1)
+  panel_h = math.max(1, tonumber(panel_h) or 1)
+  local side = a.side
+  local inset = sw * (tonumber(offset_x) or 0) / 100
+  local dy = sh * (tonumber(offset_y) or 0) / 100
+  local x = side == "left"
+    and PANEL_MARGIN + inset
+    or sw - panel_w - PANEL_MARGIN - inset
+  local max_x = math.max(PANEL_MARGIN, sw - panel_w - PANEL_MARGIN)
+  x = clamp_num(x, PANEL_MARGIN, max_x)
+  local max_y = math.max(PANEL_MARGIN, sh - panel_h - PANEL_MARGIN - reserve)
+  local band = a.band
+  local y
+  if band == "auto" then
+    y = math.max(PANEL_Y_DEFAULT, floor(sh * 0.38)) + dy
+  elseif band == "top" then
+    y = PANEL_MARGIN + dy
+  elseif band == "middle" then
+    y = (sh - reserve - panel_h) / 2 + dy
+  else
+    y = sh - reserve - panel_h - PANEL_MARGIN + dy
+  end
+  y = clamp_num(y, PANEL_MARGIN, max_y)
+  return round(x), round(y), side, inset, side == "left" and -1 or 1
+end
+local FOOTER_CYCLE = Showcase.FOOTER_CYCLE
 local update_buy_showcase = Showcase.update_buy
-local card_set_label = Showcase.card_set_label
 local update_joker_showcase = Showcase.update_joker
-local MONEY_COUNT_DUR = Showcase.MONEY_COUNT_DURATION
 local PANEL_REBUILD_INTERVAL = 0.15
 
-local joker_fx = CardUtil.joker_fx
-
 local Rows = require("hud.rows")
+local DebugStats = require("render.debug_stats")
+
+local _cols_sig = {}
+local function cols_signature(sw, sh, anchor, offset_x, p_w)
+  if _cols_sig[1] ~= sw or _cols_sig[2] ~= sh or _cols_sig[3] ~= anchor
+    or _cols_sig[4] ~= offset_x or _cols_sig[5] ~= p_w then
+    _cols_sig[1], _cols_sig[2], _cols_sig[3], _cols_sig[4], _cols_sig[5] =
+      sw, sh, anchor, offset_x, p_w
+    _cols_sig.s = table.concat(_cols_sig, ":", 1, 5)
+  end
+  return _cols_sig.s
+end
 
 local F = { font = nil, pal = nil, p = nil, pg = nil, persona_evil = false }
 local ROW_METRICS = { carousel_pad = 0 }
 local CTX = { theme = {}, motion = {}, metrics = {}, data = {}, draw = {} }
+local FB = { base = false, rp_s = false, lp_s = false, c_s = false }
 local VOUCHER_CTX = {}
 local _voucher_err_last = nil
 
-local function cache_put(map, keys, key, val)
+local function cache_put(map, keys, key, val, limit)
+  limit = limit or 400
   map[key] = val
   keys[#keys + 1] = key
-  if #keys >= 400 then
-    for i = 1, 200 do map[keys[i]] = nil end
+  if #keys >= limit then
+    local half = math.floor(limit / 2)
+    for i = 1, half do map[keys[i]] = nil end
     local tail = {}
-    for i = 201, #keys do tail[#tail + 1] = keys[i] end
+    for i = half + 1, #keys do tail[#tail + 1] = keys[i] end
     return tail
   end
   return keys
 end
+
+local drop_last_utf8 = Utils.drop_last_codepoint
 
 local function trunc(s, max_w, f)
   if not s then return "" end
@@ -105,16 +180,23 @@ local function trunc(s, max_w, f)
   local cached = S.ov.trunc[ck]
   if cached ~= nil then return cached end
   local ok, w = pcall(f.getWidth, f, s)
-  if not ok then return s end
+  if not ok then
+    site_fail("font_width")
+    return s
+  end
   local result = s
   if w > max_w then
     local t = s
-    while w > max_w and #t > 3 do
-      t = t:sub(1, #t - 3) .. ".."
-      ok, w = pcall(f.getWidth, f, t)
-      if not ok then break end
+    while w > max_w and #t > 0 do
+      t = drop_last_utf8(t)
+      local candidate = t .. ".."
+      ok, w = pcall(f.getWidth, f, candidate)
+      if not ok then
+        site_fail("font_width")
+        break
+      end
+      result = candidate
     end
-    result = t
   end
   S.ov.trunc_keys = cache_put(S.ov.trunc, S.ov.trunc_keys, ck, result)
   return result
@@ -132,8 +214,8 @@ local function wrapped_lines(text, max_w, f)
   local ck = fid .. tostring(max_w) .. "\0" .. tostring(text)
   local cached = S.wrap_cache[ck]
   if cached then return cached end
-  -- f.getWrap returns (width, lines)
   local ok, _, lines = pcall(f.getWrap, f, tostring(text), max_w)
+  if not ok then site_fail("font_wrap") end
   if ok and type(lines) == "table" and #lines > 0 then
     for i = 1, #lines do
       out[#out + 1] = lines[i]
@@ -145,23 +227,43 @@ local function wrapped_lines(text, max_w, f)
   return out
 end
 
-local function draw_colored_desc(text, x, y, alpha, f)
+local function safe_showcase_desc(center, card)
+  local ok, d = pcall(Utils.safe_description, center and center.loc_txt, card)
+  if not ok then
+    site_fail("safe_desc")
+    return nil
+  end
+  if type(d) == "string" then return d end
+  return nil
+end
+
+local _space_w = {}
+local function spaces_width(f, n)
+  local fid = font_cache_id(f)
+  local per = _space_w[fid]
+  if not per then per = {}; _space_w[fid] = per end
+  local w = per[n]
+  if not w then w = f:getWidth(string.rep(" ", n)); per[n] = w end
+  return w
+end
+
+local function print_colored_desc(text, x, y, alpha, f)
   local pal = F.pal
   local cx = x
   local i = 1
   while i <= #text do
     local j = i
-    while j <= #text and text:sub(j,j) == " " do j = j + 1 end
-    if j > i then cx = cx + f:getWidth(string.rep(" ", j - i)); i = j end
+    while j <= #text and text:byte(j) == 32 do j = j + 1 end
+    if j > i then cx = cx + spaces_width(f, j - i); i = j end
     j = i
-    while j <= #text and text:sub(j,j) ~= " " do j = j + 1 end
+    while j <= #text and text:byte(j) ~= 32 do j = j + 1 end
     if j > i then
       local word = text:sub(i, j - 1)
       local c = pal[TextColors.classify(word)]
       local r, g, b = c[1], c[2], c[3]
-      love.graphics.setColor(0, 0, 0, 0.20 * alpha)
+      love.graphics.setColor(0, 0, 0, 0.40 * alpha)
       love.graphics.print(word, cx + 1, y + 1)
-      love.graphics.setColor(r, g, b, 0.88 * alpha)
+      love.graphics.setColor(r, g, b, 0.94 * alpha)
       love.graphics.print(word, cx, y)
       cx = cx + f:getWidth(word)
       i = j
@@ -169,100 +271,196 @@ local function draw_colored_desc(text, x, y, alpha, f)
   end
 end
 
+local DESC_TEXT_MAX = 96
+local DESC_PAL_KEYS = { "D_RED", "D_CYAN", "D_MONEY", "D_MAROON", "D_GREEN", "D_WHITE" }
+local _desc_pal_snap = {}
+local _desc_one = {}
+
+local function desc_pal_check(pal)
+  local changed = false
+  for i = 1, #DESC_PAL_KEYS do
+    local c = pal[DESC_PAL_KEYS[i]]
+    local o = (i - 1) * 3
+    local r, g, b = c and c[1], c and c[2], c and c[3]
+    if _desc_pal_snap[o + 1] ~= r or _desc_pal_snap[o + 2] ~= g or _desc_pal_snap[o + 3] ~= b then
+      changed = true
+      _desc_pal_snap[o + 1], _desc_pal_snap[o + 2], _desc_pal_snap[o + 3] = r, g, b
+    end
+  end
+  if changed then S.desc_text, S.desc_text_keys = {}, {} end
+end
+
+local DESC_SHADOW_SEG = { 0, 0, 0, 0.40 }
+local function build_desc_text(lines, count, step, f, pal)
+  local ok, text = pcall(love.graphics.newText, f)
+  if not ok or not text or type(text.add) ~= "function" then return nil end
+  ok = pcall(function()
+    local dy = 0
+    for li = 1, count do
+      local s = lines[li]
+      local cx = 0
+      local i = 1
+      while i <= #s do
+        local j = i
+        while j <= #s and s:byte(j) == 32 do j = j + 1 end
+        if j > i then cx = cx + spaces_width(f, j - i); i = j end
+        j = i
+        while j <= #s and s:byte(j) ~= 32 do j = j + 1 end
+        if j > i then
+          local word = s:sub(i, j - 1)
+          local c = pal[TextColors.classify(word)]
+          text:add({ DESC_SHADOW_SEG, word }, cx + 1, dy + 1)
+          text:add({ { c[1], c[2], c[3], 0.94 }, word }, cx, dy)
+          cx = cx + f:getWidth(word)
+          i = j
+        elseif i == j then i = i + 1 end
+      end
+      dy = dy + step
+    end
+  end)
+  if not ok then return nil end
+  return text
+end
+
+local function draw_desc_lines(lines, count, x, y, step, alpha, f)
+  if count <= 0 then return end
+  local pal = F.pal
+  if pal and type(love.graphics.newText) == "function" then
+    desc_pal_check(pal)
+    local key = font_cache_id(f) .. "\0" .. tostring(step) .. "\0" ..
+      table.concat(lines, "\1", 1, count)
+    local hit = S.desc_text[key]
+    if hit == nil then
+      hit = build_desc_text(lines, count, step, f, pal) or false
+      S.desc_text_keys = cache_put(S.desc_text, S.desc_text_keys, key, hit, DESC_TEXT_MAX)
+    end
+    if hit then
+      love.graphics.setColor(1, 1, 1, alpha)
+      love.graphics.draw(hit, x, y)
+      return
+    end
+  end
+  local dy = y
+  for i = 1, count do
+    print_colored_desc(lines[i], x, dy, alpha, f)
+    dy = dy + step
+  end
+end
+
+local function draw_colored_desc(text, x, y, alpha, f)
+  _desc_one[1] = text
+  draw_desc_lines(_desc_one, 1, x, y, 0, alpha, f)
+end
+
+local SHOWCASE_COLORS = {
+  neuro = {{0.50, 0.08, 0.15}, {0.95, 0.35, 0.55}},
+  planet = {{0.10, 0.20, 0.55}, {0.40, 0.68, 1.00}},
+  tarot = {{0.32, 0.06, 0.48}, {0.78, 0.38, 1.00}},
+  spectral = {{0.06, 0.20, 0.32}, {0.45, 0.82, 1.00}},
+  voucher = {{0.32, 0.22, 0.02}, {1.00, 0.82, 0.18}},
+}
+local EVIL_SHOWCASE_COLORS = {}
+for kind, pair in pairs(SHOWCASE_COLORS) do
+  local p, g = pair[1], pair[2]
+  EVIL_SHOWCASE_COLORS[kind] = {
+    {p[1] * 0.5 + 0.20, p[2] * 0.35 + 0.02, p[3] * 0.35 + 0.03},
+    {g[1] * 0.6 + 0.902 * 0.4, g[2] * 0.6 + 0.224 * 0.4, g[3] * 0.6 + 0.271 * 0.4},
+  }
+end
+local EVIL_FALLBACK = {{0, 0, 0}, {0, 0, 0}}
+
 local function showcase_type_colors(label, card, persona_evil)
   local ctr = CardUtil.center(card)
   local set = ctr and ctr.set or ""
   local key = ctr and ctr.key or ""
-  local slo = set:lower(); local klo = key:lower()
-  local is_evil = persona_evil; if is_evil == nil then is_evil = F.persona_evil end
+  local slo, klo = set:lower(), key:lower()
+  local is_evil = persona_evil
+  if is_evil == nil then is_evil = F.persona_evil end
 
-  local sp, sg
+  local kind
   if slo:find("neuro") or klo:find("neuro") or klo:find("j_n_") then
-    sp = {0.50, 0.08, 0.15}; sg = {0.95, 0.35, 0.55}
+    kind = "neuro"
   elseif label == "NEW PLANET" or slo == "planet" then
-    sp = {0.10, 0.20, 0.55}; sg = {0.40, 0.68, 1.00}
+    kind = "planet"
   elseif label == "NEW TAROT" or slo == "tarot" then
-    sp = {0.32, 0.06, 0.48}; sg = {0.78, 0.38, 1.00}
+    kind = "tarot"
   elseif label == "NEW SPECTRAL" or slo == "spectral" then
-    sp = {0.06, 0.20, 0.32}; sg = {0.45, 0.82, 1.00}
+    kind = "spectral"
   elseif label == "VOUCHER" or slo == "voucher" then
-    sp = {0.32, 0.22, 0.02}; sg = {1.00, 0.82, 0.18}
-  else
-    sp = F.p; sg = F.pg
+    kind = "voucher"
   end
 
-  if is_evil then
-    sp = {sp[1] * 0.5 + 0.20, sp[2] * 0.35 + 0.02, sp[3] * 0.35 + 0.03}
-    sg = {sg[1] * 0.6 + 0.902 * 0.4, sg[2] * 0.6 + 0.224 * 0.4, sg[3] * 0.6 + 0.271 * 0.4}
+  if kind then
+    local pair = is_evil and EVIL_SHOWCASE_COLORS[kind] or SHOWCASE_COLORS[kind]
+    return pair[1], pair[2]
   end
+  if not is_evil then return F.p, F.pg end
 
-  return sp, sg
+  local p, g = F.p, F.pg
+  local ep, eg = EVIL_FALLBACK[1], EVIL_FALLBACK[2]
+  ep[1], ep[2], ep[3] = p[1] * 0.5 + 0.20, p[2] * 0.35 + 0.02, p[3] * 0.35 + 0.03
+  eg[1], eg[2], eg[3] = g[1] * 0.6 + 0.902 * 0.4, g[2] * 0.6 + 0.224 * 0.4, g[3] * 0.6 + 0.271 * 0.4
+  return ep, eg
 end
 
 local function row_h(r) return Rows.height(r, ROW_METRICS) end
 
--- rn/ln scale the right/left panels. Module-level (over per-frame scale vars set at draw
--- entry) so the hot draw path doesn't allocate two closures every frame. Single-threaded.
-local _rp_s, _lp_s = 1, 1
+local _rp_s, _lp_s, _c_s = 1, 1, 1
 local function rn(v)
-  local r = round(v * _rp_s)
+  local r = floor(v * _rp_s + 0.5)
   return r < 1 and 1 or r
 end
 local function ln(v)
-  local r = round(v * _lp_s)
+  local r = floor(v * _lp_s + 0.5)
+  return r < 1 and 1 or r
+end
+local function cn(v)
+  local r = floor((tonumber(v) or 0) * _c_s + 0.5)
   return r < 1 and 1 or r
 end
 
 local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg)
-  local GOLD, CYAN, MONEY, RED, WHITE, DIM, ORANGE =
-    colors.D_GOLD, colors.D_CYAN, colors.D_MONEY,
+  local GOLD, CYAN, RED, WHITE, DIM, ORANGE =
+    colors.D_GOLD, colors.D_CYAN,
     colors.D_RED, colors.D_WHITE, colors.D_DIM, colors.D_ORANGE
 
   local function hdr(color, text)      panel_rows[#panel_rows+1] = Rows.header(color, text) end
   local function row(color, text)      panel_rows[#panel_rows+1] = Rows.line(color, text) end
-  local function sub(color, text)      panel_rows[#panel_rows+1] = Rows.sub(color, text) end
   local function sep()                 panel_rows[#panel_rows+1] = Rows.sep() end
   local function desc_cycle(cards, which)
-    if #cards > 0 then panel_rows[#panel_rows+1] = Rows.carousel(cards, which) end
+    local hidden = 0
+    for _, card in ipairs(cards) do
+      if CardUtil.is_face_down(card) then hidden = hidden + 1 end
+    end
+    if hidden == 0 then
+      if #cards > 0 then panel_rows[#panel_rows+1] = Rows.carousel(cards, which) end
+      return
+    end
+    if hidden >= #cards then
+      row(DIM, "Cards are face-down (hidden)")
+      return
+    end
+    local visible = {}
+    for _, card in ipairs(cards) do
+      if not CardUtil.is_face_down(card) then visible[#visible+1] = card end
+    end
+    panel_rows[#panel_rows+1] = Rows.carousel(visible, which)
+    row(DIM, hidden .. " face-down (hidden)")
+  end
+  local function tag_last(key, val)
+    local r = panel_rows[#panel_rows]
+    if r then r.key = key; r.flash_val = tostring(val) end
   end
 
-  if G.GAME then
-    local money = G.GAME.dollars or 0
-    local ante = G.GAME.round_resets and G.GAME.round_resets.ante or "?"
-    local round = G.GAME.round or "?"
-    hdr(MONEY, string.format("$%d", money))
-    row(CYAN, string.format("Ante %s  Round %s", tostring(ante), tostring(round)))
-    local seed = G.GAME.seeded and G.GAME.pseudorandom and G.GAME.pseudorandom.seed
-    if not seed and G.NEURO.seed_pasted then seed = G.NEURO.seed_pasted end
-    if seed then
-      row(DIM, "Seed: " .. tostring(seed))
-    end
-    local deck_name = nil
-    local ok_fh, FH = pcall(require, "force.force_helpers")
-    if ok_fh and FH then deck_name = FH.deck_name_of(G.GAME.selected_back or G.GAME.back) end
+  local in_run = G.STAGE == (G.STAGES and G.STAGES.RUN)
+  if in_run and G.GAME then
+    local back = G.GAME.selected_back or G.GAME.back
+    local deck_name = DeckNames.deck_name_of(back)
     if deck_name and deck_name ~= "" then
-      row(DIM, "Deck: " .. tostring(deck_name))
-    end
-  end
-
-  local _in_round = G.GAME and G.GAME.blind and G.GAME.blind.in_blind and
-    (tonumber(G.GAME.blind.chips) or 0) > 0 and
-    sn ~= "SHOP" and sn ~= "BLIND_SELECT" and sn ~= "MENU" and
-    sn ~= "SPLASH" and sn ~= "RUN_SETUP" and sn ~= "ROUND_EVAL" and
-    sn ~= "SMODS_BOOSTER_OPENED" and not sn:find("_PACK", 1, true)
-  if _in_round then
-    local debuff_text = ""
-    local blind = G.GAME.blind
-    if blind and type(blind.get_loc_debuff_text) == "function" then
-      local ok, txt = pcall(blind.get_loc_debuff_text, blind)
-      if ok and type(txt) == "string" then debuff_text = txt end
-    end
-    if debuff_text == "" and blind and type(blind.loc_debuff_text) == "string" then
-      debuff_text = blind.loc_debuff_text
-    end
-    if debuff_text and debuff_text ~= "" then
-      sep()
-      sub(RED, "Debuff: " .. tostring(debuff_text))
+      local center = DeckNames.deck_center_of(back)
+      local deck_desc = DeckFacts.describe_deck_hud(back)
+      if deck_desc == deck_name then deck_desc = nil end
+      panel_rows[#panel_rows + 1] = Rows.deckback(center, deck_name, deck_desc, GOLD)
     end
   end
 
@@ -271,7 +469,15 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     local jlimit = (G.jokers and G.jokers.config and G.jokers.config.card_limit)
       or (G.GAME and G.GAME.joker_limit) or 5
     hdr(GOLD, string.format("Jokers  %d/%d", #G.jokers.cards, jlimit))
+    tag_last("jokers", #G.jokers.cards .. "/" .. jlimit)
     desc_cycle(G.jokers.cards)
+  elseif G.jokers and G.jokers.cards and in_run then
+    sep()
+    local jlimit = (G.jokers and G.jokers.config and G.jokers.config.card_limit)
+      or (G.GAME and G.GAME.joker_limit) or 5
+    hdr(DIM, string.format("Jokers  0/%d", jlimit))
+    tag_last("jokers", "0/" .. jlimit)
+    panel_rows[#panel_rows + 1] = Rows.emptyslots(jlimit, "jokers")
   end
 
   if G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0 then
@@ -279,7 +485,15 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     local climit = (G.consumeables.config and G.consumeables.config.card_limit)
       or (G.GAME and G.GAME.consumeable_limit) or 2
     hdr(CYAN, string.format("Consumables  %d/%d", #G.consumeables.cards, climit))
+    tag_last("cons", #G.consumeables.cards .. "/" .. climit)
     desc_cycle(G.consumeables.cards, "cons")
+  elseif G.consumeables and G.consumeables.cards and in_run then
+    sep()
+    local climit = (G.consumeables.config and G.consumeables.config.card_limit)
+      or (G.GAME and G.GAME.consumeable_limit) or 2
+    hdr(DIM, string.format("Consumables  0/%d", climit))
+    tag_last("cons", "0/" .. climit)
+    panel_rows[#panel_rows + 1] = Rows.emptyslots(climit, "cons")
   end
 
   local function pick_desc_color(text)
@@ -292,14 +506,15 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
   end
 
   if sn == "SHOP" then
-    -- afford coloring goes through the canonical helper (cash + open slot + free-item rule) so a row
-    -- never shows buyable while the action validator would reject it for full joker/consumable slots
     local function shdr(color, text)        shop_rows[#shop_rows+1] = Rows.header(color, text) end
     local function ssub(color, text)        shop_rows[#shop_rows+1] = Rows.note(color, text) end
     local function sdesc(color, text)       shop_rows[#shop_rows+1] = Rows.descwrap(color, text) end
     local function ssep()                   shop_rows[#shop_rows+1] = Rows.sep() end
-    local function scard(color, name, card, cost, afford) shop_rows[#shop_rows+1] = Rows.shopcard(color, name, card, cost, afford) end
+    local function scard(color, name, card, cost, afford, badges)
+      shop_rows[#shop_rows+1] = Rows.shopcard(color, name, card, cost, afford, nil, badges)
+    end
 
+    local spendable = CtxEconomy.spendable()
     local shop_areas = {
       {area = G.shop_jokers,   tag = "Jokers",   label = "shop_jokers"},
       {area = G.shop_vouchers, tag = "Vouchers", label = "shop_vouchers"},
@@ -312,36 +527,17 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
         for _, c in ipairs(sa.area.cards) do
           local n = card_display_name(c)
           local cost = c.cost or 0
-          local afford = CtxEconomy.item_afford_status(c, sa.label).ok
-          scard(afford and WHITE or DIM, n, c, cost, afford)
-          if sa.tag == "Jokers" then
-            local jfx = joker_fx(c)
-            if jfx ~= "" then ssub(pick_desc_color(jfx), jfx) end
-          end
+          local afford = CtxEconomy.item_afford_status(c, sa.label, spendable).ok
+          scard(afford and WHITE or DIM, n, c, cost, afford, ModifierBadges.collect(c))
           local desc = card_description(c)
           if (not desc or desc == "") and c and c.config and c.config.center then
             desc = Utils.safe_description(c.config.center.loc_txt, c)
           end
+          if sa.tag == "Jokers" then
+            local jfx = CardUtil.joker_fx_line(c, desc)
+            if jfx ~= "" then ssub(pick_desc_color(jfx), jfx) end
+          end
           if desc and desc ~= "" then sdesc(DIM, desc) end
-        end
-      end
-    end
-  end
-
-  if sn == "BLIND_SELECT" and G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices then
-    sep()
-    hdr(pg, "Choose Blind")
-    local choices = G.GAME.round_resets.blind_choices
-    for _, btype in ipairs({"Small", "Big", "Boss"}) do
-      local key = choices[btype]
-      if key and G.P_BLINDS and G.P_BLINDS[key] then
-        local b = G.P_BLINDS[key]
-        local bname = b.name or key
-        if b.mult then
-          row(btype == "Boss" and RED or WHITE, btype .. ": " .. bname)
-          sub(DIM, "x" .. b.mult .. " chips")
-        else
-          row(btype == "Boss" and RED or WHITE, btype .. ": " .. bname)
         end
       end
     end
@@ -352,23 +548,16 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     local pack_picks = G.GAME and G.GAME.pack_choices or 0
     local pack_count = #_bp2.cards
     pack_rows.title = string.format("Pack Contents  (%d/%d pick)", math.max(0, math.floor(pack_picks)), pack_count)
-    pack_rows.picks_left = pack_picks
-    pack_rows.total = pack_count
     pack_rows.pg = pg
     pack_rows.cards = {}
     for i, c in ipairs(_bp2.cards) do
       local n = card_display_name(c)
-      if n == "?" and c.base then n = (c.base.value or "?") .. " " .. (c.base.suit or "") end
-      local etag = card_edition_tag(c)
-      if etag ~= "" then
-        local ename = etag:match("%[(.-)%]") or ""
-        if ename ~= "" then n = ename .. " " .. n end
-      end
+      local badges = ModifierBadges.collect(c)
       local rc = rarity_color(c) or WHITE
-      -- runtime tooltip drops seals/editions on freshly-spawned pack cards, so compose deterministically instead.
-      -- enhancement_key also catches suitless Stone, which is_playing_card misses (it requires a suit).
       local desc
-      if Utils.is_playing_card(c) or CardUtil.enhancement_key(c) then
+      if (Utils.is_playing_card(c) or CardUtil.enhancement_key(c)) and #badges > 0 then
+        desc = ""
+      elseif Utils.is_playing_card(c) or CardUtil.enhancement_key(c) then
         desc = CardUtil.card_modifier_desc(c)
       else
         desc = card_description(c)
@@ -385,6 +574,7 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
       pack_rows.cards[#pack_rows.cards + 1] = {
         card = c,
         name = n,
+        badges = badges,
         desc = desc or "",
         rc = rc,
         index = S.pack_card_indices[c],
@@ -395,71 +585,88 @@ end
 
 local draw_shop_panel = require("render.panels.shop").draw
 
-local draw_center_showcase = require("render.panels.center_showcase").draw
 local draw_pack_panel = require("render.panels.pack").draw
-local draw_buy_toast = require("render.panels.buy_toast").draw
+local draw_acquire = require("render.panels.acquire").draw
 local _rp = require("render.panels.right_panel")
 local draw_rp_frame, draw_rp_header, draw_rp_rows, draw_rp_footer = _rp.frame, _rp.header, _rp.rows, _rp.footer
-local function update_money_counter(now, panel_rows)
-  local money_now = (G.GAME and G.GAME.dollars) or 0
-  if S.ov.money_target == nil then
-    S.ov.money_target = money_now
-    S.ov.money_disp = money_now
-  elseif money_now ~= S.ov.money_target then
-    S.ov.money_from = S.ov.money_disp or money_now
-    S.ov.money_target = money_now
-    S.ov.money_start_at = now
-  end
-  local mt = math.min(1, (now - S.ov.money_start_at) / MONEY_COUNT_DUR)
-  local from, to = S.ov.money_from or money_now, S.ov.money_target
-  S.ov.money_disp = from + (to - from) * ease_out_cubic01(mt)
-  if panel_rows[1] and panel_rows[1].kind == "header" then
-    panel_rows[1].text = string.format("$%d", round(S.ov.money_disp))
+local STAT_FLASH_DUR = 0.55
+local function stamp_stat_flash(now, panel_rows)
+  local st = S.ov.stat
+  if not st then st = { seen = {}, at = {} }; S.ov.stat = st end
+  for i = 1, #panel_rows do
+    local r = panel_rows[i]
+    local key = r.key
+    if key then
+      local prev = st.seen[key]
+      if prev == nil then
+        st.seen[key] = r.flash_val
+      elseif prev ~= r.flash_val then
+        st.seen[key] = r.flash_val
+        st.at[key] = now
+      end
+      local at = st.at[key]
+      if at then
+        local f = 1 - Motion.anim01(now - at, STAT_FLASH_DUR)
+        r.flash = (f > 0.01) and f or nil
+      end
+    end
   end
 end
 
 local function draw_neuro_indicator()
   if not G then return end
 
-  local U        = 4    -- grid unit, all rhythm snaps to multiples
+  local U        = 4
   local GUT      = 12
   local PAD_TOP  = 8
   local ACCENT_W = 3
   local TRACK    = 2
   local TRACK_SM = 1
 
-  local now = (G.TIMERS and G.TIMERS.REAL) or 0
+  local now = neuro_now()
   local sw = love.graphics.getWidth()
   local sh = love.graphics.getHeight()
   local panel_font, panel_font_small = get_panel_fonts()
   local font = panel_font or love.graphics.getFont()
   if not font then return end
-  F.font = font   -- the hoisted trunc/wrapped_lines use this as their default font
+  F.font = font
   local prev_font = love.graphics.getFont()
   if panel_font then love.graphics.setFont(panel_font) end
 
-  local rp_s = Tuning.get("NEURO_OVERLAY_SCALE_RIGHT") or 1
-  local lp_s = Tuning.get("NEURO_OVERLAY_SCALE_LEFT") or 1
-  _rp_s, _lp_s = rp_s, lp_s   -- feed the module-level rn/ln for this frame
-  local rfont, rfont_small = get_panel_fonts(rp_s)
-  local lfont, lfont_small = get_panel_fonts(lp_s)
+  local hud_s = math.max(0.5, floor((sh / 1080) / 0.05 + 0.5) * 0.05)
+  local rp_s = (Tuning.get("NEURO_OVERLAY_SCALE_RIGHT") or 1) * hud_s
+  local lp_s = (Tuning.get("NEURO_OVERLAY_SCALE_LEFT") or 1) * hud_s
+  local c_s = (Tuning.get("NEURO_CENTER_SCALE") or 1) * hud_s
+  _rp_s, _lp_s, _c_s = rp_s, lp_s, c_s
+  if FB.base ~= panel_font or FB.rp_s ~= rp_s or FB.lp_s ~= lp_s or FB.c_s ~= c_s then
+    FB.base, FB.rp_s, FB.lp_s, FB.c_s = panel_font, rp_s, lp_s, c_s
+    FB.rfont, FB.rfont_small = get_panel_fonts(rp_s)
+    FB.lfont, FB.lfont_small = get_panel_fonts(lp_s)
+    FB.rfont_title, FB.rfont_display = Assets.role_font("title", rp_s), Assets.role_font("display", rp_s)
+    FB.lfont_title = Assets.role_font("title", lp_s)
+    FB.font_title = Assets.role_font("title", 1)
+    FB.cfont, FB.cfont_small = get_panel_fonts(c_s)
+    FB.cfont_title = Assets.role_font("title", c_s)
+    FB.cfont_micro = Assets.role_font("micro", c_s)
+  end
+  local rfont, rfont_small = FB.rfont, FB.rfont_small
+  local lfont, lfont_small = FB.lfont, FB.lfont_small
+  local rfont_title, rfont_display = FB.rfont_title, FB.rfont_display
+  local lfont_title, font_title = FB.lfont_title, FB.font_title
+  local cfont, cfont_small = FB.cfont, FB.cfont_small
+  local cfont_title, cfont_micro = FB.cfont_title, FB.cfont_micro
   local rp_sh = rp_s < 0.75 and 1 or 2
   local lp_sh = lp_s < 0.75 and 1 or 2
 
   if G.NEURO then
     local logo = get_neuro_logo()
     local state_name = G.NEURO.state or ""
-    local _pal = Palette.pal()
+    local _pal = Palette.displayed_pal()
     local _motion = _pal.MOTION or DEFAULT_MOTION
-    local persona_key = Palette.persona()
+    local persona_key = Palette.displayed_persona()
     local persona_evil = persona_key == "evil"
     local persona_neuro = persona_key == "neuro"
-    local pulse
-    if Motion.reduced then
-      pulse = 0.5
-    else
-      pulse = 0.5 + 0.5 * math.sin(now * _motion.pulse_hz)
-    end
+    local pulse = Motion.pulse(now, _motion.pulse_hz)
     local shimr, shimg, shimb = 0, 0, 0
     if persona_neuro then
       local st2 = Motion.pulse(now, 1.25)
@@ -483,7 +690,6 @@ local function draw_neuro_indicator()
       state_label = STATE_LABELS[state_name] or "IDLE"
     end
     local text_h = font:getHeight()
-    local action_text = Staging.get_overlay_text()
     local p = _pal.PRIMARY
     local pg = _pal.GLOW
     local bg = _pal.PANEL_BG or _pal.BG
@@ -491,7 +697,6 @@ local function draw_neuro_indicator()
     local FR = _pal.FRAME or p
     local FRD = _pal.FRAME_DIM or p
     F.pal, F.p, F.pg, F.persona_evil = _pal, p, pg, persona_evil
-    update_buy_showcase(now)
     Vouchers.update(now, rn, sw, sh)
 
     local logo_h = rn(20)
@@ -502,7 +707,7 @@ local function draw_neuro_indicator()
       logo_w = logo:getWidth() * logo_scale
     end
 
-    local sn = G.NEURO.state or ""
+    local sn = state_name
 
     local ORANGE  = _pal.D_ORANGE
     local GREEN   = _pal.D_GREEN
@@ -511,63 +716,49 @@ local function draw_neuro_indicator()
     local CYAN    = _pal.D_CYAN
     local GOLD    = _pal.D_GOLD
 
-    local now_rows = neuro_now()
-    if S.ov.built_sn ~= sn or (now_rows - S.ov.built_at) >= PANEL_REBUILD_INTERVAL then
+    if S.ov.built_sn ~= sn or (now - S.ov.built_at) >= PANEL_REBUILD_INTERVAL then
       for k in pairs(S.ov.panel) do S.ov.panel[k] = nil end
       for k in pairs(S.ov.shop) do S.ov.shop[k] = nil end
       for k in pairs(S.ov.pack) do S.ov.pack[k] = nil end
       build_panel_rows(sn, S.ov.panel, S.ov.shop, S.ov.pack, _pal, pg)
-      S.ov.built_at = now_rows
+      S.ov.built_at = now
       S.ov.built_sn = sn
     end
     local panel_rows = S.ov.panel
     local shop_rows = S.ov.shop
     local pack_rows = S.ov.pack
 
-    update_money_counter(now, panel_rows)
+    stamp_stat_flash(now, panel_rows)
 
     local p_w = rn(320)
     local p_pad_x = rn(GUT)
     local r_U = rn(U)
     local r_accw = rn(ACCENT_W)
-    local p_x = sw - p_w - 8
+    local p_x, p_y
 
-    local jokers_on_screen = G.jokers and G.jokers.cards and #G.jokers.cards > 0
-        and state_name ~= "SPLASH" and state_name ~= "MENU"
-        and state_name ~= "GAME_OVER" and state_name ~= "RUN_SETUP"
-    local p_y_target = math.max(PANEL_Y_DEFAULT, math.floor(sh * 0.38))
+    local anchor = Tuning.get("NEURO_OVERLAY_ANCHOR") or "auto"
+    local offset_x = Tuning.get("NEURO_OVERLAY_OFFSET_X") or 0
+    local offset_y = Tuning.get("NEURO_OVERLAY_OFFSET_Y") or 0
+    local shop_anchor = Tuning.get("NEURO_SHOP_ANCHOR") or "auto"
+    local shop_offset_x = Tuning.get("NEURO_SHOP_OFFSET_X") or 0
+    local shop_offset_y = Tuning.get("NEURO_SHOP_OFFSET_Y") or 0
+    local drawer_reserve = S.drawer_reserve or 0
+    local avail_h = panel_available_height(anchor, offset_y, sh, drawer_reserve)
     local frame_time = now
     local dt = 0
     if S.panel_y_last_time > 0 and frame_time > S.panel_y_last_time then
       dt = math.min(frame_time - S.panel_y_last_time, 0.1)
     end
     S.panel_y_last_time = frame_time
-    if p_y_target ~= S.panel_y_target then
-      S.panel_y_from = S.panel_y_current
-      S.panel_y_target = p_y_target
-      S.panel_y_at = now
-    end
-    S.panel_y_current = S.panel_y_from
-      + (S.panel_y_target - S.panel_y_from) * Motion.anim01(now - S.panel_y_at, PANEL_SLIDE_D)
-    local booster_active = S.buy_showcase and S.buy_showcase.area == "booster_choice"
-    local rp_target = booster_active and 1 or 0
-    if rp_target ~= S.rp_slide_target then
-      S.rp_slide_from = S.right_panel_slide_frac
-      S.rp_slide_target = rp_target
-      S.rp_slide_at = now
-    end
-    S.right_panel_slide_frac = S.rp_slide_from
-      + (S.rp_slide_target - S.rp_slide_from) * Motion.anim01(now - S.rp_slide_at, PANEL_SLIDE_D)
     local pack_state_active = state_name:find("_PACK") ~= nil or state_name == "SMODS_BOOSTER_OPENED"
-    local lp_target = (booster_active or pack_state_active) and 1 or 0
-    if lp_target ~= S.lp_slide_target then
-      S.lp_slide_from = S.left_panel_slide_frac
-      S.lp_slide_target = lp_target
-      S.lp_slide_at = now
+    local booster_active = Episode.pack_on_screen()
+    if booster_active == nil then
+      booster_active = pack_state_active and pack_rows.cards ~= nil and #pack_rows.cards > 0
     end
-    S.left_panel_slide_frac = S.lp_slide_from
-      + (S.lp_slide_target - S.lp_slide_from) * Motion.anim01(now - S.lp_slide_at, PANEL_SLIDE_D)
-    local p_y = S.panel_y_current
+    local rp_target = booster_active and 1 or 0
+    S.right_panel_slide_frac = Motion.tween(S, "rp_slide", rp_target, now, PANEL_SLIDE_D)
+    local lp_target = (booster_active or pack_state_active) and 1 or 0
+    S.left_panel_slide_frac = Motion.tween(S, "lp_slide", lp_target, now, PANEL_SLIDE_D)
     local line_h = text_h + 4
     local small_text_h = panel_font_small and panel_font_small:getHeight() or text_h
     local small_line_h = small_text_h + 2
@@ -576,13 +767,18 @@ local function draw_neuro_indicator()
     local content_w = p_w - p_pad_x * 2
     local r_text_h = rfont:getHeight()
     local r_small_text_h = rfont_small and rfont_small:getHeight() or r_text_h
+    local c_text_h = cfont:getHeight()
+    local c_small_text_h = cfont_small and cfont_small:getHeight() or c_text_h
     local rp_font, rp_text_h = rfont, r_text_h
     local rp_line_h, rp_small_line_h = r_text_h + rn(4), r_small_text_h + rn(2)
     local rp_card_line_h, rp_sep_h = rn(card_line_h), rn(sep_h)
+    local rp_title_text_h = rfont_title:getHeight()
+    local rp_display_text_h = rfont_display:getHeight()
+    local rp_hdr_line_h = rp_title_text_h + rn(4)
 
-    local title_h = rn(44)
-    local action_row_h = r_text_h + rn(12)  -- fixed height so banner appearing/clearing never resizes the panel
+    local title_h = rn(8) + rp_display_text_h + rn(4) + rp_title_text_h + rn(6)
     ROW_METRICS.line_h, ROW_METRICS.small_line_h = rp_line_h, rp_small_line_h
+    ROW_METRICS.header_line_h = rp_hdr_line_h
     ROW_METRICS.card_line_h, ROW_METRICS.sep_h = rp_card_line_h, rp_sep_h
     ROW_METRICS.carousel_pad = rn(18)
     ROW_METRICS.content_w = content_w
@@ -596,62 +792,16 @@ local function draw_neuro_indicator()
       for _, r in ipairs(panel_rows) do data_h = data_h + row_h(r) end
     end
 
-    local pk = G.NEURO.persona or NEURO_PERSONA
+    local pk = persona_key
     local quip_display = ""
     local footer_emote_name = pick_footer_emote(pk, sn)
     local footer_emote = get_panel_emote(footer_emote_name)
 
-    local showcase_card = nil
-    local showcase_name = nil
-    local showcase_label = nil
-    local showcase_fx = nil
-    local showcase_desc = nil
-    local showcase_alpha = 0
-    local showcase_slide = 0
-    if S.joker_showcase and S.joker_showcase.card then
-      local jsc = S.joker_showcase
-      local pack_choosing = (sn:find("_PACK") or sn == "SMODS_BOOSTER_OPENED")
-        and (pack_rows.cards and #pack_rows.cards > 0)
-      if pack_choosing then
-        jsc.hold_elapsed = jsc.hold_elapsed or (now - (jsc.started or now))
-        jsc.started = now - jsc.hold_elapsed
-      else
-        jsc.hold_elapsed = nil
-        local elapsed = now - (jsc.started or now)
-        if elapsed >= JOKER_SHOWCASE_DURATION then
-          S.joker_showcase = nil
-          if #S.joker_showcase_q > 0 then
-            local _nxt = table.remove(S.joker_showcase_q, 1)
-            S.joker_showcase = {card = _nxt.card, label = _nxt.label, started = now}
-          end
-        else
-          showcase_card  = jsc.card
-          showcase_label = jsc.label or card_set_label(showcase_card)
-          showcase_name  = card_display_name(showcase_card)
-          -- joker_fx misreports CONDITIONAL/random mult as unconditional; omit, desc carries it
-          showcase_fx = nil
-          if Utils.is_playing_card(showcase_card) or CardUtil.enhancement_key(showcase_card) then
-            showcase_desc = CardUtil.card_modifier_desc(showcase_card)
-          else
-            showcase_desc = card_description(showcase_card)
-            if (not showcase_desc or showcase_desc == "") and showcase_card and showcase_card.config and showcase_card.config.center then
-              local ok, d = pcall(Utils.safe_description, showcase_card.config.center.loc_txt, showcase_card)
-              if ok and type(d) == "string" then showcase_desc = d end
-            end
-          end
-          showcase_alpha = 1
-          if elapsed < JOKER_SHOWCASE_FADE_IN then
-            showcase_alpha = smoothstep01(elapsed / JOKER_SHOWCASE_FADE_IN)
-          elseif elapsed > (JOKER_SHOWCASE_DURATION - JOKER_SHOWCASE_FADE_OUT) then
-            showcase_alpha = smoothstep01((JOKER_SHOWCASE_DURATION - elapsed) / JOKER_SHOWCASE_FADE_OUT)
-          end
-          showcase_slide = (1 - showcase_alpha) * 10
-        end
-      end
-    end
-
-    local footer_slot = math.floor(now / FOOTER_SLOT_DURATION)
-    local footer_is_emote = footer_emote and (footer_slot % FOOTER_EMOTE_EVERY == (FOOTER_EMOTE_EVERY - 1))
+    local dev_footer = G.NEURO and G.NEURO.dev_footer
+    local footer_slot = (dev_footer and dev_footer.dur)
+      and math.floor(now / dev_footer.dur) or H.footer_slot(now)
+    local footer_phase = (dev_footer and dev_footer.phase) or (footer_slot % FOOTER_CYCLE)
+    local footer_is_emote = footer_emote and footer_phase == (FOOTER_CYCLE - 1)
     local run_seed = (G.GAME and G.GAME.pseudorandom and G.GAME.pseudorandom.seed) or (G.NEURO and G.NEURO.seed_pasted)
     if run_seed ~= S.seed_quip_src then
       S.seed_quip_src = run_seed
@@ -661,131 +811,177 @@ local function draw_neuro_indicator()
     if quip then
       quip_display = pk == "evil" and ("// " .. quip .. " //") or ("~ " .. quip .. " ~")
     end
-    if S.drawer_slide_target == 1 then
-      quip_display = ""
-      footer_is_emote = false
-    end
-    local footer_h = ((footer_is_emote and footer_emote.img) or quip_display ~= "") and rn(80) or 0
 
-    local total_h = title_h + action_row_h + data_h + footer_h
-    local avail_h = sh - p_y - 10 - (S.drawer_reserve or 0)
+    local footer_legend, footer_legend_entry, footer_legend_n, footer_legend_i
+    if not footer_is_emote and (footer_phase == 1 or footer_phase == 2) then
+      local deck = S.ov.legend_deck
+      if not deck or (now - (S.ov.legend_deck_at or -1)) >= 1.0 then
+        deck = ModifierBadges.legend_deck()
+        S.ov.legend_deck, S.ov.legend_deck_at = deck, now
+      end
+      local ordinal = (dev_footer and dev_footer.phase) and footer_slot
+        or (math.floor(footer_slot / FOOTER_CYCLE) * 2 + (footer_phase == 2 and 1 or 0))
+      footer_legend, footer_legend_entry = ModifierBadges.legend(ordinal, deck)
+      if footer_legend_entry then
+        footer_legend_n = #deck
+        footer_legend_i = (ordinal % #deck) + 1
+        quip_display = footer_legend_entry.text .. "  " .. (footer_legend_entry.tip or "")
+      end
+    end
+    local footer_h = 0
+    if footer_is_emote or quip_display ~= "" then footer_h = rn(80) end
+    local footer_sig = footer_is_emote and ("e:" .. footer_slot)
+      or (footer_legend_entry and ("l:" .. footer_slot))
+      or (quip_display or "")
+    if footer_sig ~= S.ov.footer_sig then
+      S.ov.footer_prev_emote = S.ov.footer_last_emote
+      S.ov.footer_prev_quip = S.ov.footer_last_quip
+      S.ov.footer_prev_legend = S.ov.footer_last_legend
+      S.ov.footer_prev_legend_meta = S.ov.footer_last_legend_meta
+      S.ov.footer_sig = footer_sig
+      S.ov.footer_at = now
+    end
+    S.ov.footer_last_emote = footer_is_emote and true or false
+    S.ov.footer_last_quip = quip_display
+    S.ov.footer_last_legend = footer_legend
+    S.ov.footer_last_legend_meta = footer_legend_entry
+      and { entry = footer_legend_entry, n = footer_legend_n, i = footer_legend_i } or nil
+    local footer_fade = smoothstep01(math.min(1, (now - (S.ov.footer_at or now)) / 0.25))
+
+    local total_h = title_h + data_h + footer_h
     local pref_h = math.min(avail_h, math.floor(sh * 0.58))
     local n_cols = 1
-    -- sticky compact: release only 24px below trigger so boundary content cannot flicker
-    if S.rp_compact and total_h < pref_h - 24 then S.rp_compact = false end
-    if total_h > pref_h then S.rp_compact = true end
+    S.rp_compact = Rows.want_compact(S.rp_compact, total_h, pref_h)
     if S.rp_compact then
       rp_font, rp_text_h = rfont_small, r_small_text_h
-      rp_line_h = r_small_text_h + rn(3)
-      rp_small_line_h = r_small_text_h + rn(1)
-      rp_card_line_h = rn(26)
-      rp_sep_h = rn(6)
-      ROW_METRICS.line_h, ROW_METRICS.small_line_h = rp_line_h, rp_small_line_h
-      ROW_METRICS.card_line_h, ROW_METRICS.sep_h = rp_card_line_h, rp_sep_h
+      Rows.compact_metrics(ROW_METRICS, r_small_text_h, rn)
+      rp_line_h, rp_small_line_h = ROW_METRICS.line_h, ROW_METRICS.small_line_h
+      rp_card_line_h, rp_sep_h = ROW_METRICS.card_line_h, ROW_METRICS.sep_h
+      rp_hdr_line_h = ROW_METRICS.header_line_h
       ROW_METRICS.font = rp_font
       data_h = 0
       if #panel_rows > 0 then
         data_h = rn(12)
         for _, r in ipairs(panel_rows) do data_h = data_h + row_h(r) end
       end
-      total_h = title_h + action_row_h + data_h + footer_h
+      total_h = title_h + data_h + footer_h
       if total_h > avail_h then
-        local avail_data = math.max(rp_card_line_h, avail_h - title_h - action_row_h - footer_h - rn(12))
-        local col_h, max_col = 0, 0
-        for _, r in ipairs(panel_rows) do
-          local hh = row_h(r)
-          if col_h > 0 and col_h + hh > avail_data then
-            n_cols = n_cols + 1
-            col_h = 0
-          end
-          col_h = col_h + hh
-          if col_h > max_col then max_col = col_h end
-        end
-        if n_cols > 3 then n_cols = 3 end
-        total_h = title_h + action_row_h + rn(12) + math.min(max_col, avail_data) + footer_h
+        local avail_data = math.max(rp_card_line_h, avail_h - title_h - footer_h - rn(12))
+        local used_h
+        n_cols, used_h = Rows.pack_columns(panel_rows, ROW_METRICS, avail_data, 3)
+        total_h = title_h + rn(12) + used_h + footer_h
         if total_h > avail_h then total_h = avail_h end
       end
     end
+    local n_cols_used = n_cols
+    local cols_sig = cols_signature(sw, sh, anchor, offset_x, p_w)
+    local hard_cap = math.max(1, math.floor((sw - 2 * PANEL_MARGIN) / math.max(1, p_w)))
+    S.rp_cols_latch, n_cols =
+      Rows.latch_columns(S.rp_cols_latch, n_cols, cols_sig, math.min(3, hard_cap))
     local pw_total = p_w * n_cols
-    p_x = sw - pw_total - 8
-    if S.panel_h_current <= 0 then S.panel_h_current = total_h end
-    local ph_diff = total_h - S.panel_h_current
-    if math.abs(ph_diff) < 0.5 then
-      S.panel_h_current = total_h
-    else
-      local ph_spd = ph_diff > 0 and PANEL_H_GROW_SPEED or PANEL_H_LERP_SPEED
-      S.panel_h_current = S.panel_h_current + ph_diff * math.min(1, ph_spd * dt)
-    end
+    local panel_h_target = total_h
+    if S.panel_h_current <= 0 then S.panel_h_current = math.min(total_h, title_h) end
+    S.panel_h_current = Rows.ease_height(S.panel_h_current, total_h, dt)
     total_h = round(S.panel_h_current)
-
+    local p_x_target, p_y_target, main_side, offset_x_px, main_slide_dir =
+      panel_layout(anchor, offset_x, offset_y, sw, sh, pw_total, total_h, drawer_reserve)
+    Motion.snap(S, "panel_x", p_x_target)
+    Motion.approach(S, "panel_y", p_y_target, dt, PANEL_FOLLOW_RATE)
+    p_x, p_y = round(S.panel_x_current), round(S.panel_y_current)
     local ctx = CTX
     local th = ctx.theme
     th.p, th.pg, th.bg, th.ACC, th.FR, th.FRD = p, pg, bg, ACC, FR, FRD
+    th.ROW, th.SEL = _pal.ROW_BG or bg, _pal.SEL_BG or _pal.FRAME_DIM or bg
     th.ORANGE, th.GREEN, th.DIM, th.WHITE, th.CYAN, th.GOLD = ORANGE, GREEN, DIM, WHITE, CYAN, GOLD
     th._pal, th.persona_evil, th.persona_neuro, th.persona_name, th.pk = _pal, persona_evil, persona_neuro, persona_name, pk
     th.boss = (G.GAME and G.GAME.blind and G.GAME.blind.boss) and true or false
     th.is_round_eval = sn == "ROUND_EVAL"
     th.font, th.panel_font_small, th.rfont, th.rfont_small, th.lfont, th.lfont_small, th.rp_font =
       font, panel_font_small, rfont, rfont_small, lfont, lfont_small, rp_font
+    th.rfont_title, th.rfont_display, th.lfont_title = rfont_title, rfont_display, lfont_title
+    th.font_title = font_title
+    th.cfont, th.cfont_small, th.cfont_title, th.cfont_micro = cfont, cfont_small, cfont_title, cfont_micro
     local mo = ctx.motion
     mo.now, mo.pulse, mo.dt, mo.shimr, mo.shimg, mo.shimb = now, pulse, dt, shimr, shimg, shimb
     local me = ctx.metrics
     me.rn, me.ln, me.rp_sh, me.lp_sh, me.sw, me.sh, me.U = rn, ln, rp_sh, lp_sh, sw, sh, U
+    me.cn = cn
     me.GUT, me.PAD_TOP, me.ACCENT_W, me.TRACK, me.TRACK_SM = GUT, PAD_TOP, ACCENT_W, TRACK, TRACK_SM
     me.p_x, me.p_y, me.p_w, me.p_pad_x, me.r_U, me.r_accw, me.pw_total = p_x, p_y, p_w, p_pad_x, r_U, r_accw, pw_total
-    me.total_h, me.content_w, me.n_cols, me.title_h, me.action_row_h, me.footer_h = total_h, content_w, n_cols, title_h, action_row_h, footer_h
+    me.main_side, me.main_slide_dir, me.offset_x_px = main_side, main_slide_dir, offset_x_px
+    me.anchor, me.offset_y = anchor, offset_y
+    me.shop_anchor, me.shop_offset_x, me.shop_offset_y = shop_anchor, shop_offset_x, shop_offset_y
+    me.total_h, me.content_w, me.n_cols, me.title_h, me.footer_h = total_h, content_w, n_cols, title_h, footer_h
+    me.n_cols_used = n_cols_used
     me.rp_text_h, me.rp_line_h, me.rp_small_line_h, me.rp_card_line_h, me.rp_sep_h = rp_text_h, rp_line_h, rp_small_line_h, rp_card_line_h, rp_sep_h
     me.r_text_h, me.r_small_text_h, me.line_h, me.small_line_h, me.small_text_h, me.card_line_h = r_text_h, r_small_text_h, line_h, small_line_h, small_text_h, card_line_h
+    me.c_text_h, me.c_small_text_h = c_text_h, c_small_text_h
     me.sep_h, me.text_h = sep_h, text_h
+    me.rp_title_text_h, me.rp_display_text_h, me.rp_hdr_line_h = rp_title_text_h, rp_display_text_h, rp_hdr_line_h
     local da = ctx.data
     da.panel_rows, da.shop_rows, da.pack_rows, da.sn, da.state_name = panel_rows, shop_rows, pack_rows, sn, state_name
-    da.showcase_card, da.showcase_name, da.showcase_label, da.showcase_fx, da.showcase_desc = showcase_card, showcase_name, showcase_label, showcase_fx, showcase_desc
-    da.showcase_alpha, da.showcase_slide, da.quip_display, da.footer_emote, da.footer_is_emote, da.jokers_on_screen = showcase_alpha, showcase_slide, quip_display, footer_emote, footer_is_emote, jokers_on_screen
-    da.state_label, da.is_thinking, da.action_text, da.logo, da.logo_w, da.logo_h, da.logo_scale = state_label, is_thinking, action_text, logo, logo_w, logo_h, logo_scale
+    da.showcase_alpha, da.quip_display, da.footer_emote, da.footer_is_emote = 0, quip_display, footer_emote, footer_is_emote
+    da.footer_fade = footer_fade
+    da.footer_prev_emote, da.footer_prev_quip = S.ov.footer_prev_emote, S.ov.footer_prev_quip
+    da.footer_prev_legend = S.ov.footer_prev_legend or false
+    da.footer_legend = footer_legend or false
+    da.footer_legend_meta = S.ov.footer_last_legend_meta or false
+    da.footer_prev_legend_meta = S.ov.footer_prev_legend_meta or false
+    da.state_label, da.is_thinking, da.logo, da.logo_w, da.logo_h, da.logo_scale = state_label, is_thinking, logo, logo_w, logo_h, logo_scale
     da.booster_active, da.pack_state_active = booster_active, pack_state_active
-    -- print_tracked/tracked_width/caps_label are NOT in ctx.draw; panels import them from H directly.
     local dr = ctx.draw
     dr.trunc, dr.wrapped_lines, dr.draw_colored_desc, dr.row_h, dr.showcase_type_colors =
       trunc, wrapped_lines, draw_colored_desc, row_h, showcase_type_colors
+    dr.draw_desc_lines, dr.print_colored_desc = draw_desc_lines, draw_colored_desc
+    local rp_shift = round(main_slide_dir * (pw_total + 20) * S.right_panel_slide_frac)
+    local eff_px = p_x + rp_shift
+    ctx.occ_left, ctx.occ_right = nil, nil
     draw_shop_panel(ctx)
+    local settled_px = p_x_target
+      + round(main_slide_dir * (pw_total + 20) * (S.rp_slide_target or 0))
+    H.corridor(ctx, sw, main_side, settled_px, pw_total, now, dt, cn)
 
     ctx.center_top_y = 8
-    -- must draw before showcase/pack: they flow below its reserved band, otherwise it swaps places with them
-    draw_buy_toast(ctx)
-
-    draw_center_showcase(ctx)
+    draw_acquire(ctx)
 
     draw_pack_panel(ctx)
 
-    if S.right_panel_slide_frac > 0 then
-      love.graphics.push()
-      love.graphics.translate(round((pw_total + 20) * S.right_panel_slide_frac), 0)
+    local rp_on_screen = (eff_px - RP_OVERHANG) < sw and (eff_px + pw_total + RP_OVERHANG) > 0
+    if rp_on_screen then
+      if S.right_panel_slide_frac > 0 then
+        love.graphics.push()
+        love.graphics.translate(rp_shift, 0)
+      end
+      draw_rp_frame(ctx)
+
+      draw_rp_header(ctx)
+
+      draw_rp_rows(ctx)
+
+      draw_rp_footer(ctx)
+      if S.right_panel_slide_frac > 0 then love.graphics.pop() end
     end
-    draw_rp_frame(ctx)
-
-    draw_rp_header(ctx)
-
-    draw_rp_rows(ctx)
-
-    draw_rp_footer(ctx)
-    if S.right_panel_slide_frac > 0 then love.graphics.pop() end
-    -- owned-voucher ledger drawer, below the right panel (after the panel's slide pop so it doesn't ride it)
-    local vctx = VOUCHER_CTX
-    vctx.now, vctx.p_x, vctx.p_y, vctx.panel_h, vctx.pw = now, p_x, p_y, total_h, pw_total
-    vctx.sw, vctx.sh, vctx.rn, vctx.pal, vctx.pulse = sw, sh, rn, _pal, pulse
-    vctx.font, vctx.font_small, vctx.trunc = rfont, rfont_small, trunc
-    vctx.jokers_on_screen = jokers_on_screen
-    local vok, verr = pcall(Vouchers.draw, vctx)
-    if not vok then
-      -- drawer pushed+scissored before it threw; restore graphics state here or it leaks every frame
-      love.graphics.setScissor()
-      pcall(love.graphics.pop)
-      love.graphics.setColor(1, 1, 1, 1)
-      love.graphics.setLineWidth(1)
-      local vmsg = tostring(verr)
-      if vmsg ~= _voucher_err_last then
-        _voucher_err_last = vmsg
-        print("[neuro-game] VOUCHER DRAWER ERROR: " .. vmsg)
+    local rp_off = S.right_panel_slide_frac > 0 and rp_shift or 0
+    if rp_on_screen then
+      local vctx = VOUCHER_CTX
+      vctx.now, vctx.p_x, vctx.p_y, vctx.panel_h, vctx.pw = now, p_x + rp_off, p_y, total_h, pw_total
+      vctx.sw, vctx.sh, vctx.rn, vctx.pal, vctx.pulse = sw, sh, rn, _pal, pulse
+      vctx.font, vctx.font_small, vctx.trunc = rfont, rfont_small, trunc
+      vctx.static_text = math.abs((S.panel_y_current or p_y) - p_y_target) < 0.001
+        and math.abs((S.panel_h_current or panel_h_target) - panel_h_target) < 0.001
+        and math.abs((S.right_panel_slide_frac or 0) - (S.rp_slide_target or 0)) < 0.001
+        and math.abs((S.drawer_slide_current or 0) - (S.drawer_slide_target or 0)) < 0.001
+      local vok, verr = pcall(Vouchers.draw, vctx)
+      if not vok then
+        love.graphics.setScissor()
+        pcall(love.graphics.pop)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.setLineWidth(1)
+        local vmsg = tostring(verr)
+        if vmsg ~= _voucher_err_last then
+          _voucher_err_last = vmsg
+          print("[neuro-game] VOUCHER DRAWER ERROR: " .. vmsg)
+        end
       end
     end
   end
@@ -814,7 +1010,7 @@ local function draw_neuro_cookie()
   if not G or not G.NEURO or not G.NEURO.egg or not G.NEURO.egg.expires_at then
     return
   end
-  if G.TIMERS and G.TIMERS.REAL and G.TIMERS.REAL > G.NEURO.egg.expires_at then
+  if neuro_now() > G.NEURO.egg.expires_at then
     G.NEURO.egg = nil
     return
   end
@@ -845,10 +1041,34 @@ local function draw_neuro_cookie()
   love.graphics.printf(text, 0, y, love.graphics.getWidth(), "center")
 end
 
-HUD.draw_indicator = draw_neuro_indicator
+function HUD.draw_indicator()
+  local t0 = (love and love.timer and love.timer.getTime) and love.timer.getTime() or nil
+  local a, b = draw_neuro_indicator()
+  if t0 then
+    if DebugStats.note_hud_ms then
+      DebugStats.note_hud_ms((love.timer.getTime() - t0) * 1000)
+    end
+  end
+  return a, b
+end
 HUD.draw_login = draw_login_animation
 HUD.draw_cookie = draw_neuro_cookie
 HUD.hook_card_draw = hook_card_draw
 HUD.update_joker_showcase = update_joker_showcase
+HUD.update_buy_showcase = update_buy_showcase
+HUD.panel_layout = panel_layout
+HUD.panel_available_height = panel_available_height
+HUD.trunc = trunc
+HUD.wrapped_lines = wrapped_lines
+HUD.PANEL_BASE_W = 320
+HUD.PANEL_MARGIN = PANEL_MARGIN
+if rawget(_G, "NEURO_TEST") then
+  HUD.safe_showcase_desc = safe_showcase_desc
+  HUD._test = {
+    panel_layout = panel_layout,
+    panel_available_height = panel_available_height,
+    build_panel_rows = build_panel_rows,
+  }
+end
 
 return HUD

@@ -1,5 +1,4 @@
--- standalone runner for the staging deferred round-trip suite (luajit tests/run_staging.lua)
-package.path = "./?.lua;;" .. package.path
+_G.NEURO_TEST = true
 love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
 _G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 0 } }
 

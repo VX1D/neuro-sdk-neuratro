@@ -7,20 +7,7 @@ local Utils = require("util.utils")
 local neuro_log = Utils.neuro_log
 
 local function panel_emote_path(name, ext)
-  local mod_path = Paths.resolve_mod_path()
-  if mod_path then
-    local norm = mod_path:gsub("\\", "/")
-    local save_dir = love.filesystem.getSaveDirectory()
-    if save_dir then
-      local norm_save = save_dir:gsub("\\", "/")
-      if not norm_save:match("/$") then norm_save = norm_save .. "/" end
-      if norm:sub(1, #norm_save) == norm_save then
-        norm = norm:sub(#norm_save + 1)
-      end
-    end
-    return norm .. "assets/" .. name .. "." .. ext
-  end
-  return "Mods/neuro-game/assets/" .. name .. "." .. ext
+  return Paths.mod_relative("assets/" .. name .. "." .. ext)
 end
 
 function Emotes.get(name)
@@ -29,7 +16,7 @@ function Emotes.get(name)
   if cached ~= nil then
     return (cached ~= false) and cached or nil
   end
-  if (S.panel_emote_attempts[name] or 0) >= 60 then
+  if (S.panel_emote_attempts[name] or 0) >= 3 then
     S.panel_emote_cache[name] = false
     return nil
   end
@@ -48,10 +35,14 @@ function Emotes.get(name)
       fw = tonumber(fw) or 128
       fh = tonumber(fh) or 128
       fps = tonumber(fps) or 10
-    else
+    elseif sh > 0 and sw % sh == 0 then
       fh, fw = sh, sh
-      n = (sh > 0) and math.max(1, math.floor(sw / sh)) or 1
+      n = math.max(1, math.floor(sw / sh))
       fps = 10
+    else
+      fh, fw = sh, sw
+      n = 1
+      fps = 0
     end
     local quads = {}
     for i = 0, n - 1 do

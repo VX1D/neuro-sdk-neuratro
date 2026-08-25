@@ -9,12 +9,10 @@ local Palette = require("render.palette")
 local DebugStats = require("render.debug_stats")
 local Paths = require("core.mod_paths")
 local Utils = require("util.utils")
-local dotenv = require("util.dotenv")
+local Config = require("core.config")
+local ContextDelivery = require("core.context_delivery")
 
 local neuro_now = Utils.now
-
-local NEURO_PERSONA, _persona_explicit = dotenv.normalize_persona(dotenv.get("NEURO_PERSONA"))
-local NEURO_PERSONA_FORCE = _persona_explicit and NEURO_PERSONA or nil
 
 local _mark_force_dirty = function() end
 local _register_valid_actions = function(_state_name) end
@@ -64,7 +62,7 @@ local GAME_OVER_MESSAGES = {
 }
 
 local function get_game_over_messages()
-  local pk = (G and G.NEURO and G.NEURO.persona) or NEURO_PERSONA
+  local pk = (G and G.NEURO and G.NEURO.persona) or Config.get_raw("NEURO_PERSONA")
   if pk ~= "evil" and pk ~= "neuro" then
     pk = "neuro"
   end
@@ -135,22 +133,49 @@ end
 local function init_neuro_fields()
   require("core.neuro_lifecycle").reset_run_state()
   G.NEURO.ai_highlighted    = setmetatable({}, { __mode = "k" })
-  G.NEURO.rules_sent        = nil
+  G.NEURO.ai_glow           = setmetatable({}, { __mode = "k" })
   G.NEURO.seed_pasted       = nil
   G.NEURO.login_anim        = nil
   G.NEURO.game_over_hooked  = nil
-  G.NEURO.persona           = NEURO_PERSONA_FORCE or "hiyori"
+  G.NEURO.persona           = Config.get_raw("NEURO_PERSONA")
   G.NEURO.actions           = NeuroActions
   G.NEURO.dispatcher        = NeuroDispatcher
+end
+
+local UNANSWERED_PHASE = "prepared"
+
+function BridgeInit._recover_interrupted_action(bridge, entry)
+  if not (bridge and type(entry) == "table") then return false end
+  local id = entry.id
+  if id ~= nil then id = tostring(id) end
+  local name = tostring(entry.name or "action")
+  local answered = false
+  if entry.phase == UNANSWERED_PHASE and type(id) == "string" and id ~= "" then
+    -- SPECIFICATION.md:167 -- an action left without a result blocks Neuro forever
+    bridge:send_action_result(id, true,
+      "The game restarted before your action '" .. name
+        .. "' could run. It was not executed and the current game state does not include it.")
+    answered = true
+  end
+  bridge.recovered_action_journal = entry
+  require("core.force_state").rearm()
+  local context
+  if entry.phase == UNANSWERED_PHASE then
+    context = "Recovered an action '" .. name
+      .. "' that had not executed before restart. Re-check the current game state and choose again."
+  else
+    context = "Recovered an accepted action '" .. name
+      .. "' at phase " .. tostring(entry.phase)
+      .. "; its execution outcome is unknown and it was not replayed. Inspect the current game state and choose again."
+  end
+  ContextDelivery.event_at("recovered_action:" .. tostring(id or "unknown") .. ":"
+    .. tostring(entry.phase or "unknown"), ContextDelivery.here(), context)
+  return answered
 end
 
 local function setup_neuro_bridge()
   if not G then
     return
-  end
-  if G.SETTINGS then
-    G.SETTINGS.tutorial_complete = true
-    G.SETTINGS.tutorial_progress = nil
   end
   local enabled_env = os.getenv("NEURO_ENABLE")
   local ipc_dir = Paths.read_ipc_dir()
@@ -166,34 +191,47 @@ local function setup_neuro_bridge()
     end
     return
   end
+  if G.SETTINGS then
+    G.SETTINGS.tutorial_complete = true
+    G.SETTINGS.tutorial_progress = nil
+  end
   Paths.write_ipc_marker(ipc_dir)
-  if G.NEURO and G.NEURO.send_startup then
+  if G.NEURO and G.NEURO.send_startup and G.NEURO._bridge_init_complete then
     return
   end
-  G.NEURO = NeuroBridge:new({ game = "Balatro", enabled = true, fs_dir = ipc_dir })
-  init_neuro_fields()
-  G.NEURO:set_state_provider(NeuroState.build)
-  G.NEURO:set_state_name_provider(NeuroState.get_state_name)
-  G.NEURO:set_message_handler(function(msg)
-    NeuroDispatcher.route_message(msg, G.NEURO)
-  end)
-  G.NEURO:send_startup()
+  if not (G.NEURO and G.NEURO.send_startup) then
+    G.NEURO = NeuroBridge:new({ game = "Balatro", enabled = true, fs_dir = ipc_dir })
+    init_neuro_fields()
+    G.NEURO._startup_interrupted_action = G.NEURO:recover_action_journal()
+    G.NEURO:set_state_name_provider(NeuroState.get_state_name)
+    G.NEURO:set_message_handler(function(msg)
+      NeuroDispatcher.route_message(msg, G.NEURO)
+    end)
+  end
+  local interrupted_action = G.NEURO._startup_interrupted_action
+  if not G.NEURO._startup_complete then
+    ContextDelivery.reset_transport()
+    if G.NEURO:send_startup() == false then return false end
+  end
+  BridgeInit._recover_interrupted_action(G.NEURO, interrupted_action)
+  G.NEURO._startup_interrupted_action = nil
   _mark_force_dirty()
 
   local state_name = NeuroState and NeuroState.get_state_name and NeuroState.get_state_name() or "MENU"
   _register_valid_actions(state_name)
+  G.NEURO._bridge_init_complete = true
+  return true
 end
 
 local _seeded_unlocks_hooked = false
 local function hook_seeded_unlocks()
-  -- guard: a second run would nest the pcall wrappers indefinitely
-  if _seeded_unlocks_hooked then return end
+  if _seeded_unlocks_hooked or not Utils.neuro_ready() then return end
   _seeded_unlocks_hooked = true
   if _G.unlock_card then
     local _orig = _G.unlock_card
     _G.unlock_card = function(card)
       if not (G and G.GAME and G.GAME.seeded) then return _orig(card) end
-      local prev = G.GAME.seeded   -- restore whatever it was, not a hardcoded `true`
+      local prev = G.GAME.seeded
       G.GAME.seeded = nil
       local ok, r = pcall(_orig, card)
       G.GAME.seeded = prev
@@ -264,7 +302,6 @@ local function hook_game_over_screen()
   end
 end
 
--- the bridge is a process singleton, so clear run-scoped history when a new run starts or it carries over
 local _run_reset_hooked = false
 local function hook_run_reset()
   if _run_reset_hooked or not (G and G.FUNCS and type(G.FUNCS.start_run) == "function") then return end
@@ -276,17 +313,73 @@ local function hook_run_reset()
   end
 end
 
--- setup_text_input must run after setup_neuro_bridge (fresh G.NEURO) or first keystroke crashes on nil input_buffer
+local _blind_defeat_hooked = false
+local function hook_blind_defeat()
+  if _blind_defeat_hooked or type(_G.Blind) ~= "table" or type(_G.Blind.defeat) ~= "function" then return end
+  _blind_defeat_hooked = true
+  local orig = _G.Blind.defeat
+  _G.Blind.defeat = function(self, ...)
+    if self and G and G.NEURO then
+      local cleared = (tonumber(G.GAME and G.GAME.chips) or 0) >= (tonumber(self.chips) or 0)
+      G.NEURO.blind_reward_cache = cleared and (tonumber(self.dollars) or 0) or 0
+      G.NEURO.blind_reward_round = tonumber(G.GAME and G.GAME.round) or 0
+    end
+    return orig(self, ...)
+  end
+end
+
+local _love_quit_hooked = false
+local function hook_love_quit()
+  if _love_quit_hooked then return end
+  if not _G.love then return end
+  _love_quit_hooked = true
+  local original_love_quit = _G.love.quit
+  _G.love.quit = function()
+    if G and G.NEURO then
+      pcall(function()
+        -- SPECIFICATION.md:165-167: a shutdown with actions in flight is the mod's last chance to pay
+        -- them, and it is the only chance a conforming transport gives it.
+        if type(G.NEURO.answer_owed_results) == "function" then
+          G.NEURO:answer_owed_results(nil, NeuroBridge.OWED_SHUTDOWN_MESSAGE)
+        end
+      end)
+      pcall(function()
+        if type(G.NEURO._outbox_flush) == "function" then G.NEURO:_outbox_flush() end
+      end)
+      pcall(function() require("util.metrics").flush(true) end)
+      pcall(function()
+        if type(G.NEURO.unregister_all) == "function" then
+          G.NEURO:unregister_all()
+        end
+      end)
+    end
+    if original_love_quit then
+      return original_love_quit()
+    end
+    return nil
+  end
+end
+if _G.NEURO_TEST then
+  BridgeInit.hook_love_quit = hook_love_quit
+end
+
 function BridgeInit.run(deps)
   deps = deps or {}
   _mark_force_dirty = deps.mark_force_dirty or _mark_force_dirty
   _register_valid_actions = deps.register_valid_actions or _register_valid_actions
-  setup_neuro_bridge()
+  if setup_neuro_bridge() == false then return false end
   setup_text_input()
   hook_seeded_unlocks()
   hook_game_over_screen()
   hook_run_reset()
+  hook_blind_defeat()
+  hook_love_quit()
+  require("core.crash_guards").install_pack_area_guard()
+  if Config.bool("NEURO_CRASH_GUARDS") then
+    pcall(function() require("core.crash_guards").install() end)
+  end
   DebugStats.setup()
+  return true
 end
 
 return BridgeInit

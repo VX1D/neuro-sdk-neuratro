@@ -13,17 +13,18 @@ local NPAGES = #PAGES
 local FRAME_CAP = 180
 local sf = string.format
 
-local PERF_LOG = require("core.tuning").bool("NEURO_PERF_LOG")
-local PERF_LOG_CAP = 16 * 1024 * 1024  -- append-only jsonl grew ~2MB/h unbounded on long streams
+local _tuning = require("core.config")
+local function PERF_LOG() return _tuning.bool("NEURO_PERF_LOG") end
+local PERF_LOG_CAP = 16 * 1024 * 1024
 local _perf_bytes = 0
 local _perf_seeded = false
 
 M._mode = MODE_OFF
 M._on = false
 M._page = 1
-M._force_stall = 12
 M._font = nil
 M._font_small = nil
+M._font_scale = nil
 M._setup_done = false
 M._rows = nil
 M._rows_at = 0
@@ -32,13 +33,21 @@ M._hide_at = nil
 M._hide_mode = nil
 
 M._frame = { hist = {}, cap = FRAME_CAP, i = 0, n = 0, last_ms = 0, avg_ms = 0, max_ms = 0, spike_ms = 33.4, spikes = 0 }
--- same table refs as util/metrics, not copies
+M._hud = { hist = {}, cap = FRAME_CAP, i = 0, n = 0, last_ms = 0 }
+
+function M.hud_avg_ms()
+  local h = M._hud
+  if h.n == 0 then return 0 end
+  local sum = 0
+  for i = 1, h.n do sum = sum + (h.hist[i] or 0) end
+  return sum / h.n
+end
 M._timings = Metrics._timings
-M._starts = Metrics._starts
 M._counters = Metrics._counters
 M._gauges = Metrics._gauges
 M._slow = {
-  interval = 0.25, next_at = 0,
+  interval = 0.25, next_at = 0, last_at = nil,
+  counters_interval = 2.0, counters_next_at = 0,
   moveable = 0, sprite = 0, card = 0, uibox = 0, node = 0,
   lua_kb = 0, lua_kb_prev = false, gc_rate = 0,
   move_prev = false, move_rate = 0,
@@ -50,7 +59,8 @@ local function wall()
   return os.clock()
 end
 
-local game_now = Utils.now   -- G.TIMERS.REAL -> love.timer -> os.clock (wall() stays separate: unpaused)
+local real_now = Utils.now
+local function debounce_now() return require("core.neuro_lifecycle").force_debounce_now() end
 
 local function cur_fps()
   if love and love.timer and love.timer.getFPS then return love.timer.getFPS() end
@@ -70,14 +80,12 @@ local function gn()
   return (G and G.NEURO) or nil
 end
 
-function M.enabled() return M._on end
 function M.visible() return M._mode ~= MODE_OFF end
 
 function M.set_mode(mode)
   local was = M._mode
   M._mode = mode
   M._on = M._mode ~= MODE_OFF
-  Metrics.set_enabled(M._on)
   if was == MODE_OFF and M._on then
     M._rows = nil
     M._show_at = wall()
@@ -109,13 +117,20 @@ end
 function M.setup()
   if M._setup_done then return end
   M._setup_done = true
-  local Tuning = require("core.tuning")
+  local Tuning = require("core.config")
   M.set_mode_name(Tuning.get("NEURO_DEBUG_OVERLAY"))
-  M._force_stall = Tuning.force_stall_seconds()
+end
+
+function M.note_hud_ms(ms)
+  local h = M._hud
+  h.last_ms = ms
+  h.i = (h.i % h.cap) + 1
+  h.hist[h.i] = ms
+  if h.n < h.cap then h.n = h.n + 1 end
 end
 
 function M.sample(dt)
-  if not M._on and not PERF_LOG then return end
+  if not M._on and not PERF_LOG() then return end
   local fr = M._frame
   local ms = (dt or 0) * 1000
   fr.last_ms = ms
@@ -126,8 +141,9 @@ function M.sample(dt)
   local now = wall()
   local sl = M._slow
   if now < sl.next_at then return end
-  local interval = sl.interval
-  sl.next_at = now + interval
+  local interval = sl.last_at and math.max(now - sl.last_at, 1e-6) or sl.interval
+  sl.last_at = now
+  sl.next_at = now + sl.interval
 
   local sum, mx, spikes = 0, 0, 0
   for k = 1, fr.n do
@@ -160,22 +176,28 @@ function M.sample(dt)
     sl.ctr_prev[name] = val
   end
 
-  if PERF_LOG and love and love.filesystem then
+  if PERF_LOG() and love and love.filesystem then
     if not _perf_seeded then
       _perf_seeded = true
       local info = love.filesystem.getInfo and love.filesystem.getInfo("neuro_perf.jsonl")
       _perf_bytes = (info and info.size) or 0
     end
     if _perf_bytes < PERF_LOG_CAP then
+      local raw_ms = (love.timer and love.timer.getAverageDelta and love.timer.getAverageDelta() or 0) * 1000
+      local gap = sl.last_sample_at and (now - sl.last_sample_at) or interval
+      sl.last_sample_at = now
       local line = sf(
-        '{"t":%.1f,"fps":%d,"ms_avg":%.2f,"ms_max":%.2f,"moveable":%d,"move_rate":%.2f,"sprite":%d,"card":%d,"uibox":%d,"node":%d,"lua_kb":%.0f,"gc_rate":%.1f}\n',
-        wall(), cur_fps(), fr.avg_ms or 0, fr.max_ms or 0, sl.moveable or 0, sl.move_rate or 0,
-        sl.sprite or 0, sl.card or 0, sl.uibox or 0, sl.node or 0, sl.lua_kb or 0, sl.gc_rate or 0)
+        '{"t":%.1f,"fps":%d,"ms_avg":%.2f,"ms_max":%.2f,"dt_raw_ms":%.2f,"gap":%.2f,"moveable":%d,"move_rate":%.2f,"sprite":%d,"card":%d,"uibox":%d,"node":%d,"lua_kb":%.0f,"gc_rate":%.1f,"gamespeed":%.2f,"speedfactor":%.2f}\n',
+        wall(), cur_fps(), fr.avg_ms or 0, fr.max_ms or 0, raw_ms, gap, sl.moveable or 0, sl.move_rate or 0,
+        sl.sprite or 0, sl.card or 0, sl.uibox or 0, sl.node or 0, sl.lua_kb or 0, sl.gc_rate or 0,
+        (G and G.SETTINGS and tonumber(G.SETTINGS.GAMESPEED)) or 0,
+        (G and tonumber(G.SPEEDFACTOR)) or 0)
       _perf_bytes = _perf_bytes + #line
       if _perf_bytes >= PERF_LOG_CAP then
         line = line .. '{"perf_log":"cap reached, logging stopped"}\n'
       end
       pcall(love.filesystem.append, "neuro_perf.jsonl", line)
+
     end
   end
 end
@@ -198,12 +220,21 @@ local function kv(rows, pal, label, value, vcol)
   rows[#rows + 1] = { seg(label, pal.D_DIM), seg(value, vcol or pal.D_WHITE) }
 end
 
-local function fonts()
-  if not M._font then
-    M._font, M._font_small = Utils.load_font_pair("resources/fonts/m6x11plus.ttf", 14, 12)
-  end
-  return M._font, M._font_small
+local function hud_scale()
+  local sh = (love and love.graphics and love.graphics.getHeight()) or 1080
+  return math.max(0.5, math.floor((sh / 1080) / 0.05 + 0.5) * 0.05)
 end
+
+local function fonts()
+  local s = hud_scale()
+  if not M._font or M._font_scale ~= s then
+    M._font, M._font_small = Utils.load_font_pair("resources/fonts/m6x11plus.ttf",
+      math.floor(14 * s + 0.5), math.floor(12 * s + 0.5))
+    M._font_scale = s
+  end
+  return M._font, M._font_small, s
+end
+M.fonts = fonts
 
 local function force_row(pal, n)
   if not (n and n.force_inflight) then
@@ -215,12 +246,10 @@ local function force_row(pal, n)
       seg("  inflight, no sent_at", pal.D_RED),
     }
   end
-  local rtt = game_now() - n.force_sent_at
-  local to = M._force_stall - rtt
+  local rtt = real_now() - n.force_sent_at
   return {
     seg("force ", pal.D_DIM), seg(tostring(n.force_state or "?"), pal.D_SKYBLUE),
     seg(sf("  rtt %.1fs", rtt), pal.D_ORANGE),
-    seg(sf("  TO %.0fs", to), to < 5 and pal.D_RED or pal.D_DIM),
   }
 end
 
@@ -233,6 +262,7 @@ local function compact_rows(pal)
   rows[#rows + 1] = {
     seg("fps ", pal.D_DIM), seg(sf("%d", cur_fps()), pal.D_WHITE),
     seg("  dt ", pal.D_DIM), seg(sf("%.1f/%.1f/%.1f", fr.last_ms, fr.avg_ms, fr.max_ms), color_for_dt(pal, fr.avg_ms)),
+    seg("  hud ", pal.D_DIM), seg(sf("%.2f/%.2f", M._hud.last_ms, M.hud_avg_ms()), pal.D_WHITE),
   }
   rows[#rows + 1] = {
     seg("heap ", pal.D_DIM), seg(sf("%dk", math.floor(sl.lua_kb)), pal.D_WHITE),
@@ -281,10 +311,8 @@ local function page_force(rows, pal)
     kv(rows, pal, "force      ", tostring(n.force_state or "?"), pal.D_SKYBLUE)
     kv(rows, pal, "  inflight ", "yes", pal.D_ORANGE)
     if n.force_sent_at then
-      local rtt = game_now() - n.force_sent_at
+      local rtt = real_now() - n.force_sent_at
       kv(rows, pal, "  rtt      ", sf("%.2f s", rtt), pal.D_ORANGE)
-      local to = M._force_stall - rtt
-      kv(rows, pal, "  stall    ", sf("%.0f s", to), to < 5 and pal.D_RED or pal.D_WHITE)
     else
       kv(rows, pal, "  sent_at  ", "missing", pal.D_RED)
     end
@@ -292,9 +320,8 @@ local function page_force(rows, pal)
     kv(rows, pal, "force      ", "idle", pal.D_DIM)
   end
   if n.force_dirty and n.force_dirty_at then
-    kv(rows, pal, "  debounce ", sf("%.2f s", game_now() - n.force_dirty_at), pal.D_DIM)
+    kv(rows, pal, "  debounce ", sf("%.2f s", debounce_now() - n.force_dirty_at), pal.D_DIM)
   end
-  kv(rows, pal, "reforce    ", sf("%d", n.reforce_count or 0))
 end
 
 local function page_actions(rows, pal)
@@ -302,7 +329,7 @@ local function page_actions(rows, pal)
   local te = M._timings.action_exec
   kv(rows, pal, "phase      ", n and tostring(n.action_phase or "-") or "-", pal.D_SKYBLUE)
   if n and n.action_phase_at then
-    kv(rows, pal, "  age      ", sf("%.2f s", game_now() - n.action_phase_at))
+    kv(rows, pal, "  age      ", sf("%.2f s", real_now() - n.action_phase_at))
   end
   kv(rows, pal, "last       ", n and tostring(n.last_action_name or "-") or "-")
   local failed = n and n.last_failed_action
@@ -334,7 +361,6 @@ local function page_ctxipc(rows, pal)
   kv(rows, pal, "hit/miss   ", sf("%d / %d", hit, miss))
   kv(rows, pal, "hit ratio  ", total > 0 and sf("%.0f%%", hit / total * 100) or "-", pal.D_GREEN)
   kv(rows, pal, "ipc send/s ", sf("%.1f", rate.ipc_send or 0))
-  kv(rows, pal, "state wr/s ", sf("%.1f", rate.ipc_state_write or 0))
   kv(rows, pal, "inbox msgs ", sf("%d", M._counters.ipc_inbox_msg or 0))
   kv(rows, pal, "ipc seq    ", sf("%d", M._gauges.ipc_seq or 0))
 end
@@ -353,21 +379,23 @@ end
 
 function M.draw()
   if not (love and love.graphics) then return end
+  local visible = M.visible()
+  if not visible and not (M._hide_at and M._rows) then return end
   local now = wall()
-  local fade_d = Motion.dur(Motion.FAST)
+  local fade_d = Motion.FAST
   local eff_mode = M._mode
   local ga
-  if M.visible() then
+  if visible then
     ga = Motion.anim01(now - (M._show_at or 0), fade_d)
   else
-    if not (M._hide_at and M._rows and (now - M._hide_at) < fade_d) then return end
+    if (now - M._hide_at) >= fade_d then return end
     ga = 1 - Motion.anim01(now - M._hide_at, fade_d)
     eff_mode = M._hide_mode or MODE_COMPACT
   end
   local pal = Palette.pal()
-  local font, small = fonts()
+  local font, small, ds_s = fonts()
   local use_font = (eff_mode == MODE_EXPANDED) and small or font
-  if M.visible() and (not M._rows or now >= (M._rows_at or 0)) then
+  if visible and (not M._rows or now >= (M._rows_at or 0)) then
     M._rows = (eff_mode == MODE_COMPACT) and compact_rows(pal) or expanded_rows(pal)
     M._rows_at = now + 0.1
   end
@@ -377,8 +405,8 @@ function M.draw()
   local prev_font = love.graphics.getFont()
   love.graphics.setFont(use_font)
   local lh = use_font:getHeight() + 2
-  local pad = 8
-  local w = 308
+  local pad = math.floor(8 * ds_s + 0.5)
+  local w = math.floor(308 * ds_s + 0.5)
   local h = pad * 2 + #rows * lh
   local x, y = 8, 8
 

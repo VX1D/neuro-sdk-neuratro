@@ -1,4 +1,3 @@
--- opt-in crash trace, single writer across modules (two openers would truncate each other)
 local _crashlog = nil
 local trace = function(_) end
 local env = os.getenv("NEURO_TRACE")

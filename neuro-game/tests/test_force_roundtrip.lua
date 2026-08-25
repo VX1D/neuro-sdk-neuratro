@@ -1,13 +1,9 @@
--- Force round-trip invariant: every (state, action, payload, id) yields exactly one action/result and never throws.
--- A throw is swallowed by the bridge xpcall -> zero results -> Neuro blocks forever; two results violates the protocol.
-
 local M = {}
 
 local TD = require("tests.test_deadlock")
 local SCENARIOS = TD.SCENARIOS
 local apply_mock = TD.apply_mock
 
--- fake bridge: deliberately omits is_transition_cooldown so the transient gate stays open
 local function make_bridge()
   local b = { session_id = nil, results = {}, contexts = {} }
   function b:send_action_result(id, ok, message)
@@ -20,11 +16,9 @@ local function make_bridge()
   function b:register_actions(_) end
   function b:force_actions(_, _, _, _) end
   function b:send(_) end
-  function b:write_state(_) end
   return b
 end
 
--- payload = the `data` field of an inbound action command (SDK: stringified JSON or absent)
 local PAYLOADS = {
   { tag = "absent",       data = nil },
   { tag = "empty",        data = "" },
@@ -51,14 +45,12 @@ local PAYLOADS = {
   { tag = "nested",       data = '{"a":{"b":[1,null,true,{"c":"d"}]}}' },
   { tag = "extra_keys",   data = '{"index":1,"bogus":true,"x":[1,2]}' },
   { tag = "unicode",      data = '{"name":"\\u00e9\\u4e2d\\ud83d\\ude00"}' },
-  -- already-parsed (non-string) payloads: some SDK bridges forward the parsed object
   { tag = "tbl_obj",      data = { index = 1 } },
   { tag = "tbl_empty",    data = {} },
   { tag = "tbl_array",    data = { 1, 2, 3 } },
   { tag = "tbl_nested",   data = { a = { b = { 1, 2 } }, index = 2 } },
 }
 
--- id shapes: the SDK requires the result to echo whatever id arrived, verbatim.
 local ID_SHAPES = {
   function(n) return "id-" .. n end,
   function(n) return tostring(n) end,
@@ -86,12 +78,17 @@ local function probe(Dispatcher, state, name, payload, id, label, fails)
     return false
   end
 
+  local valid_id = id ~= nil
+  local want_n = valid_id and 1 or 0
   local n = #bridge.results
-  if n ~= 1 then
+  if n ~= want_n then
     fails[#fails + 1] = string.format(
-      "RESULT COUNT=%d (want 1) [%s] action=%s payload=%s id=%s",
-      n, state, tostring(name), label, tostring(id))
+      "RESULT COUNT=%d (want %d) [%s] action=%s payload=%s id=%s",
+      n, want_n, state, tostring(name), label, tostring(id))
     return false
+  end
+  if not valid_id then
+    return true
   end
 
   local got_id = bridge.results[1].id
@@ -105,7 +102,6 @@ local function probe(Dispatcher, state, name, payload, id, label, fails)
   return true
 end
 
--- Utils.now() honors G.TIMERS.REAL first, so driving that advances Enforce's clock.
 local _clock = 0
 local function tick(dt)
   _clock = _clock + (dt or 5)
@@ -114,7 +110,6 @@ local function tick(dt)
 end
 
 local function set_state(state)
-  -- map the state name to a live G.STATE so State.get_state_name() resolves it
   G.STATES = G.STATES or {}
   if G.STATES[state] == nil then
     local nextv = 0
@@ -141,15 +136,14 @@ function M.run()
   local probes = 0
   local counter = 0
 
-  local ALWAYS = { "help", "exit_overlay_menu", "florblegorb_not_real", "full_game_context" }
+  local ALWAYS = { "exit_overlay_menu", "cash_out", "florblegorb_not_real" }
 
   for si, sc in ipairs(SCENARIOS) do
     if not sc.xfail then
-      -- fresh NEURO each scenario so stale force_inflight cannot leak across cases
       G.NEURO = { dispatcher = Dispatcher, actions = Actions }
       G.FUNCS = G.FUNCS or {}
       apply_mock(sc.mock())
-      G.NEURO.rules_sent = true
+
       set_state(sc.state)
 
       local action_names, seen = {}, {}
@@ -160,19 +154,20 @@ function M.run()
         end
       end
 
+      local has_force = false
       local ok_force, force = pcall(Dispatcher.get_force_for_state, sc.state)
       if ok_force and type(force) == "table" then
         for _, nm in ipairs(force.actions or {}) do add(nm) end
-        -- mark the forced set inflight so it exercises Enforce's skip-cooldown "answering a force" path
-        G.NEURO.force_inflight = true
-        G.NEURO.force_state = sc.state
-        G.NEURO.force_action_set = seen
+        has_force = true
       end
       local ok_valid, valid = pcall(Actions.get_valid_actions_for_state, sc.state)
       if ok_valid and type(valid) == "table" then
         for _, nm in ipairs(valid) do add(nm) end
       end
       for _, nm in ipairs(ALWAYS) do add(nm) end
+      if has_force then
+        require("core.force_state").arm(sc.state, action_names, seen, 1)
+      end
 
       for _, name in ipairs(action_names) do
         for pi, p in ipairs(PAYLOADS) do
@@ -194,23 +189,22 @@ function M.run()
     tick(5)
     local bridge = make_bridge()
     local ok_call = pcall(Dispatcher.handle_message,
-      { command = "action", data = { id = nil, name = "help", data = nil } }, bridge)
-    if not ok_call or #bridge.results ~= 1 then
-      fails[#fails + 1] = "nil-id probe: expected exactly one result, no throw"
+      { command = "action", data = { id = nil, name = "exit_overlay_menu", data = nil } }, bridge)
+    if not ok_call or #bridge.results ~= 0 then
+      fails[#fails + 1] = "nil-id probe: expected zero results (dropped, no wire frame), no throw"
     end
     probes = probes + 1
   end
 
-  -- duplicate id replay: second short-circuits via the tx cache; both emit one result, ok flag stable
   do
     tick(5)
     local dup_id = "dup-replay-id-777"
     local b1 = make_bridge()
     pcall(Dispatcher.handle_message,
-      { command = "action", data = { id = dup_id, name = "help", data = nil } }, b1)
+      { command = "action", data = { id = dup_id, name = "exit_overlay_menu", data = nil } }, b1)
     local b2 = make_bridge()
     pcall(Dispatcher.handle_message,
-      { command = "action", data = { id = dup_id, name = "help", data = nil } }, b2)
+      { command = "action", data = { id = dup_id, name = "exit_overlay_menu", data = nil } }, b2)
     if #b1.results ~= 1 or #b2.results ~= 1 then
       fails[#fails + 1] = string.format("dup-id replay: want 1+1 results, got %d+%d",
         #b1.results, #b2.results)
@@ -220,13 +214,12 @@ function M.run()
     probes = probes + 2
   end
 
-  -- malformed command envelopes: must never throw (they just no-op, 0 results ok)
   local ENVELOPES = {
     { command = "action" },
     { command = "action", data = {} },
     { command = "action", data = { id = "x" } },
     { command = "context", data = {} },
-    { data = { id = "x", name = "help" } },
+    { data = { id = "x", name = "exit_overlay_menu" } },
     {},
   }
   for _, env in ipairs(ENVELOPES) do
@@ -239,7 +232,6 @@ function M.run()
     probes = probes + 1
   end
 
-  -- fault injection: a throw before the answer must yield one terminal result; a throw after must not add a second (double-result bug)
   do
     local FH = require("force.force_helpers")
     local real_phase = FH.set_action_phase
@@ -260,7 +252,7 @@ function M.run()
       inject("validating")
       local bridge = make_bridge()
       local ok_call = pcall(Dispatcher.handle_message,
-        { command = "action", data = { id = "inj-before", name = "help", data = nil } }, bridge)
+        { command = "action", data = { id = "inj-before", name = "exit_overlay_menu", data = nil } }, bridge)
       restore()
       if not ok_call then
         fails[#fails + 1] = "inject before-answer: handle_message PROPAGATED throw (would hang/dup)"
@@ -272,7 +264,6 @@ function M.run()
       probes = probes + 1
     end
 
-    -- after-answer throw: post_action runs right after send_result; the single result must stand (no propagation into Staging's pcall -> double-result bug)
     do
       local EF = require("core.enforce")
       local real_post = EF.post_action
@@ -283,7 +274,7 @@ function M.run()
       EF.post_action = function(_, _) error("INJECTED throw in post_action (after answer)") end
       local bridge = make_bridge()
       local ok_call = pcall(Dispatcher.handle_message,
-        { command = "action", data = { id = "inj-after", name = "help", data = nil } }, bridge)
+        { command = "action", data = { id = "inj-after", name = "exit_overlay_menu", data = nil } }, bridge)
       EF.post_action = real_post
       restore()
       if not ok_call then
@@ -295,12 +286,11 @@ function M.run()
     end
   end
 
-  -- use info actions (never staged) so results are synchronous
   do
     local function sess_bridge(sid)
       local b = make_bridge(); b.session_id = sid; return b
     end
-    G.NEURO = { dispatcher = Dispatcher, actions = Actions, rules_sent = true }
+    G.NEURO = { dispatcher = Dispatcher, actions = Actions }
     G.FUNCS = {}
     apply_mock(SCENARIOS[1].mock())
     set_state("SELECTING_HAND"); tick(20)
@@ -308,37 +298,35 @@ function M.run()
     do
       local b = sess_bridge("SES-1")
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", session_id = "SES-1", data = { id = "rt-match", name = "help", data = nil } }, b)
+        { command = "action", session_id = "SES-1", data = { id = "rt-match", name = "exit_overlay_menu", data = nil } }, b)
       if not ok or #b.results ~= 1 then fail_route(fails, "session match: want 1 result, no throw") end
       probes = probes + 1
     end
-    -- mismatched session -> dropped; 0 results is correct (stale session, nobody waiting on this id)
     do
       local b = sess_bridge("SES-1")
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", session_id = "SES-OLD", data = { id = "rt-stale", name = "help", data = nil } }, b)
+        { command = "action", session_id = "SES-OLD", data = { id = "rt-stale", name = "exit_overlay_menu", data = nil } }, b)
       if not ok then fail_route(fails, "session mismatch: threw")
-      elseif #b.results ~= 0 then fail_route(fails, "session mismatch: should drop (0 results), got " .. #b.results) end
+      elseif #b.results ~= 1 then fail_route(fails, "foreign session_id: want 1 result, got " .. #b.results) end
       probes = probes + 1
     end
-    -- msg without a session -> processed (bridge cannot prove staleness)
     do
       local b = sess_bridge("SES-1")
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", data = { id = "rt-nosess", name = "help", data = nil } }, b)
+        { command = "action", data = { id = "rt-nosess", name = "exit_overlay_menu", data = nil } }, b)
       if not ok or #b.results ~= 1 then fail_route(fails, "no-session msg: want 1 result") end
       probes = probes + 1
     end
-    -- operator pause -> exactly one transient reject (Neuro not left hanging), not settled
     do
       G.NEURO.llm_paused = true
       local b = sess_bridge(nil)
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", data = { id = "rt-paused", name = "help", data = nil } }, b)
+        { command = "action", data = { id = "rt-paused", name = "exit_overlay_menu", data = nil } }, b)
       G.NEURO.llm_paused = nil
       if not ok then fail_route(fails, "pause: threw")
       elseif #b.results ~= 1 then fail_route(fails, "pause: want exactly 1 (transient) result, got " .. #b.results)
-      elseif b.results[1].ok ~= false then fail_route(fails, "pause: result should be ok=false") end
+      elseif b.results[1].ok ~= true then fail_route(fails, "pause: result should be ok=true (spec: false retries the force)")
+      elseif not tostring(b.results[1].message or ""):find("Paused") then fail_route(fails, "pause: message should explain the pause") end
       probes = probes + 1
     end
     do

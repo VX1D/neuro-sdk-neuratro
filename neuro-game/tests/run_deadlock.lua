@@ -1,6 +1,4 @@
-package.path = "./?.lua;;" .. package.path
 love = { timer = { getTime = function() return 0 end } }
--- minimal globals the modules may touch at require time
 _G.G = { NEURO = {}, FUNCS = {}, GAME = {}, }
 local ok_d, Dispatcher = pcall(require, "core.dispatcher")
 if not ok_d then print("REQUIRE dispatcher FAIL: "..tostring(Dispatcher)); os.exit(3) end

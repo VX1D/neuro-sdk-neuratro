@@ -1,20 +1,19 @@
-local CardArea = require("facts.card_area_util")
+local GameActions = require("core.game_actions")
 local ForceHelpers = require("force.force_helpers")
 local Filtered = require("core.filtered")
-local mock_UIBox = CardArea.mock_UIBox
+local mock_UIBox = GameActions.mock_UIBox
 
 local function handle_toggle_seeded_run(_data)
-  -- G.run_setup_seed is the engine's own flag (start_setup_run reads it), but the overlay resets it to nil on rebuild, so a flip while closed is lost
   if not ForceHelpers.is_run_setup_overlay() then
     return nil, "Run setup screen is not open. Use setup_run first, then toggle seeded mode."
   end
   return function()
-    G.run_setup_seed = not G.run_setup_seed
-
     local fn = G.FUNCS and G.FUNCS.toggle_seeded_run
     local target = G.OVERLAY_MENU and G.OVERLAY_MENU.get_UIE_by_ID and G.OVERLAY_MENU:get_UIE_by_ID("run_setup_seed") or nil
     if fn and target and target.config and target.config.object then
       pcall(fn, { config = { object = target.config.object }, UIBox = G.OVERLAY_MENU })
+    else
+      G.run_setup_seed = not G.run_setup_seed
     end
 
     return string.format("Seeded mode: %s", G.run_setup_seed and "ON" or "OFF")
@@ -23,7 +22,8 @@ end
 
 local function handle_paste_seed(data)
   local raw = data and data.seed
-  if raw == nil or tostring(raw) == "" then
+  local from_param = (raw ~= nil and tostring(raw) ~= "")
+  if not from_param then
     if G and G.CLIPBOARD and tostring(G.CLIPBOARD) ~= "" then
       raw = tostring(G.CLIPBOARD)
     elseif love and love.system and love.system.getClipboardText then
@@ -34,7 +34,27 @@ local function handle_paste_seed(data)
   end
 
   local cleaned = Filtered.sanitize(tostring(raw or ""), true)
-  local seed_val = cleaned:upper():gsub("[^A-Z0-9]", ""):sub(1, 8)
+  if not from_param then
+    cleaned = cleaned:match("^%s*(.-)%s*$")
+  end
+  if cleaned == "" then
+    return nil, "No valid seed provided. Provide a seed parameter (1-8 letters/digits) or copy one to the clipboard."
+  end
+
+  if cleaned:find("[^A-Za-z0-9]") then
+    if from_param then
+      return nil, "Invalid characters in seed. Seed may only contain letters (A-Z) and digits (0-9)."
+    end
+    return nil, "Clipboard does not contain a bare seed. It must be only letters (A-Z) and digits (0-9) with nothing else -- copy just the seed, or pass it as a seed parameter."
+  end
+  if #cleaned > 8 then
+    if from_param then
+      return nil, "Seed is too long (max 8 characters). Provide a seed parameter (1-8 letters/digits)."
+    end
+    return nil, "Clipboard seed is too long (max 8 characters). Copy just the seed, or pass it as a seed parameter."
+  end
+
+  local seed_val = cleaned:upper()
   if seed_val == "" then
     return nil, "No valid seed provided (or it was filtered). Provide a clean seed parameter or clipboard value."
   end

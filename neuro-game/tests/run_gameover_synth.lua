@@ -1,4 +1,3 @@
-package.path = "./?.lua;;" .. package.path
 love = { timer = { getTime = function() return _CLOCK or 0 end }, event = { quit = function() end } }
 _CLOCK = 1000
 
@@ -10,7 +9,7 @@ local function fresh_G(prev_state, sent_ago)
     enabled = true, persona = "evil",
     force_inflight = true, force_state = "SELECTING_HAND",
     force_sent_at = _CLOCK - (sent_ago or 0),
-    force_dirty = false, last_force_fingerprint = "OLD",
+    force_dirty = false,
     state = prev_state,
     llm_paused = nil,
     last_action_at = 0,
@@ -50,27 +49,31 @@ end
 
 print("=== game-over -> MENU synth (force_inflight=SELECTING_HAND, state now MENU) ===")
 local fails = 0
-local function check(label, cond) if not cond then fails = fails + 1; print("  FAIL " .. label) end end
+local checks = 0
+local function check(label, cond)
+  checks = checks + 1
+  if not cond then fails = fails + 1; print("  FAIL " .. label) end
+end
 local iA = run("SELECTING_HAND", 0, "A: transition observed (state_changed)")
 check("A: stale inflight cleared", iA == false)
 local iB, dB = run("MENU", 0, "B: state already MENU, fresh (THE HANG)")
 check("B: stale inflight cleared at MENU without waiting for stall", iB == false)
 check("B: re-forced (dirty)", dB == true)
-local iC = run("MENU", 999, "C: past stall timeout")
-check("C: stale inflight cleared", iC == false)
+local iC = run("MENU", 999, "C: force_sent_at far in the past (age alone is not a trigger)")
+check("C: stale inflight cleared by the state change, not by force age", iC == false)
 do
   local Enforce = require("core.enforce")
   local saved = Enforce.pre_action
   Enforce.pre_action = function() return false, "not_in_state name=play_hand state=MENU", false end
-  local N = { force_inflight = true, force_state = "MENU",
-    force_action_set = { setup_run = true }, force_action_names = { "setup_run" },
-    persona = "evil", enabled = true, dispatcher = Dispatcher, actions = Actions }
+  local N = { persona = "evil", enabled = true, dispatcher = Dispatcher, actions = Actions }
   _G.G = { STATE = STATES.MENU, STATES = STATES, GAME = {}, NEURO = N }
+  require("core.force_state").arm("MENU", { "setup_run" }, { setup_run = true }, 1)
   Dispatcher.handle_message({ command = "action", data = { id = "t1", name = "play_hand", data = {} } },
     { send_action_result = function() end, register_actions = function() end })
   Enforce.pre_action = saved
   print("[REJECT] out-of-set play_hand rejected at MENU -> inflight_after=" .. tostring(N.force_inflight))
-  check("reject-reforce: guard-rejected out-of-set answer clears force_inflight", N.force_inflight == false)
+  check("reject-keepforce: guard-rejected out-of-set answer leaves the force open", N.force_inflight == true)
+  check("reject-keepforce: out-of-set rejection does not re-arm a second force", N.force_dirty ~= true)
 end
 
 do
@@ -138,5 +141,5 @@ check("is_progression_overlay: plain notification is NOT progression", (function
 check("is_progression_overlay: no overlay is NOT progression", (function()
   _G.G = { OVERLAY_MENU = nil }; return not StateKinds.is_progression_overlay() end)())
 
-print(string.format("GAMEOVER_SYNTH_FAILS=%d (0 = clean)", fails))
+print(string.format("GAMEOVER_SYNTH_FAILS=%d (0 = clean) GAMEOVER_SYNTH_CHECKS=%d", fails, checks))
 os.exit(fails == 0 and 0 or 1)

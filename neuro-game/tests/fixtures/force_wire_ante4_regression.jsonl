@@ -1,0 +1,6 @@
+{"command":"startup","data":{"game":"Balatro"}}
+{"command":"actions/register","data":{"actions":[{"name":"play_hand"},{"name":"discard_hand"}]}}
+{"command":"actions/force","data":{"action_names":["play_hand","discard_hand"],"state":"SELECTING_HAND before the live stall","query":"Choose."}}
+{"command":"action/result","data":{"id":"prior-answer","success":true}}
+{"command":"actions/force","data":{"action_names":["play_hand","discard_hand"],"state":"SELECTING_HAND at the live stall","query":"Choose."}}
+{"command":"actions/force","data":{"action_names":["play_hand","discard_hand"],"state":"SELECTING_HAND at the live stall","query":"Choose."}}

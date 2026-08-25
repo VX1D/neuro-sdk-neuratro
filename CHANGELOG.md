@@ -1,8 +1,376 @@
 # Changelog
 
-### 1.0.0
+### 1.1.0 -- 2026-08-25
 
-_WIP — so much changed, full notes will take a while._
+<details>
+<summary><strong>Prose context replaces compact notation as the default</strong></summary>
+
+- `context_readable.lua` sends natural-language state descriptions to the LLM unconditionally now, not the token-dense notation
+- Deleted the old `context/context.lua` (668 lines gone)
+- `context_compact.lua` is no longer a public interface — it's just the internal data collector `context_readable` pulls from
+
+</details>
+
+<details>
+<summary><strong>Hand, joker, shop, and blind context rewritten per-domain</strong></summary>
+
+- `ctx_hand.lua`: poker hand level, base chips/mult, and played-count projections
+- `ctx_jokers.lua`: eternal/perishable/rental flags, sell values, Blueprint/Brainstorm copy targets, retrigger multipliers
+- `ctx_shop.lua`: exact requirement text per action, reroll affordability after a hypothetical purchase, planet run-state summary
+- `ctx_blind.lua`: payout projection (remaining hands, interest cap, tag bonuses) and full boss status
+- Economy context logic moved into `facts/economy_facts.lua`, `ctx_economy.lua` shim removed
+
+</details>
+
+<details>
+<summary><strong>Multi-step plan engine and transactions</strong></summary>
+
+- `core/plan_gate.lua` / `core/plan_transaction.lua`: multi-step action plans across game states, with mutation aging gates and rollback if a step fails partway
+- Transaction ledger validates pre-conditions and applies state changes step by step, rolls back prepared acceptances on failure
+- `handlers/plan_handlers.lua`: register/execute/cancel for multi-action sequences
+
+</details>
+
+<details>
+<summary><strong>Task mode framework</strong></summary>
+
+- `core/task_mode.lua`: goal-driven task workflows with their own sub-plans, progress tracking, phase transitions
+
+</details>
+
+<details>
+<summary><strong>Boss blind model covering all 28 bosses</strong></summary>
+
+- `facts/boss/`: debuff legality, suit rules, counterplay hints, Director's Cut / Retcon reroll tracking, one module per boss
+
+</details>
+
+<details>
+<summary><strong>Hand out calculations and draw odds</strong></summary>
+
+- `facts/hand_facts.lua` (+1245 lines): straight/flush out calculations (`straight_outs`, inside vs open draw, `draw N/M = %`, `discard at most N`)
+- Smeared Joker / Wild Card multi-suit resolution
+- Boss debuff awareness (+DB markers, zeroed chips, min-card-play requirements)
+
+</details>
+
+<details>
+<summary><strong>Live joker scoring simulator</strong></summary>
+
+- `facts/dynamic_jokers.lua` + `util/scoring.lua`: simulates joker chip/mult/xmult output live based on rank/suit/enhancement/hand played
+- Retrigger tracking for Hack, Sock and Buskin, Dusk, Seltzer, Blueprint copies
+
+</details>
+
+<details>
+<summary><strong>Decision delta and card semantics</strong></summary>
+
+- `facts/decision_delta.lua`: snapshot diff across LLM decisions — jokers gained/lost, sell value changes, consumable slots freed, money delta, cards drawn/discarded
+- `facts/card_semantics.lua`: strips UI drag/hover text out of raw engine localization to isolate the actual rule text
+
+</details>
+
+<details>
+<summary><strong>Economy facts engine</strong></summary>
+
+- `facts/economy_facts.lua`: spendable cash vs debt floor (Credit Card limits, $20 floor), reroll inflation tracking, end-of-round payout projection
+
+</details>
+
+<details>
+<summary><strong>Voucher tray and consumable/action handlers split out</strong></summary>
+
+- `hud/vouchers.lua`: live voucher tray
+- `handlers/use_card.lua`: consumable routing
+- Action handlers for hand plays, shop buys, voucher unlocks, seed config, menu nav split out into `handlers/`
+
+</details>
+
+<details>
+<summary><strong>Gameplay journal</strong></summary>
+
+- `core/gameplay_journal.lua`: runtime event log — plays, discards, shop visits, purchases, rerolls, blind completions — for context reflection
+
+</details>
+
+<details>
+<summary><strong>Joker performance analytics</strong></summary>
+
+- `core/joker_hits.lua` / `core/joker_recorder.lua`: per-joker trigger counts, chip/mult output, scaling history for the whole run
+
+</details>
+
+<details>
+<summary><strong>Central action registry</strong></summary>
+
+- `core/action_registry.lua`: single registry for action providers, metadata, param schemas, preflight checks, availability predicates
+- `core/semantic_registry.lua`: normalizes cards/jokers/consumables into stable semantic identities
+
+</details>
+
+<details>
+<summary><strong>Structured action receipts</strong></summary>
+
+- `core/action_execution.lua` / `core/action_receipt.lua`: execution now returns a structured receipt with reason codes and a verdict, instead of a bare pass/fail
+- `core/confirmation_evidence.lua`: stages evidence/snapshots for `CONFIRMATION_REQUIRED` actions before they execute
+
+</details>
+
+<details>
+<summary><strong>F8 layout placement preview</strong></summary>
+
+- Interactive placement controls in F8 — custom anchors, real-time geometry preview, independent Main/Shop offset sliders
+- Live RGB/hex colour editor in the COLOURS tab, per-persona
+- Tuning for game speed, cooldown scaling, per-state grace periods, staging failsafe timeouts
+
+</details>
+
+<details>
+<summary><strong>Dev scenario sandbox and card dex</strong></summary>
+
+- `hud/dev_scenario.lua` / `hud/dev_fixtures.lua`: reproduce or simulate any game state, ante, joker build, pack, or shop scenario in-engine
+- `hud/card_dex.lua`: searchable browser for card centers, sprites, descriptions
+
+</details>
+
+<details>
+<summary><strong>HUD animation and card rendering overhaul</strong></summary>
+
+- Animation controller rewrite: procedural easing, corridor bounds detection, smooth height transitions (`render/hud_overlay.lua`, `render/panels/`)
+- `hud/cards.lua`: mini-card renderer with layered enhancements, seals, editions, stickers
+- Persona-specific animation/layout hooks for Evil and Neuro (`acquire_evil.lua`, `acquire_neuro.lua`, `pack_evil.lua`, `pack_neuro.lua`)
+
+</details>
+
+<details>
+<summary><strong>Hot reload without restarting Balatro</strong></summary>
+
+- `core/hot_reload.lua`: reload Lua mod modules in-game without a Balatro restart, runtime state preserved
+
+</details>
+
+<details>
+<summary><strong>Crash containment guards</strong></summary>
+
+- `core/crash_guards.lua` / `core/transition_guard.lua`: isolated execution wrappers so an unhandled mod error can't take down the Balatro main thread
+- `core/gate_clocks.lua`: real wall-clock time kept strictly separate from in-game animation clock for cooldown gating
+- Watchdog grace-period timers and defer failsafes so game animations can't freeze execution
+
+</details>
+
+<details>
+<summary><strong>Duplicate action and unintended-submit protection</strong></summary>
+
+- `core/tx_cache.lua`: prevents duplicate frame execution and replay collisions
+- Two-stage hand commit: `confirm_play` added to stop unintended card submissions
+- Safety gates block accidental joker sales mid-round unless a specific boss requires it
+- `core/staging.lua`: hover staging with timeout failsafes and rollback recovery
+
+</details>
+
+<details>
+<summary><strong>Acquire overlay replaces buy toast and center showcase</strong></summary>
+
+- `render/panels/acquire.lua`: replaces the old standalone buy toast and center showcase panels with one acquire animation queue, persona-aware (`acquire_evil.lua`, `acquire_neuro.lua`)
+
+</details>
+
+<details>
+<summary><strong>Booster pack presentation pipeline</strong></summary>
+
+- `render/panels/pack.lua`: multi-phase pack animation (anoint, fold, glide, shrink, crown, exit) with Evil/Neuro flavour hooks (`pack_evil.lua`, `pack_neuro.lua`)
+
+</details>
+
+<details>
+<summary><strong>Rendering internals: badges, meshes, guarded graphics state</strong></summary>
+
+- `render/modifier_badges.lua`: layout + rasterizer for enhancement/edition/seal/sticker badges
+- `render/rect_mesh.lua`: batched GPU rectangle mesh rendering for rounded backdrops/borders
+- `render/gfx_guard.lua`: scoped graphics guard so blend mode/scissor/color state can't leak across Love2D render passes
+
+</details>
+
+<details>
+<summary><strong>Offline rasterizer for visual regression diffing</strong></summary>
+
+- `scripts/raster.lua` / `scripts/raster_png.py`: headless draw-op capture, generates PNG contact sheets for diffing without a display
+
+</details>
+
+<details>
+<summary><strong>Engine contract validation and wire audits</strong></summary>
+
+- `scripts/engine_check.lua` / `scripts/gen_engine_contract.lua`: generate and validate engine event contracts against Balatro centers
+- `tools/sdk_wire_audit.lua` / `tools/force_wire_audit.lua`: offline linters checking wire frames against Neuro SDK JSON schemas
+- `tools/registry_measure_lib.lua`: measures action registration payload size and serialization overhead
+
+</details>
+
+<details>
+<summary><strong>Rust IPC bridge: protocol validation and reconnect handling</strong></summary>
+
+- Multi-stage frame sanitization filters non-conforming params, enforces Neuro SDK schema over the websocket
+- Bootstrap replay cache: active action registrations and game state get cached and restored on reconnect
+- Monotonic session origin timestamps discard stale IPC messages left over from a prior run
+- Orphan action watchdog reports dropped/unanswered actions instead of letting the engine deadlock
+
+</details>
+
+<details>
+<summary><strong>Testing</strong></summary>
+
+- Tests, yeah, a lot of tests (366 test suites covering full protocol, gameplay, fuzzy staging, and invariant regression).
+
+</details>
+
+### 1.0.0 -- 2026-07-06
+
+<details>
+<summary><strong>Full architectural rewrite: monolith to modular packages (+29.6k / -14.3k lines)</strong></summary>
+
+- `neuro-game.lua` (3,961 lines -> thin bootstrap), `dispatcher.lua` (3,758 lines), `context_compact.lua` (3,384 lines) deleted outright and rebuilt as focused packages under `core/`, `context/`, `facts/`, `force/`, `handlers/`, `hud/`, `render/`, `util/`
+- Former top-level files (`actions.lua`, `bridge.lua`, `filtered.lua`, `staging.lua`, `state.lua`, `utils.lua`, `neuro_json.lua`, `dotenv.lua`, `palette.lua`, `neuro-anim.lua`) moved into their new package homes and substantially rewritten in place
+- Deleted `enforce.lua`, the 1,916-line root `test_deadlock.lua`, and the standalone root `context.lua` / `context_compact.lua` — superseded by package equivalents
+
+</details>
+
+<details>
+<summary><strong>Per-frame orchestrator loop</strong></summary>
+
+- `core/orchestrator.lua` (492 lines): central per-frame loop for bridge I/O, state polling, force triggering, stable-context signalling
+- Content-signature gating (`stable_content_sig`) means joker/voucher roster context is only re-sent when the roster actually changes
+- `util/level_delta.lua` reports hand-level ups as their own message
+
+</details>
+
+<details>
+<summary><strong>Dispatcher rewritten around per-domain handlers</strong></summary>
+
+- `core/dispatcher.lua` (793 lines, rewritten from the deleted 3,758-line version): routes actions to per-domain handlers (`handlers/shop_handlers.lua`, `handlers/use_card.lua`, `handlers/menu_handlers.lua`, `handlers/info_handlers.lua`, `handlers/seed_run_handlers.lua`) instead of one giant branch
+- Idempotency cache `tx_settled` (256 entries, capped) short-circuits a replayed action id to its previously recorded result instead of re-executing
+- `session_matches` filters stale messages by session id
+
+</details>
+
+<details>
+<summary><strong>Cooldown/repeat enforcement rebuilt</strong></summary>
+
+- `core/enforce.lua`: cooldown/repeat gating rebuilt around per-state and global throttle tables (`get_cooldown`, `get_global_cooldown`)
+- Env-var overrides per pack state, an explicit `UNGATED_ACTIONS`/`BYPASS_STATE_VALIDATION` allowlist
+- Force-window awareness (`is_in_active_force`) so an in-flight forced action set skips the state-legality check
+
+</details>
+
+<details>
+<summary><strong>Staging and bridge IPC rewritten</strong></summary>
+
+- `core/staging.lua` (rewritten from root `staging.lua`): hover-preview action buffering with timeout failsafes
+- `core/bridge.lua` (rewritten from root `bridge.lua`): filesystem IPC with atomic writes (temp-file + `os.rename`, non-destructive fallback if rename fails), session id generation
+- JSON schema helpers forcing empty Lua tables to serialize as `{}` not `[]`
+
+</details>
+
+<details>
+<summary><strong>New core support modules</strong></summary>
+
+- `core/bridge_init.lua`, `core/action_policy.lua`, `core/state.lua`, `core/state_kinds.lua`, `core/tuning.lua`, `core/trace.lua`, `core/force_state.lua`, `core/mod_paths.lua`, `core/neuro_lifecycle.lua`
+- Bridge bootstrap/env wiring, shared non-progress action policy, state-name classification, central tuning reader, lightweight tracing, force-state lifecycle — each now independently reusable instead of buried in the monolith
+
+</details>
+
+<details>
+<summary><strong>Central tunable config schema</strong></summary>
+
+- `core/config.lua` (324 lines): central schema for every tunable (`NEURO_SPEED_MULT`, cooldown/throttle/post-action delay groups, feature flags) — group, slider bounds/step, unit, env-var-seeded default per entry, driving the new in-game tuning panel
+- `neuro.conf.example` (82 lines): documents every supported `NEURO_*` env var with defaults
+
+</details>
+
+<details>
+<summary><strong>In-engine self-test framework</strong></summary>
+
+- `core/selftest.lua` (423 lines) + `core/selftest_cases.lua` (3,310 lines): first in-engine automated regression harness
+- No-op guards over save/unlock/win side effects during a run (`GUARD_NOOP`), snapshots/restores patched globals
+- Drives scripted scenario cases (shop, packs, blinds, hands) against the live game loop with pass/fail tracking and a trace log
+
+</details>
+
+<details>
+<summary><strong>Offline test suite</strong></summary>
+
+- `tests/`: 14 files, ~7,110 lines, plus `run_*.lua` runners
+- `test_anti_regress.lua` (2,437 lines), `test_deadlock.lua` (2,049 lines), `test_force_roundtrip.lua`, `test_force_fuzz.lua`, `test_readiness.lua`, `test_containment.lua`, `test_framing_consistency.lua`, `test_context_quality.lua`, `test_card_scan.lua`, `test_consumables.lua`, `test_staging_roundtrip.lua`, `test_json_wire.lua`, `test_selftest.lua`, `test_filter.lua`
+
+</details>
+
+<details>
+<summary><strong>Context pipeline split into per-domain modules</strong></summary>
+
+- `context/context.lua` (rewritten, 1,112 -> 668 lines) and `context/context_compact.lua` (rewritten, 3,384 lines): the single monolithic context builder split into `ctx_blind.lua` (blind/ante/payout), `ctx_economy.lua` (money/debt/interest), `ctx_hand.lua` (hand candidates), `ctx_helpers.lua`, `ctx_jokers.lua`, `ctx_misc.lua`, `ctx_shop.lua` (shop legality/pricing)
+- Shared `game_rules.lua` reference module — each section now independently testable and reusable across the readable and compact builders
+
+</details>
+
+<details>
+<summary><strong>Fact derivation engine</strong></summary>
+
+- New single-source fact modules: `card_util.lua` (431 lines), `card_area_util.lua` (182 lines), `hand_facts.lua` (636 lines), `debuff_facts.lua` (311 lines), `deck_facts.lua`, `deck_names.lua`, `fact_hints.lua`, `game_facts.lua`, `numeric_effects.lua`, `token_legends.lua`
+- Centralizes card/hand/deck/debuff derivations that were previously computed ad hoc and duplicated across the old context and dispatcher monoliths
+
+</details>
+
+<details>
+<summary><strong>Forced-action router</strong></summary>
+
+- `force/force_router.lua`: dispatches to per-state force builders (`force_selecting_hand.lua`, `force_shop.lua`, `force_blind_select.lua`, `force_pack.lua`, `menu_flow.lua`) instead of one long conditional
+- Unlock-popup and overlay-menu intercepts handled ahead of state-specific handlers (`GAME_OVER` explicitly excluded from the generic overlay intercept to avoid a soft-loop)
+- `force_helpers.snapshot_once_serials`/`restore_once_serials` refund one-shot hint serials when a force build is discarded rather than shipped
+
+</details>
+
+<details>
+<summary><strong>Multi-panel HUD replaces single overlay</strong></summary>
+
+- Single overlay replaced with dedicated panels under `render/panels/`: `right_panel.lua` (615 lines), `shop.lua` (409 lines), `pack.lua` (503 lines), `center_showcase.lua`, `buy_toast.lua`, orchestrated by `render/hud_overlay.lua` (839 lines) and `render/hud_shared.lua`
+- `hud/tuning_panel.lua` (1,105 lines): in-game tuning UI reading/writing the `core/config.lua` schema live
+- `hud/dev_scenario.lua` (290 lines): in-engine scenario reproduction sandbox
+
+</details>
+
+<details>
+<summary><strong>Sprite-atlas card rendering</strong></summary>
+
+- `hud/cards.lua` (689 lines) + `hud/prims.lua` (1,027 lines): sprite-atlas mini-card rendering and low-level draw primitives, replacing prior ad hoc drawing code
+- `hud/vouchers.lua` (632 lines): dedicated voucher tray state and rendering
+
+</details>
+
+<details>
+<summary><strong>Persona colour grading and animation</strong></summary>
+
+- `render/persona_palette.lua` (415 lines) + `render/palette.lua` (rewritten): per-persona colour grading
+- `render/neuro-anim.lua` (rewritten, 731 -> 593 lines): animation controller carried into `render/` with a smaller footprint
+- `render/debug_stats.lua` (422 lines) and `render/staging_debug.lua`: runtime debug overlays for perf stats and staging state
+
+</details>
+
+<details>
+<summary><strong>Shared utilities</strong></summary>
+
+- `util/utils.lua` (rewritten, 424 -> 666 lines), `util/dotenv.lua` (rewritten), `util/neuro_json.lua` (moved/rewritten): core helpers relocated and expanded
+- `util/schema_validate.lua` (143 lines): structural validator distinguishing JSON object-shaped vs. array-shaped Lua tables for outgoing action schemas
+- `util/scoring.lua` (45 lines), `util/level_delta.lua` (23 lines), `util/metrics.lua` (53 lines), `util/once.lua` (12 lines): small focused helpers for hand scoring, level-up delta messages, lightweight counters, one-shot execution guards
+
+</details>
+
+<details>
+<summary><strong>Developer tooling</strong></summary>
+
+- `selene.toml` / `selene-tests.toml`: Lua static-analysis config declaring the Balatro/Love2D/SMODS global surface (`G`, `love`, `SMODS`, `Card`, `Event`, `EventManager`, etc.) as full-write globals for lint accuracy
+- `scripts/lint_lua.sh` (28 lines): wraps `selene` linting for the mod source tree
+
+</details>
 
 ### 0.5.3 -- 2026-03-16
 

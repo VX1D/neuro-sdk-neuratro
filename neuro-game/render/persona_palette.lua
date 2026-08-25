@@ -63,7 +63,7 @@ local function snapshot_palette_baseline()
 end
 
 local function active_palette_key()
-  local pk = Palette.persona()
+  local pk = Palette.displayed_persona()
   local state_name = NeuroState and NeuroState.get_state_name and NeuroState.get_state_name() or "MENU"
   local menuish = (state_name == "SPLASH" or state_name == "MENU" or state_name == "RUN_SETUP")
 
@@ -158,8 +158,8 @@ local HIYORI_COLORS = {
 }
 
 local NEURO_COLORS = {
-  RED          = { 0.867, 0.169, 0.239, 1 },
-  BLUE         = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
+  RED          = { 0.932, 0.243, 0.291, 1 },
+  BLUE         = { 0.275, 0.847, 0.812, 1 },
   PURPLE       = { 0.545, 0.373, 0.663, 1 },
   GREEN        = { 0.376, 0.686, 0.412, 1 },
   GOLD         = { 0.925, 0.706, 0.129, 1 },
@@ -172,20 +172,20 @@ local NEURO_COLORS = {
   JOKER_GREY   = { 0.745, 0.725, 0.800, 1 },
 
   MULT         = { 1.000, 0.651, 0.788, 1 },
-  CHIPS        = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
-  XMULT        = { 0.867, 0.169, 0.239, 1 },
+  CHIPS        = { 0.275, 0.847, 0.812, 1 },
+  XMULT        = { 0.932, 0.243, 0.291, 1 },
 
   UI_MULT      = { 1.000, 0.651, 0.788, 1 },
-  UI_CHIPS     = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
+  UI_CHIPS     = { 0.275, 0.847, 0.812, 1 },
   MONEY        = { 0.925, 0.706, 0.129, 1 },
-  BOOSTER      = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
+  BOOSTER      = { 1.000, 0.420, 0.540, 1 },
 
   EDITION      = { 0.855, 0.835, 0.925, 1 },
   DARK_EDITION = { 0.530, 0.490, 0.680, 1 },
-  IMPORTANT    = { 0.867, 0.169, 0.239, 1 },
-  FILTER       = { 0.867, 0.169, 0.239, 1 },
+  IMPORTANT    = { 0.932, 0.243, 0.291, 1 },
+  FILTER       = { 0.932, 0.243, 0.291, 1 },
   VOUCHER      = { 0.925, 0.706, 0.129, 1 },
-  CHANCE       = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
+  CHANCE       = { 1.000, 0.420, 0.540, 1 },
 
   PALE_GREEN   = { 0.580, 0.820, 0.630, 1 },
   ETERNAL      = { 0.365, 0.173, 0.220, 1 },
@@ -194,15 +194,15 @@ local NEURO_COLORS = {
 
   BACKGROUND = {
     L = { 1.000, 0.780, 0.855, 1 },
-    D = { 0.980, 0.650, 0.780, 1 },  -- medium pink replaces light blue
-    C = { 0.960, 0.580, 0.720, 1 },  -- deeper pink replaces blue-ish
+    D = { 0.980, 0.650, 0.780, 1 },
+    C = { 0.960, 0.580, 0.720, 1 },
   },
 
   BLIND = {
-    Small = { 0.960, 0.580, 0.720, 1 },  -- pink
+    Small = { 0.960, 0.580, 0.720, 1 },
     Big   = { 1.000, 0.780, 0.855, 1 },
     Boss  = { 0.867, 0.169, 0.239, 1 },
-    won   = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
+    won   = { 1.000, 0.420, 0.540, 1 },
   },
 
   DYN_UI = {
@@ -221,12 +221,12 @@ local NEURO_COLORS = {
     BACKGROUND_WHITE    = { 0.984, 0.984, 1.000, 1 },
     BACKGROUND_DARK     = { 0.098, 0.086, 0.118, 1 },
     BACKGROUND_INACTIVE = { 0.170, 0.155, 0.200, 1 },
-    OUTLINE_LIGHT       = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
-    OUTLINE_LIGHT_TRANS = { 1.000, 0.420, 0.540, 0.45 },
+    OUTLINE_LIGHT       = { 0.275, 0.847, 0.812, 1 },
+    OUTLINE_LIGHT_TRANS = { 0.275, 0.847, 0.812, 0.45 },
     OUTLINE_DARK        = { 0.098, 0.086, 0.118, 1 },
     TRANSPARENT_LIGHT   = { 0.984, 0.984, 1.000, 0.18 },
     TRANSPARENT_DARK    = { 0.098, 0.086, 0.118, 0.16 },
-    HOVER               = { 1.000, 0.420, 0.540, 0.28 },  -- hot pink replaces cyan
+    HOVER               = { 0.275, 0.847, 0.812, 0.28 },
   },
 
   SET = {
@@ -241,56 +241,56 @@ local NEURO_COLORS = {
 
   SECONDARY_SET = {
     Default  = { 1.000, 0.780, 0.855, 1 },
-    Enhanced = { 1.000, 0.420, 0.540, 1 },  -- hot pink replaces cyan
+    Enhanced = { 1.000, 0.651, 0.788, 1 },
     Joker    = { 1.000, 0.302, 0.580, 1 },
     Tarot    = { 0.545, 0.373, 0.663, 1 },
-    Planet   = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
+    Planet   = { 0.275, 0.847, 0.812, 1 },
     Spectral = { 0.545, 0.373, 0.663, 1 },
     Voucher  = { 0.925, 0.706, 0.129, 1 },
-    Edition  = { 0.275, 0.847, 0.812, 1 },  -- turquoise accent
+    Edition  = { 0.275, 0.847, 0.812, 1 },
   },
 }
 
 local EVIL_COLORS = {
-  RED         = { 0.730, 0.165, 0.192, 1 }, -- rich wine-crimson
-  BLUE        = { 0.101, 0.585, 0.846, 1 }, -- rich azure (CHIP)
+  RED         = { 0.730, 0.165, 0.192, 1 },
+  BLUE        = { 0.101, 0.585, 0.846, 1 },
   PURPLE      = { 0.500, 0.316, 0.756, 1 },
-  GREEN       = { 0.074, 0.602, 0.283, 1 }, -- emerald
-  GOLD        = { 0.663, 0.514, 0.169, 1 }, -- muted brass (gold demoted; not her identity)
-  ORANGE      = { 0.859, 0.446, 0.022, 1 }, -- ember
-  YELLOW      = { 0.891, 0.800, 0.210, 1 }, -- rich yellow
+  GREEN       = { 0.074, 0.602, 0.283, 1 },
+  GOLD        = { 0.663, 0.514, 0.169, 1 },
+  ORANGE      = { 0.859, 0.446, 0.022, 1 },
+  YELLOW      = { 0.891, 0.800, 0.210, 1 },
   BLACK       = { 0.088, 0.011, 0.016, 1 },
   L_BLACK     = { 0.201, 0.080, 0.087, 1 },
-  GREY        = { 0.422, 0.280, 0.282, 1 }, -- wine-grey
+  GREY        = { 0.422, 0.280, 0.282, 1 },
   WHITE       = { 0.961, 0.891, 0.879, 1 },
   JOKER_GREY  = { 0.602, 0.462, 0.459, 1 },
-  MULT        = { 0.730, 0.165, 0.192, 1 },
-  CHIPS       = { 0.101, 0.585, 0.846, 1 }, -- rich azure
-  XMULT       = { 0.894, 0.288, 0.398, 1 }, -- hot crimson-rose
-  UI_MULT     = { 0.730, 0.165, 0.192, 1 },
+  MULT        = { 0.839, 0.278, 0.282, 1 },
+  CHIPS       = { 0.101, 0.585, 0.846, 1 },
+  XMULT       = { 0.894, 0.288, 0.398, 1 },
+  UI_MULT     = { 0.839, 0.278, 0.282, 1 },
   UI_CHIPS    = { 0.101, 0.585, 0.846, 1 },
-  MONEY       = { 0.663, 0.514, 0.169, 1 }, -- muted brass (matches demoted gold)
+  MONEY       = { 0.663, 0.514, 0.169, 1 },
   BOOSTER     = { 0.632, 0.193, 0.439, 1 },
-  EDITION     = { 0.745, 0.574, 0.784, 1 }, -- iridescent wine-violet
+  EDITION     = { 0.745, 0.574, 0.784, 1 },
   DARK_EDITION= { 0.455, 0.298, 0.490, 1 },
-  IMPORTANT   = { 0.899, 0.295, 0.322, 1 }, -- accent crimson owns attention
-  FILTER      = { 0.899, 0.295, 0.322, 1 },
+  IMPORTANT   = { 0.930, 0.380, 0.141, 1 },
+  FILTER      = { 0.930, 0.380, 0.141, 1 },
   VOUCHER     = { 0.837, 0.362, 0.076, 1 },
-  CHANCE      = { 0.074, 0.602, 0.283, 1 }, -- matches GREEN
+  CHANCE      = { 0.074, 0.602, 0.283, 1 },
   PALE_GREEN  = { 0.186, 0.508, 0.280, 1 },
   ETERNAL     = { 0.745, 0.225, 0.370, 1 },
   PERISHABLE  = { 0.387, 0.335, 0.751, 1 },
   RENTAL      = { 0.723, 0.460, 0.005, 1 },
   BACKGROUND  = {
-    L = { 0.578, 0.126, 0.179, 1 },
-    D = { 0.052, 0.000, 0.003, 1 },
-    C = { 0.093, 0.000, 0.007, 1 },
+    L = { 0.809, 0.445, 0.494, 1 },
+    D = { 0.276, 0.165, 0.180, 1 },
+    C = { 0.323, 0.226, 0.239, 1 },
   },
   BLIND = {
     Small = { 0.657, 0.206, 0.257, 1 },
     Big   = { 0.657, 0.206, 0.257, 1 },
     Boss  = { 0.730, 0.165, 0.192, 1 },
-    won   = { 0.232, 0.586, 0.332, 1 }, -- victory emerald, not muddy grey
+    won   = { 0.232, 0.586, 0.332, 1 },
   },
   DYN_UI = {
     MAIN      = { 0.150, 0.014, 0.029, 1 },
@@ -301,9 +301,9 @@ local EVIL_COLORS = {
   },
   UI = {
     TEXT_LIGHT       = { 0.998, 0.932, 0.909, 1 },
-    TEXT_DARK        = { 0.076, 0.018, 0.020, 1 },   -- near-black: >=6:1 on the light buttons it labels
+    TEXT_DARK        = { 0.076, 0.018, 0.020, 1 },
     TEXT_INACTIVE    = { 0.780, 0.586, 0.611, 0.55 },
-    BACKGROUND_LIGHT = { 0.865, 0.457, 0.477, 1 },   -- light crimson button, hosts TEXT_DARK
+    BACKGROUND_LIGHT = { 0.865, 0.457, 0.477, 1 },
     BACKGROUND_WHITE = { 0.961, 0.891, 0.879, 1 },
     BACKGROUND_DARK  = { 0.525, 0.058, 0.153, 1 },
     BACKGROUND_INACTIVE = { 0.473, 0.247, 0.257, 1 },
@@ -328,12 +328,15 @@ local EVIL_COLORS = {
     Enhanced = { 0.515, 0.216, 0.581, 1 },
     Joker    = { 0.626, 0.178, 0.277, 1 },
     Tarot    = { 0.639, 0.282, 0.616, 1 },
-    Planet   = { 0.014, 0.512, 0.752, 1 }, -- rich azure, not muted teal
+    Planet   = { 0.014, 0.512, 0.752, 1 },
     Spectral = { 0.347, 0.268, 0.739, 1 },
     Voucher  = { 0.837, 0.362, 0.076, 1 },
     Edition  = { 0.007, 0.529, 0.344, 1 },
   },
 }
+
+local PERSONA_COLORS = { hiyori = HIYORI_COLORS, neuro = NEURO_COLORS, evil = EVIL_COLORS }
+local PERSONA_ORDER = { "hiyori", "neuro", "evil" }
 
 local function apply_palette(palette)
   if not palette or not G or not G.C or not _palette_baseline then return end
@@ -360,37 +363,31 @@ local function run_palette_selftest_once()
   if _palette_selftest_done or not (G and G.C) then return end
   if not _palette_baseline then return end
 
-  local tests = {
-    { name = "hiyori", palette = HIYORI_COLORS },
-    { name = "neuro",  palette = NEURO_COLORS },
-    { name = "evil",   palette = EVIL_COLORS },
-  }
-
   local all_keys = {}
-  for _, t in ipairs(tests) do for k in pairs(t.palette) do all_keys[k] = true end end
-  for _, t in ipairs(tests) do
+  for _, name in ipairs(PERSONA_ORDER) do
+    for k in pairs(PERSONA_COLORS[name]) do all_keys[k] = true end
+  end
+  for _, name in ipairs(PERSONA_ORDER) do
     for k in pairs(all_keys) do
-      if t.palette[k] == nil then
-        print("[neuro-game] Palette selftest: '" .. t.name .. "' is missing key " .. tostring(k))
+      if PERSONA_COLORS[name][k] == nil then
+        print("[neuro-game] Palette selftest: '" .. name .. "' is missing key " .. tostring(k))
       end
     end
   end
 
   local ok_count = 0
-  for _, t in ipairs(tests) do
-    local ok, err = pcall(function()
-      apply_palette(t.palette)
-    end)
+  for _, name in ipairs(PERSONA_ORDER) do
+    local ok, err = pcall(apply_palette, PERSONA_COLORS[name])
     if ok then
       ok_count = ok_count + 1
     else
-      print("[neuro-game] Palette selftest failed for " .. t.name .. ": " .. tostring(err))
+      print("[neuro-game] Palette selftest failed for " .. name .. ": " .. tostring(err))
     end
   end
 
-  pcall(function() apply_palette({}) end)
+  pcall(apply_palette, {})
   _palette_selftest_done = true
-  neuro_log("Palette selftest:", ok_count, "/3 personas OK")
+  neuro_log("Palette selftest:", ok_count, "/" .. #PERSONA_ORDER .. " personas OK")
 end
 
 function M.apply_for_frame()
@@ -398,18 +395,13 @@ function M.apply_for_frame()
   snapshot_palette_baseline()
   run_palette_selftest_once()
   local pk = active_palette_key()
-  local anim = G.NEURO and G.NEURO.login_anim
-  if anim and not anim.palette_ready then
-    pk = _persona_colors_applied or pk
-  end
   if pk ~= _persona_colors_applied then
     neuro_log("Palette ->", pk)
     _persona_colors_applied = pk
-    local palette = (pk == "hiyori" and HIYORI_COLORS)
-                 or (pk == "evil" and EVIL_COLORS)
-                 or NEURO_COLORS
-    apply_palette(palette)
+    apply_palette(PERSONA_COLORS[pk] or NEURO_COLORS)
   end
 end
+
+if rawget(_G, "NEURO_TEST") then M._test = { colors = PERSONA_COLORS } end
 
 return M

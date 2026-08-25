@@ -1,5 +1,3 @@
--- standalone runner for the force round-trip invariant suite (luajit tests/run_roundtrip.lua)
-package.path = "./?.lua;;" .. package.path
 _G.__RT_CLOCK = 0
 love = { timer = { getTime = function() return _G.__RT_CLOCK or 0 end } }
 _G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 0 } }

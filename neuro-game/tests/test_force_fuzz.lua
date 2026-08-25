@@ -1,15 +1,3 @@
--- Randomized force fuzzer. The hand-written SCENARIOS in test_deadlock cover known
--- shapes; this throws thousands of RANDOM G states at the forcer + executor to catch
--- crashes/soft-loops in combinations nobody enumerated.
---
--- Deterministic (fixed seed) so a failure reproduces. Invariants asserted for EVERY
--- random (state, G):
---   I1  get_force_for_state never throws
---   I2  a returned force has a non-empty action list with >= 1 PROGRESS action
---       (an info-only forced set is the soft-loop/stall bug)
---   I3  every forced action name is in that state's action set (never offer off-state)
---   I4  executing any forced/valid action yields EXACTLY ONE action/result, no throw
---       (the SDK mandatory-response invariant, under random state)
 
 local M = {}
 
@@ -143,7 +131,6 @@ local PAYLOADS = {
   '{"seed":"AB12"}', '{"key":"b_red"}', { index = 1 }, { 1, 2, 3 },
 }
 
--- self-contained probe: exactly one result + no throw + id echoed
 local function make_bridge()
   local b = { session_id = nil, results = {} }
   function b:send_action_result(id, ok, message) self.results[#self.results + 1] = { id = id, ok = ok } end
@@ -196,7 +183,7 @@ function M.run(iterations)
 
   for it = 1, iterations do
     local state = pick(STATES)
-    G.NEURO = { dispatcher = Dispatcher, actions = Actions, rules_sent = true }
+    G.NEURO = { dispatcher = Dispatcher, actions = Actions }
     G.FUNCS = G.FUNCS or {}
     G.NEURO.persona = pick(PERSONAS)
     G.GAME = rand_game()
@@ -229,10 +216,7 @@ function M.run(iterations)
     if state == "ROUND_EVAL" then G.round_eval = {} else G.round_eval = nil end
     set_state(state)
 
-    -- I1: get_force_for_state never throws
     local ok_force, force = pcall(Dispatcher.get_force_for_state, state)
-    -- I5: force is deterministic for a fixed state -- a second call (no state mutation between)
-    -- must yield the same action set, else the mod churns actions/register + actions/force
     local ok_force2, force2 = pcall(Dispatcher.get_force_for_state, state)
     if ok_force and ok_force2 then
       local a1 = (type(force) == "table" and table.concat(force.actions or {}, ",")) or "<nil>"
@@ -246,14 +230,12 @@ function M.run(iterations)
     elseif type(force) == "table" then
       force_returns = force_returns + 1
       local acts = force.actions or {}
-      -- I2: non-empty + has progress
       if #acts == 0 then
         fail("iter=%d state=%s I2 force returned empty action list", it, state)
       elseif not has_progress(acts) then
         fail("iter=%d state=%s I2 forced set has NO progress action (soft-loop): %s",
           it, state, table.concat(acts, ","))
       end
-      -- I3: every forced action is in the state action set
       local ok_set, state_set = pcall(Actions.get_state_action_set, state)
       if ok_set and type(state_set) == "table" then
         for _, nm in ipairs(acts) do
@@ -262,14 +244,12 @@ function M.run(iterations)
           end
         end
       end
-      -- mark forced set inflight so I4 exercises the answering-a-force path
       local fset = {}
       for _, nm in ipairs(acts) do fset[nm] = true end
-      G.NEURO.force_inflight = true
-      G.NEURO.force_state = state
-      G.NEURO.force_action_set = fset
+      G.NEURO.force_inflight = false
+      G.NEURO.force_window = nil
+      require("core.force_state").arm(state, acts, fset, 1)
 
-      -- I4: execute each forced action -> exactly one result, no throw
       for _, nm in ipairs(acts) do
         set_state(state)  -- advance clock so cooldowns clear
         local payload = pick(PAYLOADS)

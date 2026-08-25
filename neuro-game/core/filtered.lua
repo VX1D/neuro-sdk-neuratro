@@ -835,7 +835,6 @@ local FILTERED_TERMS = {
   { term = "doxxing", type = "exact", action = "block_and_mute" },
 }
 
--- substring matches (leetspeak-normalized) catch slurs glued into one token (FUCKYOU); strict mode only
 local SUBSTRING_TERMS = {
   "nigger", "nigga", "niglet", "faggot", "fag", "kike", "kyke", "chink", "spic", "coon", "gook",
   "wetback", "beaner", "jigaboo", "golliwog", "wigger", "tranny", "retard", "kkk", "wop", "spook",
@@ -847,6 +846,22 @@ local SUBSTRING_PATTERNS = {}
 for i = 1, #SUBSTRING_TERMS do
   SUBSTRING_PATTERNS[i] = (SUBSTRING_TERMS[i]:gsub("(.)", "%1+"))
 end
+
+local GLUED_SLUR_TERMS = {
+  "nigger", "nigga", "niglet", "faggot", "jigaboo", "golliwog", "wetback", "beaner",
+  "cocksucker", "motherfucker",
+}
+local GLUED_SLUR_PATTERNS = {}
+for i = 1, #GLUED_SLUR_TERMS do
+  GLUED_SLUR_PATTERNS[i] = (GLUED_SLUR_TERMS[i]:gsub("(.)", "%1+"))
+end
+
+local SUBSTRING_CLEAN = {
+  "scunthorpe", "shiitake", "shitake", "snigger", "sniggered", "sniggering", "sniggers",
+  "cockpit", "cockpits", "cocktail", "cocktails", "peacock", "peacocks", "shuttlecock",
+  "hancock", "cockatoo", "cockney", "cockroach", "cockroaches", "dickens", "dickinson",
+  "niggard", "niggardly", "niggardliness", "beanery", "beaneries",
+}
 
 local function escape_pattern(text)
   return text:gsub("([^%w])", "%%%1")
@@ -889,6 +904,21 @@ local function normalize_leetspeak(text)
   return t
 end
 
+local SUBSTRING_CLEAN_NORM = {}
+for i = 1, #SUBSTRING_CLEAN do
+  SUBSTRING_CLEAN_NORM[normalize_leetspeak(SUBSTRING_CLEAN[i])] = true
+end
+
+local function strip_clean_words(text)
+  local out = text
+  for i = 1, #SUBSTRING_CLEAN do
+    out = out:gsub(case_insensitive_pattern(SUBSTRING_CLEAN[i]), function(m)
+      return (" "):rep(#m)
+    end)
+  end
+  return out
+end
+
 local _compiled = nil
 
 local function compile_patterns()
@@ -923,7 +953,6 @@ local function compile_patterns()
       }
     elseif term:match("^%a+$") then
       exact_set[term:lower()] = { rep = replace_with, mute = mute }
-      -- cover both mute and replace terms in the leetspeak set so obfuscated forms (r3tard) don't slip through
       exact_norm[normalize_leetspeak(term)] = true
     else
       local pat = case_insensitive_pattern(term)
@@ -947,7 +976,6 @@ end
 local function protect_allowed(text)
   local saved = {}
   for i = 1, #ALLOWED_PHRASES do
-    -- trailing %a* tolerates plurals; phrases are multiword so this can't shield standalone profanity
     local pat = "%f[%a]" .. case_insensitive_pattern(ALLOWED_PHRASES[i]) .. "%a*"
     text = text:gsub(pat, function(m)
       saved[#saved + 1] = m
@@ -972,7 +1000,7 @@ function Filtered.sanitize(text, strict)
     return ""
   end
   if strict then
-    local norm = normalize_leetspeak(text)
+    local norm = normalize_leetspeak(strip_clean_words(text))
     for i = 1, #SUBSTRING_PATTERNS do
       if norm:find(SUBSTRING_PATTERNS[i]) then
         return "***"
@@ -1019,6 +1047,14 @@ function Filtered.sanitize(text, strict)
               hit = true
               break
             end
+          end
+        end
+      end
+      if not hit and not SUBSTRING_CLEAN_NORM[nw] then
+        for i = 1, #GLUED_SLUR_PATTERNS do
+          if nw:find(GLUED_SLUR_PATTERNS[i]) then
+            hit = true
+            break
           end
         end
       end

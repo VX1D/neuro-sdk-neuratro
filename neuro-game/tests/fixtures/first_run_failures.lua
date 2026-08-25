@@ -1,0 +1,65 @@
+return {
+  session_id = "1784708839498",
+  source = {
+    outbox_records = 885,
+    inbox_records = 168,
+    first_run_loss_seq = 802,
+    first_run_failed_results = 33,
+    first_run_gameplay_policy_failures = 31,
+    all_failed_results = 37,
+    failed_results_with_reason_code = 0,
+  },
+  chariot = {
+    { force_seq = 308, result_seq = 309, area = "consumeables", index = 1, advertised = true, readable_usable = true, hand_count = 0, old_result = "TARGET_UNAVAILABLE" },
+    { force_seq = 361, result_seq = 362, area = "consumeables", index = 1, advertised = true, readable_usable = true, hand_count = 0, hand_indices = { 4 }, old_result = "TARGET_UNAVAILABLE" },
+    { force_seq = 370, result_seq = 371, area = "consumeables", index = 1, advertised = true, readable_usable = true, hand_count = 0, hand_indices = { 4 }, old_result = "TARGET_UNAVAILABLE" },
+    { force_seq = 370, result_seq = 373, area = "consumeables", index = 1, advertised = true, readable_usable = true, hand_count = 0, old_result = "TARGET_UNAVAILABLE" },
+  },
+  reorder = {
+    result_seqs = { 92, 163, 217, 320, 369, 466, 538, 587, 649, 725 },
+    stable_roster = { "j_scary_face", "j_baron", "j_blue_joker", "j_walkie_talkie", "j_ancient" },
+  },
+  stale_plans = {
+    {
+      force_seq = 464,
+      state = { blind = "SHOP", ancient_suit = "Clubs" },
+      plan = "Prioritize Hearts (Ancient X1.5)",
+      violation = "dynamic dependency changed",
+    },
+    {
+      force_seq = 760,
+      state = { blind = "Big", ante = 4, blind_key = "bl_big", ancient_suit = "Diamonds" },
+      plan = "AVOID CLUBS vs Boss The Club - discard them early",
+      violation = "plan belongs to future boss",
+    },
+    exact_future_boss_phrase_force_count = 15,
+    first_phrase_seq = 718,
+    last_phrase_seq = 796,
+  },
+  conditional_semantics = {
+    card_key = "j_walkie_talkie",
+    old_summary = "+4 Mult, +10 Chips",
+    required_trigger = "10s and 4s",
+    affected_force_count = 111,
+    state_counts = { SHOP = 47, HAND = 48, OTHER = 16 },
+    sample_seq = 760,
+  },
+  truncation = {
+    schema_reject_seq = 312,
+    schema_limit = 280,
+    accepted_seq = 313,
+    result_seq = 314,
+    handler_limit = 200,
+    fragments = { "Scary Fac", "Build co" },
+  },
+  cardinality = {
+    { result_seq = 770, action = "play_hand", count = 7, maximum = 5 },
+    { result_seq = 794, action = "play_hand", count = 6, maximum = 5 },
+  },
+  lifecycle = {
+    loss_seq = 802,
+    setup_opened_seq = 805,
+    repeated_loss_seq = 814,
+    message = "You lost the run -- Big Blind beat you at ante 4, round 11.",
+  },
+}

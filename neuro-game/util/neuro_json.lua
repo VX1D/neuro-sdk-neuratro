@@ -1,8 +1,17 @@
-local json = { _version = "0.1.3" }
+local json = {}
 
 local encode
 
 local MAX_DEPTH = 50
+local ARRAY_MT = {}
+local OBJECT_MT = {}
+
+local function table_kind(value)
+  local mt = getmetatable(value)
+  if mt == ARRAY_MT then return "array" end
+  if mt == OBJECT_MT then return "object" end
+  return nil
+end
 
 local escape_char_map = {
   ['\\'] = '\\\\',
@@ -18,27 +27,72 @@ local function escape_char(c)
   return escape_char_map[c] or string.format("\\u%04x", c:byte())
 end
 
+local REPLACEMENT = "\239\191\189"
+
+local function scrub_utf8(s)
+  if not s:find("[\128-\255]") then return s end
+  local out, i, n = {}, 1, #s
+  while i <= n do
+    local b = s:byte(i)
+    if b < 0x80 then
+      out[#out + 1] = s:sub(i, i); i = i + 1
+    else
+      local len, lo, hi
+      if b >= 0xC2 and b <= 0xDF then len, lo, hi = 2, 0x80, 0xBF
+      elseif b == 0xE0 then len, lo, hi = 3, 0xA0, 0xBF
+      elseif (b >= 0xE1 and b <= 0xEC) or (b >= 0xEE and b <= 0xEF) then
+        len, lo, hi = 3, 0x80, 0xBF
+      elseif b == 0xED then len, lo, hi = 3, 0x80, 0x9F
+      elseif b == 0xF0 then len, lo, hi = 4, 0x90, 0xBF
+      elseif b >= 0xF1 and b <= 0xF3 then len, lo, hi = 4, 0x80, 0xBF
+      elseif b == 0xF4 then len, lo, hi = 4, 0x80, 0x8F
+      else len = 0 end
+      local ok = len > 0 and (i + len - 1) <= n
+      if ok then
+        local c2 = s:byte(i + 1)
+        if c2 < lo or c2 > hi then ok = false end
+        if ok then
+          for k = 2, len - 1 do
+            local cb = s:byte(i + k)
+            if cb < 0x80 or cb > 0xBF then ok = false; break end
+          end
+        end
+      end
+      if ok then
+        out[#out + 1] = s:sub(i, i + len - 1); i = i + len
+      else
+        out[#out + 1] = REPLACEMENT; i = i + 1
+      end
+    end
+  end
+  return table.concat(out)
+end
+
 local function encode_string(val)
-  return '"' .. val:gsub('[%z\1-\31\\"]', escape_char) .. '"'
+  return '"' .. scrub_utf8(val):gsub('[%z\1-\31\\"]', escape_char) .. '"'
 end
 
 local function is_array(t)
-  if rawget(t, "__json_object") then
+  local kind = table_kind(t)
+  if kind == "object" then
     return false
   end
   local max = 0
   local count = 0
   for k, _ in pairs(t) do
-    if type(k) ~= "number" then
-      return false
+    if type(k) ~= "number" or k < 1 or k ~= math.floor(k) then
+      if kind ~= "array" then
+        return false
+      end
+    else
+      if k > max then
+        max = k
+      end
+      count = count + 1
     end
-    if k < 1 or k ~= math.floor(k) then
-      return false
-    end
-    if k > max then
-      max = k
-    end
-    count = count + 1
+  end
+  if kind == "array" then
+    return true, max
   end
   if count == 0 then
     return true, 0
@@ -67,13 +121,18 @@ local function encode_table(val, depth, seen)
     seen[val] = nil
     return "[" .. table.concat(res, ",") .. "]"
   end
-  for k, v in pairs(val) do
-    if k ~= "__json_object" then
-      local kt = type(k)
-      if kt == "string" or kt == "number" then
-        res[#res + 1] = encode_string(tostring(k)) .. ":" .. encode(v, depth + 1, seen)
-      end
-    end
+  local keys = {}
+  for k in pairs(val) do
+    local kt = type(k)
+    if kt == "string" or kt == "number" then keys[#keys + 1] = k end
+  end
+  table.sort(keys, function(a, b)
+    local ta, tb = type(a), type(b)
+    if ta ~= tb then return ta == "number" end
+    return a < b
+  end)
+  for _, k in ipairs(keys) do
+    res[#res + 1] = encode_string(tostring(k)) .. ":" .. encode(val[k], depth + 1, seen)
   end
   seen[val] = nil
   return "{" .. table.concat(res, ",") .. "}"
@@ -108,15 +167,28 @@ end
 json.object = function(val)
   val = val or {}
   if type(val) == "table" then
-    val.__json_object = true
+    setmetatable(val, OBJECT_MT)
   end
   return val
+end
+
+json.is_array = function(val)
+  return type(val) == "table" and table_kind(val) == "array"
+end
+
+json.is_object = function(val)
+  return type(val) == "table" and table_kind(val) == "object"
 end
 
 local parse
 
 local function decode_error(_str, idx, msg)
   error("json decode error at " .. tostring(idx) .. ": " .. msg)
+end
+
+-- SPECIFICATION.md:234-236: valid-JSON-but-rejected must not be reported to Neuro as invalid JSON
+local function semantic_error(_str, idx, msg)
+  error("json semantic rejection at " .. tostring(idx) .. ": " .. msg)
 end
 
 local function skip_whitespace(str, idx)
@@ -230,7 +302,7 @@ end
 
 local function parse_array(str, idx, depth)
   idx = idx + 1
-  local res = {}
+  local res = setmetatable({}, ARRAY_MT)
   idx = skip_whitespace(str, idx)
   if str:sub(idx, idx) == "]" then
     return res, idx + 1
@@ -239,7 +311,7 @@ local function parse_array(str, idx, depth)
     local val
     val, idx = parse(str, idx, depth)
     if val == nil then
-      decode_error(str, idx, "null not allowed in array")
+      semantic_error(str, idx, "null is valid JSON but is not accepted as an array element")
     end
     res[#res + 1] = val
     idx = skip_whitespace(str, idx)
@@ -256,7 +328,7 @@ end
 
 local function parse_object(str, idx, depth)
   idx = idx + 1
-  local res = {}
+  local res = setmetatable({}, OBJECT_MT)
   idx = skip_whitespace(str, idx)
   if str:sub(idx, idx) == "}" then
     return res, idx + 1

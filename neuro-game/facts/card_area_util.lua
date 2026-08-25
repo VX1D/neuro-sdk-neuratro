@@ -1,99 +1,12 @@
 local CardUtil = require("facts.card_util")
+local Utils = require("util.utils")
 
 local AREA_ALIASES = {
   consumables = "consumeables",
   consumable  = "consumeables",
   consumeable = "consumeables",
 }
-local mock_UIBox = {
-  get_UIE_by_ID = function() return nil end,
-  set_role = function() end,
-  recalculate = function() end,
-  add_child = function() end
-}
 
-local function clear_ai_flags(list)
-  if not (G and G.NEURO and G.NEURO.ai_highlighted and type(list) == "table") then return end
-  for _, card in ipairs(list) do
-    if card then G.NEURO.ai_highlighted[card] = nil end
-  end
-end
-
-local function clear_area_highlight(area)
-  if not area then return end
-  clear_ai_flags(area.highlighted)
-
-  if type(area.unhighlight_all) == "function" then
-    pcall(function() area:unhighlight_all() end)
-    return
-  end
-
-  local highlighted = area.highlighted
-  if type(highlighted) ~= "table" then
-    area.highlighted = {}
-    return
-  end
-
-  if type(area.remove_from_highlighted) == "function" then
-    for i = #highlighted, 1, -1 do
-      local card = highlighted[i]
-      if card then
-        pcall(function() area:remove_from_highlighted(card) end)
-      end
-    end
-  else
-    for i = 1, #highlighted do
-      local card = highlighted[i]
-      if card then
-        card.highlighted = false
-      end
-    end
-    area.highlighted = {}
-  end
-end
-
--- keep the AI-glow flag in lockstep with highlight or clearing highlight leaks the glow
-local function set_highlight(card, on)
-  if not card then return end
-  card.highlighted = on and true or false
-  if G and G.NEURO and G.NEURO.ai_highlighted then
-    G.NEURO.ai_highlighted[card] = on and true or nil
-  end
-end
-
-local function add_area_highlight(area, card)
-  if not area or not card then return false end
-  if type(area.add_to_highlighted) == "function" then
-    local ok = pcall(function() area:add_to_highlighted(card) end)
-    if ok and G and G.NEURO and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
-    return ok
-  end
-  area.highlighted = area.highlighted or {}
-  card.highlighted = true
-  if G and G.NEURO and G.NEURO.ai_highlighted then G.NEURO.ai_highlighted[card] = true end
-  table.insert(area.highlighted, card)
-  return true
-end
-
-local function normalize_indices(indices, max_cards, cap)
-  local out = {}
-  local seen = {}
-  if type(indices) ~= "table" then return out end
-  cap = cap or CardUtil.highlight_limit()
-  for i = 1, #indices do
-    local idx = tonumber(indices[i])
-    if idx and idx == math.floor(idx) then
-      if idx >= 1 and idx <= max_cards and not seen[idx] then
-        out[#out + 1] = idx
-        seen[idx] = true
-        if #out >= cap then break end
-      end
-    end
-  end
-  return out
-end
-
--- unlike normalize_indices, errors on bad input instead of silently dropping/truncating
 local function validate_hand_indices(indices, max_cards, cap)
   cap = cap or CardUtil.highlight_limit()
   if type(indices) ~= "table" or #indices == 0 then
@@ -150,6 +63,36 @@ local function validate_area_card(data)
   return area, card, nil
 end
 
+local function check_target_name(card, provided, index, area_label)
+  if type(provided) ~= "string" or provided == "" then return nil end
+  local actual = tostring(Utils.safe_name_or(card))
+  local have = actual:lower():gsub("%s+", " ")
+  local want = provided:lower():gsub("%s+", " ")
+  if have == want or have:sub(1, #want) == want then return nil end
+  local hb = (have:gsub("^the ", ""))
+  local wb = (want:gsub("^the ", ""))
+  if #wb > 0 and (hb == wb or hb:sub(1, #wb) == wb) then return nil end
+  return string.format(
+    "Index %s in '%s' is currently '%s', not '%s' -- indices shift after a sell/use/pick. Re-check the rows and pick again.",
+    tostring(index), tostring(area_label), actual, provided)
+end
+
+local function find_card_by_name(area, provided)
+  if type(provided) ~= "string" or provided == "" then return nil end
+  if not (area and area.cards) then return nil end
+  local want = provided:lower():gsub("%s+", " ")
+  local match_c, match_i, count = nil, nil, 0
+  for i, c in ipairs(area.cards) do
+    local have = tostring(Utils.safe_name_or(c)):lower():gsub("%s+", " ")
+    if have:find(want, 1, true) or want:find(have, 1, true) then
+      count = count + 1
+      match_c, match_i = c, i
+    end
+  end
+  if count == 1 then return match_c, match_i end
+  return nil
+end
+
 local function validate_index(idx, count, field, noun)
   if type(idx) ~= "number" or idx < 1 or idx > count then
     return false, (field or "index") .. " " .. tostring(idx) .. " out of range (you have "
@@ -158,17 +101,9 @@ local function validate_index(idx, count, field, noun)
   return true
 end
 
-local function call_gfunc(name, config, uibox)
-  local fn = G and G.FUNCS and G.FUNCS[name]
-  if not fn then return false end
-  fn({ config = config or {}, UIBox = uibox or mock_UIBox })
-  return true
-end
-
--- debuff.h_size_ge/h_size_le are the boss blind min/max played-card rule (e.g. The Psychic's "must play 5")
-local function blind_size_rule_error(debuff, count)
+local function blind_size_rule_error(debuff, count, min_override)
   if type(debuff) ~= "table" or type(count) ~= "number" or count <= 0 then return nil end
-  local min_cards = tonumber(debuff.h_size_ge or 0) or 0
+  local min_cards = tonumber(min_override or debuff.h_size_ge or 0) or 0
   if min_cards > 0 and count < min_cards then
     return string.format("Blind rule requires at least %d played cards. Selected %d.", min_cards, count)
   end
@@ -179,4 +114,4 @@ local function blind_size_rule_error(debuff, count)
   return nil
 end
 
-return { mock_UIBox = mock_UIBox, clear_area_highlight = clear_area_highlight, add_area_highlight = add_area_highlight, set_highlight = set_highlight, normalize_indices = normalize_indices, validate_hand_indices = validate_hand_indices, get_area = get_area, validate_area_card = validate_area_card, validate_index = validate_index, AREA_ALIASES = AREA_ALIASES, call_gfunc = call_gfunc, blind_size_rule_error = blind_size_rule_error }
+return { check_target_name = check_target_name, find_card_by_name = find_card_by_name, validate_hand_indices = validate_hand_indices, get_area = get_area, validate_area_card = validate_area_card, validate_index = validate_index, AREA_ALIASES = AREA_ALIASES, blind_size_rule_error = blind_size_rule_error }

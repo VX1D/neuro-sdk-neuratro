@@ -12,14 +12,16 @@ function M.draw()
   local lines = Staging.get_debug_lines()
   if type(lines) ~= "table" or #lines == 0 then return end
   local pal = Palette.pal()
-  local font = love.graphics.getFont()
+  local font, _, ds_s = DebugStats.fonts()
   if not font then return end
+  local prev_font = love.graphics.getFont()
+  love.graphics.setFont(font)
   local wc = pal.D_WHITE or { 1, 1, 1, 1 }
   local bgc = pal.PANEL_BG or pal.BG
   local frc = pal.FRAME or pal.PRIMARY
   local lh = font:getHeight() + 2
-  local pad = 8
-  local w = 320
+  local pad = math.floor(8 * ds_s + 0.5)
+  local w = math.floor(320 * ds_s + 0.5)
   local h = pad * 2 + #lines * lh
   local x = 8
   local y = love.graphics.getHeight() - h - 8
@@ -35,6 +37,7 @@ function M.draw()
     ty = ty + lh
   end
   love.graphics.setColor(1, 1, 1, 1)
+  if prev_font then love.graphics.setFont(prev_font) end
 end
 
 return M

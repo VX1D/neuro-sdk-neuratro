@@ -6,7 +6,6 @@ local Utils = require("util.utils")
 local neuro_log = Utils.neuro_log
 
 function Assets.get_neuro_logo()
-  -- mod assets miss on early frames; bounded retry, don't negative-cache
   if S.neuro_logo or S.neuro_logo_attempts >= 60 then
     return S.neuro_logo
   end
@@ -43,6 +42,17 @@ end
 local PANEL_FONT_PATH = "resources/fonts/m6x11plus.ttf"
 local PANEL_FONT_PX, PANEL_FONT_SMALL_PX = 14, 12
 
+local Tokens = require("render.tokens")
+Assets.ROLE_PX = Tokens.TYPE
+Assets.ROLE_MIN = Tokens.TYPE_MIN
+
+function Assets.role_font(role, scale)
+  local px = math.floor((Assets.ROLE_PX[role] or PANEL_FONT_PX) * (scale or 1) + 0.5)
+  local floor_px = Assets.ROLE_MIN[role]
+  if floor_px and px < floor_px then px = floor_px end
+  return Utils.font_at(PANEL_FONT_PATH, px, 1)
+end
+
 function Assets.get_panel_fonts(scale)
   if not S.panel_font then
     local f_small, f_big = Utils.load_font_pair(PANEL_FONT_PATH, PANEL_FONT_SMALL_PX, PANEL_FONT_PX)
@@ -52,7 +62,10 @@ function Assets.get_panel_fonts(scale)
   if not scale or scale == 1 then
     return S.panel_font, S.panel_font_small
   end
-  local f_small, f_big = Utils.load_font_pair(PANEL_FONT_PATH, PANEL_FONT_SMALL_PX, PANEL_FONT_PX, scale)
+  local small_px = math.max(Assets.ROLE_MIN.caption, math.floor(PANEL_FONT_SMALL_PX * scale + 0.5))
+  local big_px = math.max(Assets.ROLE_MIN.body, math.floor(PANEL_FONT_PX * scale + 0.5))
+  local f_small = Utils.font_at(PANEL_FONT_PATH, small_px, 1)
+  local f_big = Utils.font_at(PANEL_FONT_PATH, big_px, 1)
   return f_big or S.panel_font, f_small or S.panel_font_small
 end
 

@@ -1,9 +1,5 @@
 std = "balatro"
 
-# Lenient profile for tests/ only (applied by scripts/lint_lua.sh). The offline harness deliberately
-# does things a linter flags: fake globals, unused mock-callback args, divide-by-zero probes, and byte
-# escape strings in wire fixtures. Runtime code keeps the strict selene.toml; this keeps expected test
-# scaffolding noise from burying real runtime findings.
 [lints]
 mixed_table = "allow"
 incorrect_standard_library_use = "allow"
