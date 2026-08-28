@@ -46,7 +46,8 @@ function M.title_deco(h, g)
   local cn = h.cn
   local sr, sg2, sb = g.shimr, g.shimg, g.shimb
   local rad = cn(RAD)
-  Prims.tag_string(g.x + rad, g.y + g.title_h - 2, g.w - rad * 2, 1, sr, sg2, sb, g.a, true)
+  local tag_w = g.w - rad * 2
+  Prims.tag_string(g.x + rad, g.y + g.title_h - 2, tag_w, 1, sr, sg2, sb, g.a, true)
   Prims.draw_heart(g.x + cn(10), g.y + g.title_h - 2, cn(3), h.pg, 0.55 * g.a)
   Prims.draw_heart(g.x + g.w - cn(10), g.y + g.title_h - 2, cn(3), h.pg, 0.55 * g.a)
 end

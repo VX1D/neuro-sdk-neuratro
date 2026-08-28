@@ -240,6 +240,7 @@ function Vouchers.update(now, rn, _sw, _sh)
     S.voucher_order = {}
     S.voucher_count_pulse_at = 0
     S.drawer_reserve = 0
+    S.drawer_reserve_target = 0
     return
   end
 
@@ -335,7 +336,9 @@ function Vouchers.update(now, rn, _sw, _sh)
 
   local tray_h = tray_height(n, rn)
   S.drawer_h_current = tray_h
-  S.drawer_reserve = smoothstep01(S.drawer_slide_current) * (tray_h + rn(GAP_TOP) + rn(4))
+  local full_reserve = tray_h + rn(GAP_TOP) + rn(4)
+  S.drawer_reserve = smoothstep01(S.drawer_slide_current) * full_reserve
+  S.drawer_reserve_target = target * full_reserve
 end
 
 local function draw_row(ctx, key, x, y, w, h, ga, now)
@@ -579,9 +582,9 @@ function Vouchers.draw(ctx)
   _TITLE_BLOCK.font, _TITLE_BLOCK.track = fs, rn(TRACK_SM)
   _TITLE_BLOCK.main_color, _TITLE_BLOCK.tint_alpha = _ACC, ga
   _TITLE_BLOCK.dynamic_color = false -- alpha is the draw tint; the cached RGB stays fixed
-  local title_cached = draw_cached_tracked_text(
+  local title_cached, title_w = draw_cached_tracked_text(
     ctx, "voucher_header_title", "VOUCHERS", title_x, hy, _TITLE_BLOCK)
-  local title_end = title_x + tracked_width("VOUCHERS", rn(TRACK_SM), fs)
+  local title_end = title_x + (title_w or tracked_width("VOUCHERS", rn(TRACK_SM), fs))
   if not title_cached then
     love.graphics.setColor(0, 0, 0, 0.5 * ga)
     print_tracked("VOUCHERS", title_x + 1, hy + 1, rn(TRACK_SM), fs)

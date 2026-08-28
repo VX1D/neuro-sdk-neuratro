@@ -42,11 +42,12 @@ local handle_toggle_seeded_run = SeedRunHandlers.handle_toggle_seeded_run
 local handle_paste_seed = SeedRunHandlers.handle_paste_seed
 local handle_start_challenge_run = SeedRunHandlers.handle_start_challenge_run
 
-local ACTION_SCHEMAS = {}
-do
-  for _, contract in ipairs(ActionRegistry.all()) do
-    ACTION_SCHEMAS[contract.name] = contract.schema or {}
-  end
+-- confirm_play's schema varies at runtime, so read it live from the registry rather than
+-- snapshotting at boot.
+local function current_schema(name)
+  Actions.get_static_actions()
+  local contract = ActionRegistry.get(name)
+  return contract and (contract.schema or {}) or {}
 end
 
 local prepared = {}
@@ -253,9 +254,7 @@ end
 local CONFIRM_FIELDS = {
   "last_voucher_reject", "last_voucher_review_serial",
   "last_sell_reject", "last_sell_review_serial",
-  "last_legality_reject", "last_legality_review_serial", "last_legality_content",
-  "last_quality_reject", "last_quality_review_serial", "last_quality_content",
-  "last_confirm_armed", "weak_fired_serial",
+  "weak_fired_serial", "play_confirm",
   "pending_confirmation", "confirmation_delivery",
 }
 
@@ -438,6 +437,7 @@ end
 local DISPOSABLE_ACTIONS = {
   play_hand = true,
   discard_hand = true,
+  confirm_play = true,
   select_blind = true,
   skip_blind = true,
   cash_out = true,
@@ -450,6 +450,7 @@ local is_object_table = SchemaValidate.is_object_table
 local HandHandlers = require("handlers.hand_handlers")
 local handle_play_hand = HandHandlers.handle_play_hand
 local handle_discard_hand = HandHandlers.handle_discard_hand
+local handle_confirm_play = HandHandlers.handle_confirm_play
 
 local BoardHandlers = require("handlers.board_handlers")
 local handle_select_blind = BoardHandlers.handle_select_blind
@@ -499,6 +500,7 @@ local ACTION_PREFLIGHTS = {
   end,
   play_hand = handle_play_hand,
   discard_hand = handle_discard_hand,
+  confirm_play = handle_confirm_play,
   use_card = handle_use_card,
   use_directional_card = handle_directional_card,
   buy_from_shop = handle_buy_from_shop,
@@ -892,7 +894,7 @@ local function validate_action(msg, bridge)
   if type(data.area) == "string" then
     data.area = AREA_ALIASES[data.area] or data.area
   end
-  local schema = ACTION_SCHEMAS[name]
+  local schema = current_schema(name)
   local ok_schema, schema_err = validate_value(schema, data, "parameters")
   if not ok_schema then
     reject_schema(bridge, id, name, "Invalid action parameters: " .. schema_err)
@@ -973,9 +975,8 @@ local function validate_action(msg, bridge)
   local ends_pack = (name == "skip_booster")
     or ((name == "use_card" or name == "use_directional_card") and type(data) == "table" and data.area == "booster_pack"
       and (tonumber(G and G.GAME and G.GAME.pack_choices) or 0) <= 1)
-  -- Claiming overwrites unconditionally while releasing is owner-gated: Staging.queue validates
-  -- the successor (core/staging.lua:515) before cancelling the predecessor (:538), so the job
-  -- whose claim is overwritten is the one about to be cancelled.
+  -- Claiming overwrites unconditionally: Staging.queue validates the successor before cancelling
+  -- the predecessor, so the job whose claim is overwritten is the one about to be cancelled.
   if ends_pack and G and G.NEURO then G.NEURO.pack_exit_pending = tostring(id) end
   local disposable_names
   if ends_pack then
@@ -1255,6 +1256,9 @@ local function advance_accepted_job(job, bridge)
       Metrics.incr("action_accept_observer_error")
       print("[neuro-game] Warning: accepted-action observer failed for " .. tostring(job.name)
         .. ": " .. tostring(note_err))
+    end
+    if G and G.NEURO then
+      G.NEURO.render_dirty_epoch = (tonumber(G.NEURO.render_dirty_epoch) or 0) + 1
     end
     local result_ok, delivered, delivery_receipt = pcall(send_result,
       bridge, job.id, true, nil, job.name)
@@ -1571,7 +1575,7 @@ function Dispatcher.get_action_handler(name)
 end
 
 local function get_action_schema(name)
-  return ACTION_SCHEMAS[name]
+  return current_schema(name)
 end
 
 if rawget(_G, "NEURO_TEST") then

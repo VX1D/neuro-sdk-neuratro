@@ -14,7 +14,20 @@ local FRAME_CAP = 180
 local sf = string.format
 
 local _tuning = require("core.config")
-local function PERF_LOG() return _tuning.bool("NEURO_PERF_LOG") end
+-- NEURO_PERF_LOG is a SMODS-persisted UI toggle with no env-var bridge of its own.
+local function _env_bool(name)
+  local v = os.getenv(name)
+  if not v then return nil end
+  v = tostring(v):lower()
+  if v == "1" or v == "on" or v == "true" or v == "yes" then return true end
+  if v == "0" or v == "off" or v == "false" or v == "no" then return false end
+  return nil
+end
+local _perf_log_env = _env_bool("NEURO_PERF_LOG")
+local function PERF_LOG()
+  if _perf_log_env ~= nil then return _perf_log_env end
+  return _tuning.bool("NEURO_PERF_LOG")
+end
 local PERF_LOG_CAP = 16 * 1024 * 1024
 local _perf_bytes = 0
 local _perf_seeded = false
@@ -187,8 +200,8 @@ function M.sample(dt)
       local gap = sl.last_sample_at and (now - sl.last_sample_at) or interval
       sl.last_sample_at = now
       local line = sf(
-        '{"t":%.1f,"fps":%d,"ms_avg":%.2f,"ms_max":%.2f,"dt_raw_ms":%.2f,"gap":%.2f,"moveable":%d,"move_rate":%.2f,"sprite":%d,"card":%d,"uibox":%d,"node":%d,"lua_kb":%.0f,"gc_rate":%.1f,"gamespeed":%.2f,"speedfactor":%.2f}\n',
-        wall(), cur_fps(), fr.avg_ms or 0, fr.max_ms or 0, raw_ms, gap, sl.moveable or 0, sl.move_rate or 0,
+        '{"t":%.1f,"fps":%d,"ms_avg":%.2f,"ms_max":%.2f,"spikes":%d,"dt_raw_ms":%.2f,"gap":%.2f,"moveable":%d,"move_rate":%.2f,"sprite":%d,"card":%d,"uibox":%d,"node":%d,"lua_kb":%.0f,"gc_rate":%.1f,"gamespeed":%.2f,"speedfactor":%.2f}\n',
+        wall(), cur_fps(), fr.avg_ms or 0, fr.max_ms or 0, fr.spikes or 0, raw_ms, gap, sl.moveable or 0, sl.move_rate or 0,
         sl.sprite or 0, sl.card or 0, sl.uibox or 0, sl.node or 0, sl.lua_kb or 0, sl.gc_rate or 0,
         (G and G.SETTINGS and tonumber(G.SETTINGS.GAMESPEED)) or 0,
         (G and tonumber(G.SPEEDFACTOR)) or 0)

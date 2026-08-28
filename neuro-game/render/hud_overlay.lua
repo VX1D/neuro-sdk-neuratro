@@ -132,7 +132,9 @@ end
 local FOOTER_CYCLE = Showcase.FOOTER_CYCLE
 local update_buy_showcase = Showcase.update_buy
 local update_joker_showcase = Showcase.update_joker
-local PANEL_REBUILD_INTERVAL = 0.15
+-- render_dirty_epoch only moves on accepted SDK actions; engine-driven changes are caught by this
+-- net alone, so keep it short.
+local PANEL_REBUILD_SAFETY_NET = 0.3
 
 local Rows = require("hud.rows")
 local DebugStats = require("render.debug_stats")
@@ -150,23 +152,62 @@ end
 
 local F = { font = nil, pal = nil, p = nil, pg = nil, persona_evil = false }
 local ROW_METRICS = { carousel_pad = 0 }
+local RP_ROW_HS = {}
 local CTX = { theme = {}, motion = {}, metrics = {}, data = {}, draw = {} }
 local FB = { base = false, rp_s = false, lp_s = false, c_s = false }
 local VOUCHER_CTX = {}
 local _voucher_err_last = nil
 
+local function evict_tail(keys, limit, remove_one, map)
+  if #keys < limit then return keys end
+  local half = math.floor(limit / 2)
+  for i = 1, half do remove_one(map, keys[i]) end
+  local tail = {}
+  for i = half + 1, #keys do tail[#tail + 1] = keys[i] end
+  return tail
+end
+
+local function drop_key(map, k)
+  map[k] = nil
+end
+
+local function drop_key3(map, k)
+  local f, w, t = k[1], k[2], k[3]
+  local bw = map[f]
+  local bt = bw and bw[w]
+  if bt then
+    bt[t] = nil
+    if next(bt) == nil then
+      bw[w] = nil
+      if next(bw) == nil then map[f] = nil end
+    end
+  end
+end
+
 local function cache_put(map, keys, key, val, limit)
   limit = limit or 400
   map[key] = val
   keys[#keys + 1] = key
-  if #keys >= limit then
-    local half = math.floor(limit / 2)
-    for i = 1, half do map[keys[i]] = nil end
-    local tail = {}
-    for i = half + 1, #keys do tail[#tail + 1] = keys[i] end
-    return tail
-  end
-  return keys
+  return evict_tail(keys, limit, drop_key, map)
+end
+
+local function cache_get3(map, fid, max_w, text)
+  local by_w = map[fid]
+  if not by_w then return nil end
+  local by_t = by_w[max_w]
+  if not by_t then return nil end
+  return by_t[text]
+end
+
+local function cache_put3(map, keys, fid, max_w, text, val, limit)
+  limit = limit or 400
+  local by_w = map[fid]
+  if not by_w then by_w = {}; map[fid] = by_w end
+  local by_t = by_w[max_w]
+  if not by_t then by_t = {}; by_w[max_w] = by_t end
+  by_t[text] = val
+  keys[#keys + 1] = { fid, max_w, text }
+  return evict_tail(keys, limit, drop_key3, map)
 end
 
 local drop_last_utf8 = Utils.drop_last_codepoint
@@ -176,8 +217,7 @@ local function trunc(s, max_w, f)
   f = f or F.font
   if not f or not max_w or max_w <= 0 then return s end
   local fid = font_cache_id(f)
-  local ck = fid .. tostring(max_w) .. "\0" .. tostring(s)
-  local cached = S.ov.trunc[ck]
+  local cached = cache_get3(S.ov.trunc, fid, max_w, s)
   if cached ~= nil then return cached end
   local ok, w = pcall(f.getWidth, f, s)
   if not ok then
@@ -198,7 +238,7 @@ local function trunc(s, max_w, f)
       result = candidate
     end
   end
-  S.ov.trunc_keys = cache_put(S.ov.trunc, S.ov.trunc_keys, ck, result)
+  S.ov.trunc_keys = cache_put3(S.ov.trunc, S.ov.trunc_keys, fid, max_w, s, result)
   return result
 end
 
@@ -211,19 +251,19 @@ local function wrapped_lines(text, max_w, f)
     return out
   end
   local fid = font_cache_id(f)
-  local ck = fid .. tostring(max_w) .. "\0" .. tostring(text)
-  local cached = S.wrap_cache[ck]
+  local key_text = tostring(text)
+  local cached = cache_get3(S.wrap_cache, fid, max_w, key_text)
   if cached then return cached end
-  local ok, _, lines = pcall(f.getWrap, f, tostring(text), max_w)
+  local ok, _, lines = pcall(f.getWrap, f, key_text, max_w)
   if not ok then site_fail("font_wrap") end
   if ok and type(lines) == "table" and #lines > 0 then
     for i = 1, #lines do
       out[#out + 1] = lines[i]
     end
   else
-    out[1] = tostring(text)
+    out[1] = key_text
   end
-  S.wrap_cache_keys = cache_put(S.wrap_cache, S.wrap_cache_keys, ck, out)
+  S.wrap_cache_keys = cache_put3(S.wrap_cache, S.wrap_cache_keys, fid, max_w, key_text, out)
   return out
 end
 
@@ -276,6 +316,9 @@ local DESC_PAL_KEYS = { "D_RED", "D_CYAN", "D_MONEY", "D_MAROON", "D_GREEN", "D_
 local _desc_pal_snap = {}
 local _desc_one = {}
 
+local _desc_id_cache = setmetatable({}, { __mode = "k" })
+local _desc_id_n = 0
+
 local function desc_pal_check(pal)
   local changed = false
   for i = 1, #DESC_PAL_KEYS do
@@ -287,7 +330,10 @@ local function desc_pal_check(pal)
       _desc_pal_snap[o + 1], _desc_pal_snap[o + 2], _desc_pal_snap[o + 3] = r, g, b
     end
   end
-  if changed then S.desc_text, S.desc_text_keys = {}, {} end
+  if changed then
+    S.desc_text, S.desc_text_keys = {}, {}
+    _desc_id_cache = setmetatable({}, { __mode = "k" })
+  end
 end
 
 local DESC_SHADOW_SEG = { 0, 0, 0, 0.40 }
@@ -326,13 +372,42 @@ local function draw_desc_lines(lines, count, x, y, step, alpha, f)
   if count <= 0 then return end
   local pal = F.pal
   if pal and type(love.graphics.newText) == "function" then
-    desc_pal_check(pal)
-    local key = font_cache_id(f) .. "\0" .. tostring(step) .. "\0" ..
-      table.concat(lines, "\1", 1, count)
-    local hit = S.desc_text[key]
-    if hit == nil then
-      hit = build_desc_text(lines, count, step, f, pal) or false
-      S.desc_text_keys = cache_put(S.desc_text, S.desc_text_keys, key, hit, DESC_TEXT_MAX)
+    local hit
+    if lines == _desc_one then
+      -- _desc_one is a shared scratch table mutated per call, so key on its text instead of identity.
+      local key = font_cache_id(f) .. "\0" .. tostring(step) .. "\0" ..
+        table.concat(lines, "\1", 1, count)
+      hit = S.desc_text[key]
+      if hit == nil then
+        hit = build_desc_text(lines, count, step, f, pal) or false
+        S.desc_text_keys = cache_put(S.desc_text, S.desc_text_keys, key, hit, DESC_TEXT_MAX)
+      end
+    else
+      -- lines is wrapped_lines' own memoized table, so its identity alone is a valid cache key.
+      local per = _desc_id_cache[lines]
+      if not per then per = {}; _desc_id_cache[lines] = per end
+      local subkey = font_cache_id(f) .. "\0" .. step .. "\0" .. count
+      hit = per[subkey]
+      if hit == nil then
+        if _desc_id_n >= DESC_TEXT_MAX then
+          -- The map is weak-keyed, so the counter over-reports once GC reaps entries. Recount
+          -- before flushing, or cumulative allocations alone would wipe a live cache.
+          local live = 0
+          for _, sub in pairs(_desc_id_cache) do
+            for _ in pairs(sub) do live = live + 1 end
+          end
+          _desc_id_n = live
+          if live >= DESC_TEXT_MAX then
+            _desc_id_cache = setmetatable({}, { __mode = "k" })
+            _desc_id_n = 0
+            per = {}
+            _desc_id_cache[lines] = per
+          end
+        end
+        hit = build_desc_text(lines, count, step, f, pal) or false
+        per[subkey] = hit
+        _desc_id_n = _desc_id_n + 1
+      end
     end
     if hit then
       love.graphics.setColor(1, 1, 1, alpha)
@@ -369,25 +444,39 @@ for kind, pair in pairs(SHOWCASE_COLORS) do
 end
 local EVIL_FALLBACK = {{0, 0, 0}, {0, 0, 0}}
 
-local function showcase_type_colors(label, card, persona_evil)
+local function showcase_kind_of(label, card)
   local ctr = CardUtil.center(card)
   local set = ctr and ctr.set or ""
   local key = ctr and ctr.key or ""
   local slo, klo = set:lower(), key:lower()
+  if slo:find("neuro") or klo:find("neuro") or klo:find("j_n_") then
+    return "neuro"
+  elseif label == "NEW PLANET" or slo == "planet" then
+    return "planet"
+  elseif label == "NEW TAROT" or slo == "tarot" then
+    return "tarot"
+  elseif label == "NEW SPECTRAL" or slo == "spectral" then
+    return "spectral"
+  elseif label == "VOUCHER" or slo == "voucher" then
+    return "voucher"
+  end
+  return nil
+end
+
+-- The fallback returns a shared scratch pair, so it stays uncached to avoid cross-call bleed.
+local _showcase_kind_cache = setmetatable({}, { __mode = "k" })
+
+local function showcase_type_colors(label, card, persona_evil)
   local is_evil = persona_evil
   if is_evil == nil then is_evil = F.persona_evil end
 
+  local per = card ~= nil and _showcase_kind_cache[card] or nil
   local kind
-  if slo:find("neuro") or klo:find("neuro") or klo:find("j_n_") then
-    kind = "neuro"
-  elseif label == "NEW PLANET" or slo == "planet" then
-    kind = "planet"
-  elseif label == "NEW TAROT" or slo == "tarot" then
-    kind = "tarot"
-  elseif label == "NEW SPECTRAL" or slo == "spectral" then
-    kind = "spectral"
-  elseif label == "VOUCHER" or slo == "voucher" then
-    kind = "voucher"
+  if per and per.label == label then
+    kind = per.kind
+  else
+    kind = showcase_kind_of(label, card)
+    if card ~= nil then _showcase_kind_cache[card] = { label = label, kind = kind } end
   end
 
   if kind then
@@ -697,6 +786,7 @@ local function draw_neuro_indicator()
     local FR = _pal.FRAME or p
     local FRD = _pal.FRAME_DIM or p
     F.pal, F.p, F.pg, F.persona_evil = _pal, p, pg, persona_evil
+    desc_pal_check(_pal)
     Vouchers.update(now, rn, sw, sh)
 
     local logo_h = rn(20)
@@ -716,13 +806,16 @@ local function draw_neuro_indicator()
     local CYAN    = _pal.D_CYAN
     local GOLD    = _pal.D_GOLD
 
-    if S.ov.built_sn ~= sn or (now - S.ov.built_at) >= PANEL_REBUILD_INTERVAL then
+    local dirty_epoch = (G.NEURO and tonumber(G.NEURO.render_dirty_epoch)) or 0
+    if S.ov.built_sn ~= sn or S.ov.built_epoch ~= dirty_epoch
+        or (now - S.ov.built_at) >= PANEL_REBUILD_SAFETY_NET then
       for k in pairs(S.ov.panel) do S.ov.panel[k] = nil end
       for k in pairs(S.ov.shop) do S.ov.shop[k] = nil end
       for k in pairs(S.ov.pack) do S.ov.pack[k] = nil end
       build_panel_rows(sn, S.ov.panel, S.ov.shop, S.ov.pack, _pal, pg)
       S.ov.built_at = now
       S.ov.built_sn = sn
+      S.ov.built_epoch = dirty_epoch
     end
     local panel_rows = S.ov.panel
     local shop_rows = S.ov.shop
@@ -743,7 +836,8 @@ local function draw_neuro_indicator()
     local shop_offset_x = Tuning.get("NEURO_SHOP_OFFSET_X") or 0
     local shop_offset_y = Tuning.get("NEURO_SHOP_OFFSET_Y") or 0
     local drawer_reserve = S.drawer_reserve or 0
-    local avail_h = panel_available_height(anchor, offset_y, sh, drawer_reserve)
+    local drawer_reserve_target = S.drawer_reserve_target or drawer_reserve
+    local avail_h = panel_available_height(anchor, offset_y, sh, drawer_reserve_target)
     local frame_time = now
     local dt = 0
     if S.panel_y_last_time > 0 and frame_time > S.panel_y_last_time then
@@ -789,7 +883,11 @@ local function draw_neuro_indicator()
     local data_h = 0
     if #panel_rows > 0 then
       data_h = rn(12)
-      for _, r in ipairs(panel_rows) do data_h = data_h + row_h(r) end
+      for i, r in ipairs(panel_rows) do
+        local h = row_h(r)
+        RP_ROW_HS[i] = h
+        data_h = data_h + h
+      end
     end
 
     local pk = persona_key
@@ -815,9 +913,10 @@ local function draw_neuro_indicator()
     local footer_legend, footer_legend_entry, footer_legend_n, footer_legend_i
     if not footer_is_emote and (footer_phase == 1 or footer_phase == 2) then
       local deck = S.ov.legend_deck
-      if not deck or (now - (S.ov.legend_deck_at or -1)) >= 1.0 then
+      if not deck or S.ov.legend_deck_epoch ~= dirty_epoch
+          or (now - (S.ov.legend_deck_at or -1)) >= PANEL_REBUILD_SAFETY_NET then
         deck = ModifierBadges.legend_deck()
-        S.ov.legend_deck, S.ov.legend_deck_at = deck, now
+        S.ov.legend_deck, S.ov.legend_deck_at, S.ov.legend_deck_epoch = deck, now, dirty_epoch
       end
       local ordinal = (dev_footer and dev_footer.phase) and footer_slot
         or (math.floor(footer_slot / FOOTER_CYCLE) * 2 + (footer_phase == 2 and 1 or 0))
@@ -841,7 +940,7 @@ local function draw_neuro_indicator()
       S.ov.footer_sig = footer_sig
       S.ov.footer_at = now
     end
-    S.ov.footer_last_emote = footer_is_emote and true or false
+    S.ov.footer_last_emote = footer_is_emote and footer_emote or nil
     S.ov.footer_last_quip = quip_display
     S.ov.footer_last_legend = footer_legend
     S.ov.footer_last_legend_meta = footer_legend_entry
@@ -862,13 +961,17 @@ local function draw_neuro_indicator()
       data_h = 0
       if #panel_rows > 0 then
         data_h = rn(12)
-        for _, r in ipairs(panel_rows) do data_h = data_h + row_h(r) end
+        for i, r in ipairs(panel_rows) do
+          local h = row_h(r)
+          RP_ROW_HS[i] = h
+          data_h = data_h + h
+        end
       end
       total_h = title_h + data_h + footer_h
       if total_h > avail_h then
         local avail_data = math.max(rp_card_line_h, avail_h - title_h - footer_h - rn(12))
         local used_h
-        n_cols, used_h = Rows.pack_columns(panel_rows, ROW_METRICS, avail_data, 3)
+        n_cols, used_h = Rows.pack_columns(panel_rows, ROW_METRICS, avail_data, 3, RP_ROW_HS)
         total_h = title_h + rn(12) + used_h + footer_h
         if total_h > avail_h then total_h = avail_h end
       end
@@ -885,6 +988,8 @@ local function draw_neuro_indicator()
     total_h = round(S.panel_h_current)
     local p_x_target, p_y_target, main_side, offset_x_px, main_slide_dir =
       panel_layout(anchor, offset_x, offset_y, sw, sh, pw_total, total_h, drawer_reserve)
+    local _, p_y_target_stable =
+      panel_layout(anchor, offset_x, offset_y, sw, sh, pw_total, panel_h_target, drawer_reserve_target)
     Motion.snap(S, "panel_x", p_x_target)
     Motion.approach(S, "panel_y", p_y_target, dt, PANEL_FOLLOW_RATE)
     p_x, p_y = round(S.panel_x_current), round(S.panel_y_current)
@@ -912,6 +1017,9 @@ local function draw_neuro_indicator()
     me.anchor, me.offset_y = anchor, offset_y
     me.shop_anchor, me.shop_offset_x, me.shop_offset_y = shop_anchor, shop_offset_x, shop_offset_y
     me.total_h, me.content_w, me.n_cols, me.title_h, me.footer_h = total_h, content_w, n_cols, title_h, footer_h
+    me.panel_h_target = panel_h_target
+    me.row_hs = RP_ROW_HS
+    me.p_y_target_stable = p_y_target_stable
     me.n_cols_used = n_cols_used
     me.rp_text_h, me.rp_line_h, me.rp_small_line_h, me.rp_card_line_h, me.rp_sep_h = rp_text_h, rp_line_h, rp_small_line_h, rp_card_line_h, rp_sep_h
     me.r_text_h, me.r_small_text_h, me.line_h, me.small_line_h, me.small_text_h, me.card_line_h = r_text_h, r_small_text_h, line_h, small_line_h, small_text_h, card_line_h
@@ -932,7 +1040,7 @@ local function draw_neuro_indicator()
     local dr = ctx.draw
     dr.trunc, dr.wrapped_lines, dr.draw_colored_desc, dr.row_h, dr.showcase_type_colors =
       trunc, wrapped_lines, draw_colored_desc, row_h, showcase_type_colors
-    dr.draw_desc_lines, dr.print_colored_desc = draw_desc_lines, draw_colored_desc
+    dr.draw_desc_lines, dr.print_colored_desc = draw_desc_lines, print_colored_desc
     local rp_shift = round(main_slide_dir * (pw_total + 20) * S.right_panel_slide_frac)
     local eff_px = p_x + rp_shift
     ctx.occ_left, ctx.occ_right = nil, nil

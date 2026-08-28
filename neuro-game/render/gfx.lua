@@ -32,6 +32,7 @@ end
 
 local ST_MAX = 256
 local st_map, st_n = {}, 0
+local st_clock = 0
 
 local st_font_ids = setmetatable({}, { __mode = "k" })
 local st_font_next = 0
@@ -76,14 +77,54 @@ local function st_fill(e, s, col, a, sh_a, off, outline)
   return true
 end
 
-local function st_entry(s, col, a, sh_a, off, outline)
+local function st_lookup(fid, vkey, s)
+  local by_variant = st_map[fid]
+  local by_text = by_variant and by_variant[vkey]
+  return by_text and by_text[s]
+end
+
+local function st_store(fid, vkey, s, e)
+  local by_variant = st_map[fid]
+  if not by_variant then by_variant = {}; st_map[fid] = by_variant end
+  local by_text = by_variant[vkey]
+  if not by_text then by_text = {}; by_variant[vkey] = by_text end
+  by_text[s] = e
+end
+
+local function st_evict_lru()
+  local v_fid, v_vkey, v_s, v_used = nil, nil, nil, math.huge
+  for fid, by_variant in pairs(st_map) do
+    for vkey, by_text in pairs(by_variant) do
+      for s, e in pairs(by_text) do
+        if e.used < v_used then v_fid, v_vkey, v_s, v_used = fid, vkey, s, e.used end
+      end
+    end
+  end
+  if v_s then
+    local by_variant = st_map[v_fid]
+    local by_text = by_variant[v_vkey]
+    by_text[v_s] = nil
+    -- Clear the empty shells too, or st_map and by_variant grow unbounded while the leaf entries
+    -- stay capped at ST_MAX.
+    if next(by_text) == nil then
+      by_variant[v_vkey] = nil
+      if next(by_variant) == nil then st_map[v_fid] = nil end
+    end
+    st_n = st_n - 1
+  end
+end
+
+local function st_entry(s, col, a, sh_a, off, outline, variant)
   local lg = love.graphics
   if type(lg.newText) ~= "function" then return nil end
   local f = lg.getFont and lg.getFont()
   if not f then return nil end
-  local key = st_font_id(f) .. "\0" .. s
-  local e = st_map[key]
+  local fid = st_font_id(f)
+  local vkey = variant or ""
+  local e = st_lookup(fid, vkey, s)
+  st_clock = st_clock + 1
   if e then
+    e.used = st_clock
     if e.off == off and e.outline == outline and e.a == a and e.sh == sh_a
       and e.r == col[1] and e.g == col[2] and e.b == col[3] then
       return e
@@ -94,27 +135,32 @@ local function st_entry(s, col, a, sh_a, off, outline)
   if not ok or not text or type(text.add) ~= "function" or type(text.clear) ~= "function" then
     return nil
   end
-  e = { text = text }
+  e = { text = text, used = st_clock }
   if not st_fill(e, s, col, a, sh_a, off, outline) then return nil end
-  if st_n >= ST_MAX then st_map, st_n = {}, 0 end
-  st_map[key], st_n = e, st_n + 1
+  if st_n >= ST_MAX then
+    st_evict_lru()
+  end
+  st_store(fid, vkey, s, e)
+  st_n = st_n + 1
   return e
 end
 
-function gfx.shadow_text(txt, x, y, col, a, sh_a, off, outline)
+function gfx.shadow_text(txt, x, y, col, a, sh_a, off, outline, tint, variant)
   off = off or 1
+  tint = tint or 1
   local s = tostring(txt)
   if s ~= "" then
-    local e = st_entry(s, col, a or 1, sh_a or 1, off, outline or false)
+    local e = st_entry(s, col, a or 1, sh_a or 1, off, outline or false, variant)
     if e then
       local lg = love.graphics
-      lg.setColor(1, 1, 1, 1)
+      lg.setColor(1, 1, 1, tint)
       lg.draw(e.text, x, y)
-      lg.setColor(col[1], col[2], col[3], a)
+      -- Match the fallback's residual colour, which is tinted too.
+      lg.setColor(col[1], col[2], col[3], (a or 1) * tint)
       return
     end
   end
-  print_shadow_text(txt, x, y, col, a, sh_a, off, outline)
+  print_shadow_text(txt, x, y, col, (a or 1) * tint, (sh_a or 1) * tint, off, outline)
 end
 
 return gfx

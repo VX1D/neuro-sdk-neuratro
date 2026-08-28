@@ -33,6 +33,11 @@ function Prims.smoothstep01(f)
   return f * f * (3 - 2 * f)
 end
 
+-- Snaps to 1/20 steps so alphas derived from an animating value stay usable as text-cache keys.
+function Prims.quant_alpha(f)
+  return math.floor(f * 20 + 0.5) / 20
+end
+
 function Prims.ease_out_cubic01(f)
   if f < 0 then f = 0 elseif f > 1 then f = 1 end
   local inv = 1 - f
@@ -100,6 +105,7 @@ local function build_tracked_text_block(s, f, track, o)
 
   local sc, mc = o.shadow_color, o.main_color
   local sa = o.shadow_alpha or 0
+  local width = 0
   local function add_copy(colored, dx, dy)
     local cx = 0
     for i = 1, #s do
@@ -107,16 +113,18 @@ local function build_tracked_text_block(s, f, track, o)
       text:add({ colored, ch }, cx + dx, dy)
       cx = cx + f:getWidth(ch) + track
     end
+    width = cx - track
   end
   ok = pcall(function()
     if sa > 0 then add_copy({ sc[1], sc[2], sc[3], sa }, o.shadow_dx, o.shadow_dy) end
     add_copy({ mc[1], mc[2], mc[3], o.main_alpha }, 0, 0)
   end)
   if not ok then return nil end
-  return text
+  return text, width
 end
 
 local TEXT_BLOCK_MAX = 24
+local text_block_clock = 0
 
 function Prims.draw_cached_tracked_text(batch, key, s, x, y, opts)
   if type(batch) ~= "table" or type(key) ~= "string" or type(s) ~= "string" or s == "" then
@@ -138,11 +146,14 @@ function Prims.draw_cached_tracked_text(batch, key, s, x, y, opts)
   local cache = batch._text_blocks
   if not cache then cache = {}; batch._text_blocks = cache; batch._text_blocks_n = 0 end
   local entry = cache[key]
-  if not (entry and text_block_same(entry, s, f, track, opts)) then
+  text_block_clock = text_block_clock + 1
+  if entry and text_block_same(entry, s, f, track, opts) then
+    entry.used = text_block_clock
+  else
     for i = 1, #s do
       if s:byte(i) > 127 then return false end
     end
-    local text = build_tracked_text_block(s, f, track, opts)
+    local text, width = build_tracked_text_block(s, f, track, opts)
     if not text then return false end
     local sc, mc = opts.shadow_color, opts.main_color
     entry = {
@@ -151,11 +162,18 @@ function Prims.draw_cached_tracked_text(batch, key, s, x, y, opts)
       shadow_a = shadow_alpha, main_a = opts.main_alpha,
       sr = sc and sc[1], sg = sc and sc[2], sb = sc and sc[3],
       mr = mc[1], mg = mc[2], mb = mc[3],
+      width = width, used = text_block_clock,
     }
     if cache[key] == nil then
       if (batch._text_blocks_n or 0) >= TEXT_BLOCK_MAX then
-        cache = {}
-        batch._text_blocks, batch._text_blocks_n = cache, 0
+        local victim_key, victim_used = nil, math.huge
+        for k, v in pairs(cache) do
+          if v.used < victim_used then victim_key, victim_used = k, v.used end
+        end
+        if victim_key then
+          cache[victim_key] = nil
+          batch._text_blocks_n = batch._text_blocks_n - 1
+        end
       end
       batch._text_blocks_n = (batch._text_blocks_n or 0) + 1
     end
@@ -164,7 +182,7 @@ function Prims.draw_cached_tracked_text(batch, key, s, x, y, opts)
 
   lg.setColor(1, 1, 1, opts.tint_alpha or 1)
   lg.draw(entry.text, x, y)
-  return true
+  return true, entry.width
 end
 
 function Prims.candle01(t)
@@ -591,6 +609,21 @@ local function append_mesh_rect(vertices, indices, x, y, w, h, r, g, b, a)
   indices[#indices + 1] = v + 1
   indices[#indices + 1] = v + 3
   indices[#indices + 1] = v + 4
+end
+
+local function append_mesh_arc_pie(vertices, indices, cx, cy, radius, a1, a2, segments)
+  segments = segments or 16
+  local v = #vertices
+  vertices[v + 1] = { cx, cy, 0, 0, 1, 1, 1, 1 }
+  for i = 0, segments do
+    local t = a1 + (a2 - a1) * (i / segments)
+    vertices[v + 2 + i] = { cx + math.cos(t) * radius, cy + math.sin(t) * radius, 0, 0, 1, 1, 1, 1 }
+  end
+  for i = 1, segments do
+    indices[#indices + 1] = v + 1
+    indices[#indices + 1] = v + 1 + i
+    indices[#indices + 1] = v + 2 + i
+  end
 end
 
 local function build_mesh(vertices, indices)
@@ -1021,6 +1054,24 @@ function Prims.pin_pips(n, x, y, w, h, col, a)
   end
 end
 
+local function build_gothic_studs_mesh(w, h, u, gold)
+  local vertices, indices = {}, {}
+  local c2 = u * 2
+  local gr, gg, gb = gold[1], gold[2], gold[3]
+  for sx2 = 0, 1 do
+    for sy2 = 0, 1 do
+      for i = 0, 2 do
+        local sx = u * (1 + i * 2)
+        local sy = u * (5 - i * 2)
+        local mx = sx2 == 0 and sx or (w - sx - c2)
+        local my = sy2 == 0 and sy or (h - sy - c2)
+        append_mesh_rect(vertices, indices, mx, my, c2, c2, gr, gg, gb, 1)
+      end
+    end
+  end
+  return build_mesh(vertices, indices)
+end
+
 function Prims.gothic_frame(x, y, w, h, u, gold, frd, a, rad, pulse, quiet)
   rad = rad or 0
   pulse = pulse or 0.5
@@ -1034,18 +1085,35 @@ function Prims.gothic_frame(x, y, w, h, u, gold, frd, a, rad, pulse, quiet)
   if w < u * 40 or h < u * 24 then return end
   love.graphics.setColor(frd[1], frd[2], frd[3], E.A_INSET * a)
   local i3 = u * 3
-  local ir = math.max(0, rad - u * 2)
-  love.graphics.rectangle("line", x + i3, y + i3, w - i3 * 2, h - i3 * 2, ir, ir)
-  love.graphics.setColor(gold[1], gold[2], gold[3], E.A_STRUCT * a)
-  local c2 = u * 2
-  for sx2 = 0, 1 do
-    for sy2 = 0, 1 do
-      for i = 0, 2 do
-        local sx = u * (1 + i * 2)
-        local sy = u * (5 - i * 2)
-        local mx = sx2 == 0 and (x + sx) or (x + w - sx - c2)
-        local my = sy2 == 0 and (y + sy) or (y + h - sy - c2)
-        love.graphics.rectangle("fill", mx, my, c2, c2)
+  love.graphics.rectangle("line", x + i3, y + i3, w - i3 * 2, h - i3 * 2)
+  -- Panel size eases frame by frame; keying the mesh cache on the raw size would miss on every
+  -- animating frame and churn the shared slots.
+  local studs, qw, qh
+  if px_mesh_supported ~= false then
+    qw, qh = math.floor(w / 4 + 0.5) * 4, math.floor(h / 4 + 0.5) * 4
+    if qw > 0 and qh > 0 then
+      studs = deco_mesh_get("gothic_studs", qw, u, qh, gold[1], gold[2], gold[3])
+      if not studs then
+        studs = build_gothic_studs_mesh(qw, qh, u, gold)
+        if studs then deco_mesh_put("gothic_studs", qw, u, qh, gold[1], gold[2], gold[3], nil, nil, studs) end
+      end
+    end
+  end
+  if studs then
+    love.graphics.setColor(1, 1, 1, E.A_STRUCT * a)
+    love.graphics.draw(studs, x, y, 0, w / qw, h / qh)
+  else
+    love.graphics.setColor(gold[1], gold[2], gold[3], E.A_STRUCT * a)
+    local c2 = u * 2
+    for sx2 = 0, 1 do
+      for sy2 = 0, 1 do
+        for i = 0, 2 do
+          local sx = u * (1 + i * 2)
+          local sy = u * (5 - i * 2)
+          local mx = sx2 == 0 and (x + sx) or (x + w - sx - c2)
+          local my = sy2 == 0 and (y + sy) or (y + h - sy - c2)
+          love.graphics.rectangle("fill", mx, my, c2, c2)
+        end
       end
     end
   end
@@ -1189,6 +1257,14 @@ end
 
 local function panel_shadow_corners(x, y, w, h, rad)
   local right, bottom = x + w, y + h
+  if shadow_sink then
+    local PI = math.pi
+    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, x + rad, y + rad, rad, PI, PI * 1.5)
+    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, right - rad, y + rad, rad, PI * 1.5, PI * 2)
+    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, right - rad, bottom - rad, rad, 0, PI * 0.5)
+    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, x + rad, bottom - rad, rad, PI * 0.5, PI)
+    return
+  end
   love.graphics.arc("fill", "pie", x + rad, y + rad, rad, math.pi, math.pi * 1.5)
   love.graphics.arc("fill", "pie", right - rad, y + rad, rad, math.pi * 1.5, math.pi * 2)
   love.graphics.arc("fill", "pie", right - rad, bottom - rad, rad, 0, math.pi * 0.5)
@@ -1222,7 +1298,6 @@ local function panel_shadow_ring(x, y, w, h, rad, square, plate_x, plate_y, plat
   panel_shadow_rect(x + rad, bottom - bottom_w, edge_w, bottom_w)
   panel_shadow_rect(x, y + rad, left_w, edge_h)
   panel_shadow_rect(right - right_w, y + rad, right_w, edge_h)
-  if shadow_sink then return end
   panel_shadow_corners(x, y, w, h, rad)
 end
 
@@ -1301,15 +1376,22 @@ local function panel_body(x, y, w, h, rad, bg, bg_a, bands)
   return true
 end
 
+local SHADOW_MESH_QUANT = 4
+local function quant(v, step) return math.floor(v / step + 0.5) * step end
+
 function Prims.panel_shell(x, y, w, h, rad, sh_dx, sh_dy, sh_a, bg, bg_a, a, bands)
   local ux = (sh_dx or 0) * 0.5
   local uy = (sh_dy or 0) * 0.5
   local meshes
-  if a >= 0.98 and px_mesh_supported ~= false then
-    meshes = deco_mesh_get("panel_shadow", w, h, rad, ux, uy)
+  local qw, qh = w, h
+  -- quant() floors to 0 below half a step, and the draw below divides by it.
+  if a >= 0.98 and px_mesh_supported ~= false
+      and w >= SHADOW_MESH_QUANT and h >= SHADOW_MESH_QUANT then
+    qw, qh = quant(w, SHADOW_MESH_QUANT), quant(h, SHADOW_MESH_QUANT)
+    meshes = deco_mesh_get("panel_shadow", qw, qh, rad, ux, uy)
     if not meshes then
-      meshes = build_panel_shadow_meshes(w, h, rad, ux, uy)
-      if meshes then deco_mesh_put("panel_shadow", w, h, rad, ux, uy, nil, nil, nil, meshes) end
+      meshes = build_panel_shadow_meshes(qw, qh, rad, ux, uy)
+      if meshes then deco_mesh_put("panel_shadow", qw, qh, rad, ux, uy, nil, nil, nil, meshes) end
     end
   end
   for i = 1, #Prims.SHADOW_LAYERS do
@@ -1320,8 +1402,7 @@ function Prims.panel_shell(x, y, w, h, rad, sh_dx, sh_dy, sh_a, bg, bg_a, a, ban
     local sw, shh, sr = w + sp * 2, h + sp * 2, rad + sp
     if a >= 0.98 then
       if meshes then
-        if meshes[i] then love.graphics.draw(meshes[i], x, y) end
-        if sr > 0 then panel_shadow_corners(sx, sy, sw, shh, sr) end
+        if meshes[i] then love.graphics.draw(meshes[i], x, y, 0, w / qw, h / qh) end
       else
         panel_shadow_ring(sx, sy, sw, shh, sr, sr <= 0, x, y, w, h)
       end
@@ -1849,7 +1930,7 @@ function Prims.ogive_top(x, y, w, u, gold, a, pulse)
   pulse = pulse or 0.5
   x, y, w = round(x), round(y), round(w)
   local E = Prims.EVIL
-  local geom = ogive_geom(w, u)
+  local half = math.floor(w / 2)
   local mesh
   if px_mesh_supported ~= false then
     mesh = deco_mesh_get("ogive_top", w, u, gold[1], gold[2], gold[3])
@@ -1862,6 +1943,7 @@ function Prims.ogive_top(x, y, w, u, gold, a, pulse)
     love.graphics.setColor(1, 1, 1, a)
     love.graphics.draw(mesh, x, y)
   else
+    local geom = ogive_geom(w, u)
     for _, step in ipairs(geom.steps) do
       love.graphics.setColor(0, 0, 0, 0.35 * a)
       for _, r in ipairs(step.black) do
@@ -1880,7 +1962,7 @@ function Prims.ogive_top(x, y, w, u, gold, a, pulse)
       end
     end
   end
-  Prims.draw_diamond(x + geom.half, y - u * 3, u, gold, (E.A_ACCENT + E.PULSE_AMP * pulse) * a)
+  Prims.draw_diamond(x + half, y - u * 3, u, gold, (E.A_ACCENT + E.PULSE_AMP * pulse) * a)
 end
 
 function Prims.chains(x, y0, y1, u, gold, a, sway)

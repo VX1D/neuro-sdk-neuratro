@@ -199,7 +199,8 @@ do
   fh:close()
   local body = src:match("local function _step_neuro_frame%(.-\nend\n")
   check("the snapshot-closing step is wired into the frame, not the transition",
-    body ~= nil and body:find("_step_shop_entry_settle(", 1, true) ~= nil)
+    body ~= nil
+      and body:find('_neuro_guarded(errors, "shop settle", _step_shop_entry_settle', 1, true) ~= nil)
 end
 
 done()

@@ -101,4 +101,24 @@ G.STATE = states.SHOP
 G.GAME.blind = nil
 G.jokers.cards = {}
 
+do
+  local Config = require("core.config")
+  Config.set("NEURO_CONFIRM_REASON_ALWAYS", "off")
+  local off_schema = Dispatcher._test.get_action_schema("confirm_play")
+  check("confirm_play schema has no required reason once the always-reason flag is off",
+    off_schema and off_schema.properties and off_schema.properties.reason == nil,
+    off_schema and off_schema.required and table.concat(off_schema.required, ","))
+
+  Config.set("NEURO_CONFIRM_REASON_ALWAYS", "on")
+  local on_schema = Dispatcher._test.get_action_schema("confirm_play")
+  check("confirm_play schema advertises reason once the always-reason flag is toggled on live",
+    on_schema and on_schema.properties and on_schema.properties.reason ~= nil,
+    on_schema and on_schema.required and table.concat(on_schema.required, ","))
+  local only_answer = on_schema and on_schema.required
+    and #on_schema.required == 1 and on_schema.required[1] == "answer"
+  check("answer stays the only required field, so answer:\"no\" is never schema-rejected",
+    only_answer, on_schema and on_schema.required and table.concat(on_schema.required, ","))
+
+end
+
 done()

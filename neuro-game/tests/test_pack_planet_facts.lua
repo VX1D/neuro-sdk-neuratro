@@ -43,7 +43,7 @@ check("Venus row shows Three of a Kind played 1x lvl 2",
 check("no garbled '-,' before the played-count suffix (empty-effect sentinel leak)",
   s:find("-, played", 1, true) == nil and s:find("— , played", 1, true) == nil, s)
 check("Uranus row transitions cleanly from the dash straight into 'played'",
-  s:find("— played Two Pair", 1, true) ~= nil, s)
+  s:find("-- played Two Pair", 1, true) ~= nil, s)
 
 local n = 0
 for _ in s:gmatch("this run") do n = n + 1 end

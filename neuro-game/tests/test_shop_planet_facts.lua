@@ -58,7 +58,7 @@ check("shop row carries the run-state", sec:find("played High Card 0x this run (
 check("no garbled '-;' before the played-count suffix (empty-effect sentinel leak)",
   sec:find("-; played", 1, true) == nil, sec)
 check("Pluto row transitions cleanly from the dash straight into 'played'",
-  sec:find("— played High Card", 1, true) ~= nil, sec)
+  sec:find("-- played High Card", 1, true) ~= nil, sec)
 check("exactly one run-state suffix (only the Planet row)",
   select(2, sec:gsub("this run %(lvl", "")) == 1, sec)
 check("I: header is unchanged", sec:find("Shop items:", 1, true) ~= nil, sec)

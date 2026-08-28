@@ -19,7 +19,7 @@ local function new_state()
     _text_blocks_n = 0,
     ov = {
       trunc = {}, trunc_keys = {},
-      panel = {}, shop = {}, pack = {}, built_at = 0, built_sn = nil,
+      panel = {}, shop = {}, pack = {}, built_at = 0, built_sn = nil, built_epoch = nil,
       sl_text = nil, sl_at = 0,
       round_eval_at = 0, re_seen = false,
       footer_prev_emote = nil, footer_prev_quip = nil,
@@ -118,6 +118,7 @@ local function new_state()
     drawer_slide_run = 0,
     drawer_h_current = 0,
     drawer_reserve = 0,
+    drawer_reserve_target = 0,
   }
 end
 
@@ -140,7 +141,7 @@ function S.invalidate_caches()
   S.ov.trunc, S.ov.trunc_keys = {}, {}
   S.ov.panel, S.ov.shop, S.ov.pack = {}, {}, {}
   S.shop_leave_t, S.shop_leave_snap, S.shop_leave_game = nil, nil, nil
-  S.ov.built_at, S.ov.built_sn = 0, nil
+  S.ov.built_at, S.ov.built_sn, S.ov.built_epoch = 0, nil, nil
 end
 
 return S

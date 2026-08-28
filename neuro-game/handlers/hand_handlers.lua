@@ -51,6 +51,21 @@ local function live_card_index(cards, target)
   return nil
 end
 
+local function resolve_live_indices(signature)
+  if not (G and G.hand and G.hand.cards) then return nil end
+  local wanted, want_count = {}, 0
+  for id in signature:gmatch("[^,]+") do
+    if not wanted[id] then want_count = want_count + 1 end
+    wanted[id] = true
+  end
+  local indices = {}
+  for index, card in ipairs(G.hand.cards) do
+    if wanted[tostring((card and card.sort_id) or "?")] then indices[#indices + 1] = index end
+  end
+  if #indices < want_count then return nil end
+  return indices
+end
+
 local function at_most_one_ready_hand()
   if not (G and G.hand and G.hand.cards and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function") then
     return false
@@ -73,17 +88,6 @@ local function at_most_one_ready_hand()
   return true
 end
 
-local function latch_matches(sig_field, serial_field, selected_cards, content_field)
-  if not (G and G.NEURO) then return false end
-  local review_serial = tonumber(G.NEURO[serial_field])
-  local decision_serial = tonumber(G.NEURO.decision_serial) or 0
-  if G.NEURO[sig_field] ~= play_signature(selected_cards) then return false end
-  if review_serial ~= decision_serial then return false end
-  local stored = content_field and G.NEURO[content_field]
-  if stored ~= nil and stored ~= play_content(selected_cards) then return false end
-  return true
-end
-
 local function weak_guard_spent()
   if not (G and G.NEURO) then return false end
   local spent = tonumber(G.NEURO.weak_fired_serial)
@@ -92,26 +96,26 @@ end
 
 local WEAK_HANDS = { ["High Card"] = true, ["Pair"] = true, ["Two Pair"] = true }
 
+local function clear_play_confirm()
+  G.NEURO.play_confirm = nil
+  ConfirmationEvidence.clear()
+end
+
+-- The length floor lives here rather than as a schema minLength, so a short answer gets the
+-- coaching reject instead of SCHEMA_INVALID.
+local REASON_MIN_LEN = 12
+local DEGENERATE_REASONS = {
+  [""] = true, ["yes"] = true, ["yeah"] = true, ["yep"] = true, ["sure"] = true,
+  ["ok"] = true, ["okay"] = true, ["fine"] = true, ["looks fine"] = true, ["looks good"] = true,
+  ["good enough"] = true, ["do it"] = true, ["play it"] = true, ["commit it"] = true,
+}
+
+local function degenerate_reason(reason)
+  return DEGENERATE_REASONS[reason] or #reason < REASON_MIN_LEN
+end
+
 local function forced_play_now(hands_left, discards_left)
   return hands_left == 1 and discards_left == 0 and at_most_one_ready_hand()
-end
-
-local function armed_confirm_class()
-  if not (G and G.NEURO) then return nil end
-  local serial = tonumber(G.NEURO.decision_serial) or 0
-  local legality = tonumber(G.NEURO.last_legality_review_serial) == serial
-    and G.NEURO.last_legality_reject or nil
-  local quality = tonumber(G.NEURO.last_quality_review_serial) == serial
-    and G.NEURO.last_quality_reject or nil
-  if legality and quality then return G.NEURO.last_confirm_armed end
-  if legality then return "legality" end
-  if quality then return "quality" end
-  return nil
-end
-
-local function latch_commits(class, sig_field, serial_field, selected_cards, content_field)
-  if armed_confirm_class() ~= class then return false end
-  return latch_matches(sig_field, serial_field, selected_cards, content_field)
 end
 
 local function stronger_ready_types(handname)
@@ -139,138 +143,199 @@ local function stronger_ready_types(handname)
   return out
 end
 
-local function weak_pause_text(indices, handname, level, chips, mult, hands_left, discards_left)
+-- Hand-type rank alone doesn't imply a higher score once levels and jokers count: state the
+-- numbers, not a verdict.
+local function ready_stat_line(name)
+  local hd = G.GAME and G.GAME.hands and G.GAME.hands[name]
+  if type(hd) ~= "table" then return name end
+  return string.format("%s (lvl %d, %d chips x %d mult)", name, hd.level or 0, hd.chips or 0, hd.mult or 0)
+end
+
+local function weak_pause_text(indices, handname, level, chips, mult, hands_left, discards_left, skip_head)
   local Legality = require("facts.boss.legality")
-  local head = Legality.selection_line(indices, handname, level, chips, mult) .. "\n"
+  local head = skip_head and ""
+    or (Legality.selection_line(indices, handname, level, chips, mult) .. "\n")
   if handname and WEAK_HANDS[handname] then
     local ready = stronger_ready_types(handname)
-    local ready_note = ready and string.format(
-      " These cards can also already form %s right now, with no discard: the Ready list above gives each one's cards.",
-      table.concat(ready, ", ")) or ""
+    -- Kept separate from the "discard toward it" branch below: merging them would advise
+    -- discarding toward a hand that is already available.
+    if ready then
+      local stat_lines = {}
+      for _, name in ipairs(ready) do stat_lines[#stat_lines + 1] = ready_stat_line(name) end
+      local ready_names = table.concat(stat_lines, ", ")
+      local pronoun = #ready > 1 and "they" or "it"
+      local rank_verb = #ready > 1 and "outrank" or "outranks"
+      local action = discards_left > 0
+        and "Choose one action now: confirm this selection, send the ready hand's own indices instead, discard toward something else, or send your final play."
+        or "Confirming this selection commits it as-is; the ready hand above would need its own indices sent instead."
+      return head .. string.format(
+        "%s %s also ready in your hand right now, with no discard needed -- the Ready list above gives its cards. By hand-type rank %s %s a bare %s, but actual score also depends on your jokers and levels; compare the numbers yourself. %s",
+        ready_names, #ready > 1 and "are" or "is", pronoun, rank_verb, handname, action), ready
+    end
     if discards_left > 0 then
       return head .. string.format(
-        "This is a bare %s -- one of the three lowest-ranking hand types.%s %s, and you have %d -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play.",
-        handname, ready_note, M.DISCARD_POOL_RULE, discards_left)
-    end
-    if ready_note ~= "" then
-      return head .. string.format(
-        "This is a bare %s -- one of the three lowest-ranking hand types.%s Send this same selection again to commit it, or send a different final selection. It commits if it passes the debuff and blind safety guards; there is no second weak/general confirmation.",
-        handname, ready_note)
+        "This is a bare %s -- one of the three lowest-ranking hand types. %s, and you have %d -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play.",
+        handname, M.DISCARD_POOL_RULE, discards_left), nil
     end
     return head .. string.format(
-      "This is a bare %s -- one of the three lowest-ranking hand types. Send this same selection again to commit it, or send a different final selection. It commits if it passes the debuff and blind safety guards; there is no second weak/general confirmation.",
-      handname)
+      "This is a bare %s -- one of the three lowest-ranking hand types.",
+      handname), nil
   end
-  local mask_note = handname == Legality.MASK_HAND and (Legality.MASK_NOTE .. "\n") or ""
-  return head .. mask_note .. Legality.spend_line(hands_left, discards_left) .. "\n"
-    .. "Resend the same indices to play."
+  local masked = handname == Legality.MASK_HAND
+  local mask_note = masked and (Legality.MASK_NOTE .. "\n") or ""
+  return head .. mask_note .. Legality.spend_line(hands_left, discards_left), nil, masked
+end
+
+-- One strike only, so a caller that cannot phrase a reason is never locked out of its own confirm.
+local function reason_gate(pc, data)
+  local ok_cfg, always_reason = pcall(function() return require("core.config").bool("NEURO_CONFIRM_REASON_ALWAYS") end)
+  always_reason = ok_cfg and always_reason
+  if not (pc and (pc.dominant_alt or always_reason) and (pc.reason_strikes or 0) < 1) then return nil end
+  local reason = data and type(data.reason) == "string" and data.reason or ""
+  reason = reason:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+  if not degenerate_reason(reason) then return nil end
+  -- New table, not a write in place: dispatcher's rollback snapshot references the old one.
+  local struck = {}
+  for k, v in pairs(pc) do struck[k] = v end
+  struck.reason_strikes = 1
+  G.NEURO.play_confirm = struck
+  local why = struck.dominant_alt
+    and string.format("Say specifically why you're playing this over %s", table.concat(struck.dominant_alt, " or "))
+    or "Say specifically why this is the play"
+  return ActionResult.reject("POLICY_REJECTED", string.format(
+    "That answer carries no usable reason. %s, or answer confirm_play with \"no\".", why))
+end
+
+local function pending_matches(selected_cards)
+  local n = G and G.NEURO
+  local pc = n and n.play_confirm
+  if not pc then return false end
+  if tonumber(pc.decision_serial) ~= (tonumber(n.decision_serial) or 0) then return false end
+  if tonumber(pc.run_generation) ~= (tonumber(n.run_generation) or 0) then return false end
+  return pc.signature == play_signature(selected_cards)
+    and pc.content == play_content(selected_cards)
 end
 
 local function play_confirm_reject(selected_cards, indices)
   if G and G.NEURO and G.NEURO.selftest_active then return nil end
-  if latch_commits("legality", "last_legality_reject", "last_legality_review_serial", selected_cards,
-    "last_legality_content") then
-    return nil
+  if pending_matches(selected_cards) then return nil end
+
+  local ok_leg, Legality = pcall(require, "facts.boss.legality")
+  if not ok_leg or type(Legality) ~= "table" then return nil end
+  local fragments, classes = {}, {}
+
+  local ok_v, verdict = pcall(Legality.play_verdict, selected_cards, indices)
+  if ok_v and type(verdict) == "string" and verdict ~= "" then
+    fragments[#fragments + 1] = verdict
+    classes.legality = true
   end
-  local ok_l, Legality = pcall(require, "facts.boss.legality")
-  if ok_l and Legality and Legality.play_verdict then
-    local ok_v, verdict = pcall(Legality.play_verdict, selected_cards, indices)
-    if ok_v and type(verdict) == "string" and verdict ~= "" then
-      return verdict, "legality"
+
+  local hands_left = GameFacts.hands_left()
+  local discards_left = GameFacts.discards_left()
+
+  if not weak_guard_spent() and hands_left > 0 then
+    local handname, level, chips, mult
+    local hidden = Legality.selection_hidden(selected_cards)
+    if hidden then
+      handname, level, chips, mult =
+        Legality.MASK_HAND, Legality.MASK_FIELD, Legality.MASK_FIELD, Legality.MASK_FIELD
+    end
+    if not hidden and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
+      local ok_i, text = pcall(G.FUNCS.get_poker_hand_info, selected_cards)
+      if ok_i and type(text) == "string" and text ~= "" then handname = text end
+    end
+    local hd = not hidden and handname and G.GAME and G.GAME.hands and G.GAME.hands[handname]
+    if type(hd) == "table" then
+      level, chips, mult = hd.level, hd.chips, hd.mult
+      local ok_d, DebuffFacts = pcall(require, "facts.debuff_facts")
+      if ok_d and DebuffFacts.flint_active() then
+        chips, mult = DebuffFacts.flint_halve(chips, mult)
+      end
+    end
+    local weak_final = discards_left <= 0 and handname ~= nil and WEAK_HANDS[handname] ~= nil
+      and forced_play_now(hands_left, discards_left)
+    if discards_left > 0 or weak_final then
+      local weak_text, dominant_alt, masked_noted = weak_pause_text(indices, handname, level, chips,
+        mult, hands_left, discards_left, classes.legality)
+      classes.mask_noted = masked_noted
+      classes.weak_advised = handname ~= nil and WEAK_HANDS[handname] ~= nil
+      fragments[#fragments + 1] = weak_text
+      classes.weak = true
+      classes.dominant_alt = dominant_alt
+      classes.weak_handname = handname
     end
   end
 
-  if not weak_guard_spent() then
-    local hands_left = GameFacts.hands_left()
-    local discards_left = GameFacts.discards_left()
-    if hands_left > 0 then
-      local LegalityWeak = require("facts.boss.legality")
-      local handname, level, chips, mult
-      local hidden = LegalityWeak.selection_hidden(selected_cards)
-      if hidden then
-        handname, level, chips, mult =
-          LegalityWeak.MASK_HAND, LegalityWeak.MASK_FIELD, LegalityWeak.MASK_FIELD, LegalityWeak.MASK_FIELD
-      end
-      if not hidden and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
-        local ok_i, text = pcall(G.FUNCS.get_poker_hand_info, selected_cards)
-        if ok_i and type(text) == "string" and text ~= "" then handname = text end
-      end
-      local hd = not hidden and handname and G.GAME and G.GAME.hands and G.GAME.hands[handname]
-      if type(hd) == "table" then
-        level, chips, mult = hd.level, hd.chips, hd.mult
-        local ok_d, DebuffFacts = pcall(require, "facts.debuff_facts")
-        if ok_d and DebuffFacts.flint_active() then
-          chips, mult = DebuffFacts.flint_halve(chips, mult)
-        end
-      end
-      local weak_final = discards_left <= 0 and handname ~= nil and WEAK_HANDS[handname] ~= nil
-        and forced_play_now(hands_left, discards_left)
-      if discards_left > 0 or weak_final then
-        return weak_pause_text(indices, handname, level, chips, mult, hands_left, discards_left), "weak"
-      end
+  if G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function"
+    and not forced_play_now(hands_left, discards_left) then
+    local hidden = Legality.selection_hidden(selected_cards)
+    local ht = "this hand"
+    if not hidden then
+      local ok_i, text = pcall(G.FUNCS.get_poker_hand_info, selected_cards)
+      ht = (ok_i and type(text) == "string" and text) or ht
     end
-  end
-
-  if not latch_commits("quality", "last_quality_reject", "last_quality_review_serial", selected_cards,
-    "last_quality_content")
-    and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
-    local hands_left = GameFacts.hands_left()
-    local discards_left = GameFacts.discards_left()
-    if not forced_play_now(hands_left, discards_left) then
-      local LegalityQuality = require("facts.boss.legality")
-      local hidden = LegalityQuality.selection_hidden(selected_cards)
-      local ht = "this hand"
-      if not hidden then
-        local ok_i, text = pcall(G.FUNCS.get_poker_hand_info, selected_cards)
-        ht = (ok_i and type(text) == "string" and text) or ht
-      end
-      local res = string.format("%d hand(s) and %d discard(s) left", hands_left, discards_left)
+    -- Legality's verdict already ends with the same to-clear/hands/discards line.
+    local res
+    if not classes.legality then
+      res = string.format("%d hand(s) and %d discard(s) left", hands_left, discards_left)
       local ok_rem, remaining = pcall(function() return require("facts.economy_facts").blind_remaining() end)
       if ok_rem and type(remaining) == "number" then res = string.format("%d to clear, ", remaining) .. res end
-      local fit = ""
-      local ok_s, Scoring = pcall(require, "util.scoring")
-      if ok_s and Scoring and Scoring.joker_summary then
-        local jsum = Scoring.joker_summary(not hidden and selected_cards or nil)
-        local parts = {}
-        local b = jsum and jsum.ledger and jsum.ledger.by_type[ht]
-        if b then
-          if (b.mult or 0) ~= 0 then parts[#parts + 1] = string.format("%+d Mult", b.mult) end
-          if (b.chips or 0) ~= 0 then parts[#parts + 1] = string.format("%+d Chips", b.chips) end
-          if (b.xmult or 1) ~= 1 then parts[#parts + 1] = "x" .. tostring(b.xmult) .. " Mult" end
-        end
-        local led = jsum and jsum.ledger
-        local sources_note = ""
-        if led then
-          for _, kind in ipairs({ "xmult", "xchips", "mult", "chips" }) do
-            local q = led.gated[kind]
-            if q and not Scoring.Q.is_identity(kind, q) then
-              local clause = CtxHelpers.quantity_clause(kind, q)
-              if clause then parts[#parts + 1] = clause end
-            end
-          end
-          local srcs = CtxHelpers.ledger_gated_sources(led)
-          if #srcs > 0 then sources_note = " (" .. table.concat(srcs, "; ") .. ")" end
-        end
-        if #parts > 0 then
-          fit = string.format(" Your jokers add %s to %s%s.", table.concat(parts, ", "), ht, sources_note)
-        end
-      end
-      local weak_note = ""
-      if discards_left <= 0 and hands_left > 1 and WEAK_HANDS[ht] then
-        weak_note = string.format(
-          " %s is one of the three lowest-ranking hand types and you have no discards left to improve it: spending a hand here only pays off if your %d remaining hand(s) can still cover the rest.",
-          ht, hands_left)
-      end
-      local mask_note = hidden and (" " .. Legality.MASK_NOTE) or ""
-      return string.format(
-        "Committing %s -- %s.%s%s%s Send the same indices again to commit this play. Any other selection gets its own confirmation first.",
-        ht, res, fit, weak_note, mask_note), "confirm"
     end
+    local fit = ""
+    local ok_s, Scoring = pcall(require, "util.scoring")
+    if ok_s and Scoring and Scoring.joker_summary then
+      local jsum = Scoring.joker_summary(not hidden and selected_cards or nil)
+      local parts = {}
+      local b = jsum and jsum.ledger and jsum.ledger.by_type[ht]
+      if b then
+        if (b.mult or 0) ~= 0 then parts[#parts + 1] = string.format("%+d Mult", b.mult) end
+        if (b.chips or 0) ~= 0 then parts[#parts + 1] = string.format("%+d Chips", b.chips) end
+        if (b.xmult or 1) ~= 1 then parts[#parts + 1] = "x" .. tostring(b.xmult) .. " Mult" end
+      end
+      local led = jsum and jsum.ledger
+      local sources_note = ""
+      if led then
+        for _, kind in ipairs({ "xmult", "xchips", "mult", "chips" }) do
+          local q = led.gated[kind]
+          if q and not Scoring.Q.is_identity(kind, q) then
+            local clause = CtxHelpers.quantity_clause(kind, q)
+            if clause then parts[#parts + 1] = clause end
+          end
+        end
+        local srcs = CtxHelpers.ledger_gated_sources(led)
+        if #srcs > 0 then sources_note = " (" .. table.concat(srcs, "; ") .. ")" end
+      end
+      if #parts > 0 then
+        fit = string.format(" Your jokers add %s to %s%s.", table.concat(parts, ", "), ht, sources_note)
+      end
+    end
+    local weak_note = ""
+    if discards_left <= 0 and hands_left > 1 and WEAK_HANDS[ht] then
+      weak_note = string.format(
+        " %s is one of the three lowest-ranking hand types and you have no discards left to improve it: spending a hand here only pays off if your %d remaining hand(s) can still cover the rest.",
+        ht, hands_left)
+    end
+    local mask_note =(hidden and not classes.mask_noted) and (" " .. Legality.MASK_NOTE) or ""
+    fragments[#fragments + 1] = res
+      and string.format("Committing %s -- %s.%s%s%s", ht, res, fit, weak_note, mask_note)
+      or string.format("Committing %s.%s%s%s", ht, fit, weak_note, mask_note)
+    classes.quality = true
   end
-  return nil
+
+  if not next(classes) then return nil end
+
+  if classes.dominant_alt then
+    fragments[#fragments + 1] = string.format(
+      "Answering yes here commits %s as selected; the ready hand (%s) named above was not the one sent. If that's not intended, answer confirm_play with \"no\" and send that hand's own indices instead.",
+      classes.weak_handname, table.concat(classes.dominant_alt, " or "))
+  else
+    fragments[#fragments + 1] =
+      "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
+  end
+  return table.concat(fragments, "\n"), classes
 end
 
-local function commit_hand(data, action)
+local function commit_hand(data, action, confirmed)
   local function execution_failure(message)
     if data._action_id ~= nil then return ActionReceipt.outcome("failed", message) end
     return message
@@ -339,53 +404,42 @@ local function commit_hand(data, action)
     local ok_sz, err_sz = check_blind_size_rule(debuff, #target_cards)
     if not ok_sz then return ActionResult.reject("INVALID_SELECTION", err_sz) end
 
-    local reason, class = play_confirm_reject(target_cards, indices)
-    if reason then
-      local candidate
-      if G.NEURO then
-        local sig = play_signature(target_cards)
-        local serial = tonumber(G.NEURO.decision_serial) or 0
-        if class == "legality" then
-          G.NEURO.last_legality_reject = sig
-          G.NEURO.last_legality_review_serial = serial
-          G.NEURO.last_legality_content = play_content(target_cards)
-          G.NEURO.last_confirm_armed = "legality"
-        else
-          G.NEURO.last_quality_reject = sig
-          G.NEURO.last_quality_review_serial = serial
-          G.NEURO.last_quality_content = play_content(target_cards)
-          G.NEURO.last_confirm_armed = "quality"
-          if class == "weak" then G.NEURO.weak_fired_serial = serial end
+    if not confirmed then
+      local reason, classes = play_confirm_reject(target_cards, indices)
+      if reason then
+        local candidate
+        if G.NEURO then
+          -- Only a selection that drew weak-hand advice spends the per-decision budget; a strong
+          -- hand's generic confirmation must not silence the next weak one.
+          if classes.weak_advised then G.NEURO.weak_fired_serial = tonumber(G.NEURO.decision_serial) or 0 end
+          local sig = play_signature(target_cards)
+          local content = play_content(target_cards)
+          local serial = tonumber(G.NEURO.decision_serial) or 0
+          local run_gen = tonumber(G.NEURO.run_generation) or 0
+          G.NEURO.play_confirm = {
+            signature = sig, content = content, indices = indices,
+            decision_serial = serial, run_generation = run_gen,
+            dominant_alt = classes.dominant_alt,
+          }
+          local visible = true
+          for _, card in ipairs(target_cards) do
+            if CardUtil.is_face_down(card) then visible = false break end
+          end
+          local hand_type
+          if visible and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
+            local ok_h, text = pcall(G.FUNCS.get_poker_hand_info, target_cards)
+            if ok_h and type(text) == "string" and text ~= "" then hand_type = text end
+          end
+          candidate = ConfirmationEvidence.candidate(sig, content, indices, hand_type)
         end
-        local visible = true
-        for _, card in ipairs(target_cards) do
-          if CardUtil.is_face_down(card) then visible = false break end
-        end
-        local hand_type
-        if visible and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
-          local ok_h, text = pcall(G.FUNCS.get_poker_hand_info, target_cards)
-          if ok_h and type(text) == "string" and text ~= "" then hand_type = text end
-        end
-        local evidence_class = class == "legality" and "legality" or "quality"
-        candidate = ConfirmationEvidence.candidate(evidence_class, sig, play_content(target_cards),
-          indices, hand_type)
+        return ActionResult.reject("CONFIRMATION_REQUIRED", reason, {
+          boss_verdict = classes.legality or nil,
+          confirmation_candidate = candidate,
+        })
       end
-      return ActionResult.reject("CONFIRMATION_REQUIRED", reason, {
-        boss_verdict = class == "legality" or nil,
-        confirmation_candidate = candidate,
-      })
     end
 
-    if G.NEURO then
-      G.NEURO.last_legality_reject = nil
-      G.NEURO.last_legality_review_serial = nil
-      G.NEURO.last_legality_content = nil
-      G.NEURO.last_quality_reject = nil
-      G.NEURO.last_quality_review_serial = nil
-      G.NEURO.last_quality_content = nil
-      G.NEURO.last_confirm_armed = nil
-      ConfirmationEvidence.clear()
-    end
+    if G.NEURO then clear_play_confirm() end
   end
 
   return function()
@@ -555,27 +609,84 @@ local function handle_discard_hand(data)
   return commit_hand(data, "discard")
 end
 
-function M.pending_confirm_indices()
-  if not (G and G.NEURO and G.hand and G.hand.cards) then return nil end
-  local class = armed_confirm_class()
-  local sig = (class == "legality" and G.NEURO.last_legality_reject)
-    or (class == "quality" and G.NEURO.last_quality_reject) or nil
-  if type(sig) ~= "string" or sig == "" then return nil end
-  local wanted, want_count = {}, 0
-  for id in sig:gmatch("[^,]+") do
-    if not wanted[id] then want_count = want_count + 1 end
-    wanted[id] = true
+local function pending_play_confirm()
+  local n = G and G.NEURO
+  local pc = n and n.play_confirm
+  if not pc then return nil end
+  if tonumber(pc.decision_serial) ~= (tonumber(n.decision_serial) or 0) then return nil end
+  if tonumber(pc.run_generation) ~= (tonumber(n.run_generation) or 0) then return nil end
+  return pc
+end
+
+local function confirmed_record(pc)
+  pc = pc or pending_play_confirm()
+  if not pc then return nil end
+  local ok_cur, record = pcall(ConfirmationEvidence.current)
+  if not (ok_cur and record) then return nil end
+  if record.signature ~= pc.signature or record.content ~= pc.content then return nil end
+  return record
+end
+
+function M.pending()
+  local pc = pending_play_confirm()
+  if not pc then return nil end
+  local indices = resolve_live_indices(pc.signature)
+  if not indices then return nil end
+  local record = confirmed_record(pc)
+  return {
+    indices = indices,
+    rendered_verdict = record and record.rendered_verdict or nil,
+    hand_type = record and record.hand_type or nil,
+    dominant_alt = pc.dominant_alt,
+  }
+end
+
+-- The same gate handle_confirm_play and confirm_play_schema() use, so the action is only
+-- advertised when it would be accepted.
+function M.confirm_ready()
+  return M.pending() ~= nil and confirmed_record() ~= nil
+end
+
+local function handle_confirm_play(data)
+  local pc = pending_play_confirm()
+  local record = confirmed_record(pc)
+  if not record then
+    return ActionResult.reject("ACTION_UNAVAILABLE",
+      "No confirmation is open. Send play_hand with the indices you want.")
   end
-  local indices = {}
-  for index, card in ipairs(G.hand.cards) do
-    if wanted[tostring(card and card.sort_id)] then indices[#indices + 1] = index end
+
+  if data and data.answer == "no" then
+    clear_play_confirm()
+    return function()
+      return ActionReceipt.outcome("applied", "Confirmation discarded. Nothing was played; choose again.")
+    end
   end
-  if #indices < want_count then return nil end
-  return indices
+
+  -- Liveness first: a selection that has left the hand must not cost a reason strike on a
+  -- confirmation it can no longer commit.
+  local live_indices = resolve_live_indices(record.signature)
+  if not live_indices then
+    clear_play_confirm()
+    return ActionResult.reject("TARGET_UNAVAILABLE",
+      "The confirmed selection is no longer in your hand; nothing was played. Choose again.")
+  end
+  local target_cards = {}
+  for i = 1, #live_indices do target_cards[i] = G.hand.cards[live_indices[i]] end
+  if play_content(target_cards) ~= record.content then
+    clear_play_confirm()
+    return ActionResult.reject("TARGET_UNAVAILABLE",
+      "The confirmed selection changed underneath the confirmation; nothing was played. Choose again.")
+  end
+
+  local _, gate_err = reason_gate(pc, data)
+  if gate_err then return nil, gate_err end
+
+  return commit_hand({ indices = live_indices, _action_id = data and data._action_id }, "play", true)
 end
 
 M.handle_play_hand = handle_play_hand
 M.handle_discard_hand = handle_discard_hand
+M.handle_confirm_play = handle_confirm_play
 M.play_confirm_reject = play_confirm_reject
 if _G.NEURO_TEST then
   M.play_signature = play_signature

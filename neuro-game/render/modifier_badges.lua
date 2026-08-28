@@ -14,6 +14,8 @@ local EDITION_LABELS = {
   Foil = "Foil",
 }
 
+-- Badge collection is not signature-guarded, so this TTL is the only thing that picks up a sticker
+-- or edition changed underneath. Keep it short.
 local COLLECT_REVALIDATE_S = 0.75
 local _collect_cache = setmetatable({}, { __mode = "k" })
 local _badge_version = 0
@@ -631,7 +633,7 @@ function M.draw(layout, x, y, alpha, theme, mo)
     elseif item.text and item.text ~= "" then
       local tx = ix + (item.lead or 0)
       local ty = iy + math.floor((item.h - layout.font:getHeight()) / 2)
-      shadow_text(item.text, tx, ty, text_col, text_a * alpha, ((hue and 0.22) or 0.35) * alpha)
+      shadow_text(item.text, tx, ty, text_col, text_a, (hue and 0.22) or 0.35, nil, nil, alpha)
     end
   end
   lg.setLineWidth(old_width)

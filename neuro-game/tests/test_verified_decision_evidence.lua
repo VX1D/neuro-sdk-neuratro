@@ -33,9 +33,6 @@ local function base_game()
     NEURO = {
       run_generation = 9,
       decision_serial = 21,
-      last_confirm_armed = "quality",
-      last_quality_reject = "11,12,13,14,15",
-      last_quality_content = "sealed-content",
       plan_revision = 0,
     },
     E_MANAGER = { queues = {} },
@@ -49,8 +46,8 @@ local function base_game()
 end
 
 base_game()
-local candidate = assert(Evidence.candidate("quality", G.NEURO.last_quality_reject,
-  G.NEURO.last_quality_content, { 1, 2, 3, 4, 5 }, "Flush"))
+local sig, content = "11,12,13,14,15", "sealed-content"
+local candidate = assert(Evidence.candidate(sig, content, { 1, 2, 3, 4, 5 }, "Flush"))
 local receipt = { status = "buffered" }
 local exact = "Nothing was executed; confirmation is required. Committing Flush -- 10000 to clear."
 check("confirmation candidate stages", Evidence.stage(candidate, exact, receipt) == true)
@@ -68,24 +65,22 @@ check("stale confirmation is invisible without renderer mutation", Evidence.rend
   and G.NEURO.pending_confirmation == committed)
 
 base_game()
-local rejected_candidate = assert(Evidence.candidate("quality", G.NEURO.last_quality_reject,
-  G.NEURO.last_quality_content, { 1 }, "Flush"))
+local rejected_candidate = assert(Evidence.candidate(sig, content, { 1 }, "Flush"))
 local rejected = { status = "rejected" }
+local prior_confirm = { signature = "prior-signature", content = "prior-content", indices = { 9 } }
 local rollback = {
-  last_quality_reject = "prior-signature",
-  last_quality_review_serial = 20,
-  last_quality_content = "prior-content",
-  last_confirm_armed = "quality",
+  weak_fired_serial = 20,
   pending_confirmation = { rendered_verdict = "prior verdict" },
+  play_confirm = prior_confirm,
 }
 Evidence.stage(rejected_candidate, exact, rejected, rollback)
 check("rejected delivery never promotes", Evidence.step_delivery() == false
   and G.NEURO.confirmation_delivery == nil)
 check("rejected delivery atomically restores the preflight confirmation state",
-  G.NEURO.last_quality_reject == "prior-signature"
-    and G.NEURO.last_quality_review_serial == 20
-    and G.NEURO.last_quality_content == "prior-content"
-    and G.NEURO.pending_confirmation == rollback.pending_confirmation)
+  G.NEURO.weak_fired_serial == 20
+    and G.NEURO.pending_confirmation == rollback.pending_confirmation
+    and G.NEURO.play_confirm == prior_confirm,
+  tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 
 base_game()
 G.NEURO.last_play = {

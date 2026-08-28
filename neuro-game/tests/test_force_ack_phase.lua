@@ -335,9 +335,7 @@ do
   for _ = 1, rounds do
     local r = answer(b, "play_hand", '{"indices":[1]}')
     if r and r.ok == true and r.code == "CONFIRMATION_REQUIRED" then confirms = confirms + 1 end
-    G.NEURO.last_quality_reject = nil
-    G.NEURO.last_legality_reject = nil
-    G.NEURO.last_confirm_armed = nil
+    G.NEURO.play_confirm = nil
     tick_for(20)
   end
   check("D: every round really answered CONFIRMATION_REQUIRED", confirms == rounds, confirms)

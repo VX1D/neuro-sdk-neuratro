@@ -17,6 +17,7 @@ local COVERED = {
   select_blind = true,
   play_hand = true,
   discard_hand = true,
+  confirm_play = true,
 }
 
 local SHOP_MUTATIONS = {

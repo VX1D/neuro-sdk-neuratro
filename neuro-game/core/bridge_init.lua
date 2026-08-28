@@ -265,10 +265,17 @@ local function hook_seeded_unlocks()
   end
 end
 
+local _installed_game_over = nil
 local function hook_game_over_screen()
   if not Utils.neuro_ready() then return end
   if G.NEURO.game_over_hooked then return end
   if not _G.create_UIBox_game_over then return end
+  if _G.create_UIBox_game_over == _installed_game_over then
+    -- The wrapper is still installed; re-wrapping would stack another layer every time the
+    -- guard is cleared.
+    G.NEURO.game_over_hooked = true
+    return
+  end
   G.NEURO.game_over_hooked = true
 
   local _orig_create_UIBox_game_over = _G.create_UIBox_game_over
@@ -300,6 +307,7 @@ local function hook_game_over_screen()
     end
     return t
   end
+  _installed_game_over = _G.create_UIBox_game_over
 end
 
 local _run_reset_hooked = false

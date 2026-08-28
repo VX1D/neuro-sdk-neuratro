@@ -310,11 +310,11 @@ do
     data = { id = "rc-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   check("the first selection arms a confirmation",
     codes[1] == "CONFIRMATION_REQUIRED", tostring(codes[1]))
-  check("the latch is armed", G.NEURO.last_quality_reject ~= nil)
+  check("the latch is armed", G.NEURO.play_confirm ~= nil)
 
   Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 2 }, b)
   check("reconnect drops the pending confirmation",
-    G.NEURO.last_quality_reject == nil, tostring(G.NEURO.last_quality_reject))
+    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
 
   arm_force()
   Dispatcher.handle_message({ command = "action",
@@ -327,39 +327,34 @@ do
   selecting_hand_env(700)
   G.NEURO = { enabled = true, decision_serial = 9 }
   local HH = require("handlers.hand_handlers")
-  G.NEURO.last_legality_reject = "1,2"
-  G.NEURO.last_legality_review_serial = 9
-  G.NEURO.last_confirm_armed = "legality"
-  local first = HH.pending_confirm_indices()
-  check("the armed legality selection is announced",
+  G.NEURO.play_confirm = { signature = "1,2", content = "c12", indices = { 1, 2 },
+    decision_serial = 9, run_generation = 0 }
+  local first_pend = HH.pending()
+  local first = first_pend and first_pend.indices
+  check("the armed selection is announced",
     first and table.concat(first, ",") == "1,2", first and table.concat(first, ",") or "nil")
 
-  G.NEURO.last_quality_reject = "3,4"
-  G.NEURO.last_quality_review_serial = 9
-  G.NEURO.last_confirm_armed = "quality"
-  local newest = HH.pending_confirm_indices()
-  check("a newer quality confirm is announced over the older legality one",
+  G.NEURO.play_confirm = { signature = "3,4", content = "c34", indices = { 3, 4 },
+    decision_serial = 9, run_generation = 0 }
+  local newest_pend = HH.pending()
+  local newest = newest_pend and newest_pend.indices
+  check("arming a different selection replaces the announcement outright -- one slot, not two",
     newest and table.concat(newest, ",") == "3,4", newest and table.concat(newest, ",") or "nil")
-
-  G.NEURO.last_confirm_armed = "legality"
-  local back = HH.pending_confirm_indices()
-  check("and the reverse arming order announces the legality one",
-    back and table.concat(back, ",") == "1,2", back and table.concat(back, ",") or "nil")
 end
 
 do
   selecting_hand_env(800)
   G.NEURO = { enabled = true, decision_serial = 3, transport_session = 1,
     dispatcher = Dispatcher, actions = Actions }
-  G.NEURO.last_quality_reject = "1,2"
-  G.NEURO.last_quality_review_serial = 3
+  G.NEURO.play_confirm = { signature = "1,2", content = "c12", indices = { 1, 2 },
+    decision_serial = 3, run_generation = 0 }
   G.NEURO.last_sell_reject = "sell:0:7"
   local b = armed_bridge()
   b.send_action_result = function() end
 
   Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 1 }, b)
   check("an unchanged transport_session still drops the play_hand confirmation",
-    G.NEURO.last_quality_reject == nil, tostring(G.NEURO.last_quality_reject))
+    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
   check("it drops the pending sell confirmation too",
     G.NEURO.last_sell_reject == nil, tostring(G.NEURO.last_sell_reject))
 end
@@ -401,18 +396,12 @@ do
   selecting_hand_env(1100)
   G.NEURO = { enabled = true, decision_serial = 4, transport_session = 1,
     dispatcher = Dispatcher, actions = Actions }
-  for _, field in ipairs({ "last_quality_reject", "last_legality_reject", "last_sell_reject" }) do
-    G.NEURO[field] = "x"
-  end
-  G.NEURO.last_quality_review_serial = 4
-  G.NEURO.last_legality_review_serial = 4
+  G.NEURO.last_sell_reject = "x"
+  G.NEURO.play_confirm = "x"
   G.NEURO.weak_fired_serial = 4
-  G.NEURO.last_confirm_armed = "quality"
   require("core.neuro_lifecycle").clear_pending_confirm()
   local leftover = {}
-  for _, field in ipairs({ "last_quality_reject", "last_quality_review_serial",
-    "last_legality_reject", "last_legality_review_serial", "weak_fired_serial",
-    "last_confirm_armed", "last_sell_reject" }) do
+  for _, field in ipairs({ "play_confirm", "weak_fired_serial", "last_sell_reject" }) do
     if G.NEURO[field] ~= nil then leftover[#leftover + 1] = field end
   end
   check("clear_pending_confirm leaves no confirmation field behind",
@@ -461,16 +450,14 @@ do
   G.NEURO = { enabled = true, decision_serial = 7 }
   local HH = require("handlers.hand_handlers")
   local sel = { G.hand.cards[1], G.hand.cards[2], G.hand.cards[3] }
-  G.NEURO.last_quality_reject = HH.play_signature(sel)
-  G.NEURO.last_quality_review_serial = 7
-  G.NEURO.last_quality_content = HH.play_content(sel)
-  G.NEURO.last_confirm_armed = "quality"
+  G.NEURO.play_confirm = { signature = HH.play_signature(sel), content = HH.play_content(sel),
+    indices = { 1, 2, 3 }, decision_serial = 7, run_generation = 0 }
   check("the full latched hand is announced",
-    #(HH.pending_confirm_indices() or {}) == 3)
+    #((HH.pending() or {}).indices or {}) == 3)
 
   table.remove(G.hand.cards, 3)
   check("losing one latched card announces nothing, not a subset the latch would refuse",
-    HH.pending_confirm_indices() == nil, tostring(HH.pending_confirm_indices()))
+    HH.pending() == nil, tostring(HH.pending()))
 end
 
 do
@@ -478,9 +465,8 @@ do
   G.NEURO = { enabled = true, decision_serial = 7, weak_fired_serial = 7 }
   local HH = require("handlers.hand_handlers")
   local sel = { G.hand.cards[1], G.hand.cards[2] }
-  G.NEURO.last_quality_reject = HH.play_signature(sel)
-  G.NEURO.last_quality_review_serial = 7
-  G.NEURO.last_quality_content = HH.play_content(sel)
+  G.NEURO.play_confirm = { signature = HH.play_signature(sel), content = HH.play_content(sel),
+    indices = { 1, 2 }, decision_serial = 7, run_generation = 0 }
   check("an unchanged resend still commits",
     HH.play_confirm_reject(sel, { 1, 2 }) == nil)
 
@@ -625,11 +611,8 @@ do
   require("tests.helpers").stage_registered(nil, { "play_hand" })
   G.NEURO.force_inflight = false
   FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
-  G.NEURO.last_quality_reject = "1,2"
-  G.NEURO.last_quality_review_serial = 5
-  G.NEURO.last_quality_content = require("handlers.hand_handlers").play_content(
-    { G.hand.cards[1], G.hand.cards[2] })
-  G.NEURO.last_confirm_armed = "quality"
+  G.NEURO.play_confirm = { signature = "1,2", content = require("handlers.hand_handlers").play_content(
+    { G.hand.cards[1], G.hand.cards[2] }), indices = { 1, 2 }, decision_serial = 5, run_generation = 0 }
 
   G.NEURO.llm_paused = true
   Dispatcher.route_message({ command = "action",
@@ -643,7 +626,7 @@ do
   check("a paused action does not advance the decision",
     G.NEURO.decision_serial == 5, tostring(G.NEURO.decision_serial))
   check("the pending confirmation survives the pause",
-    require("handlers.hand_handlers").pending_confirm_indices() ~= nil)
+    require("handlers.hand_handlers").pending() ~= nil)
   local cached = require("core.tx_cache").get("paused-1")
   check("the paused reply is retained so a redelivery replays it",
     cached ~= nil and tostring(cached.message or cached.msg or ""):find("Paused", 1, true) ~= nil,
@@ -711,12 +694,10 @@ end
 do
   selecting_hand_env(2100)
   G.NEURO = { enabled = true, decision_serial = 4, run_generation = 1 }
-  G.NEURO.last_quality_content = "old-quality"
-  G.NEURO.last_legality_content = "old-legality"
-  G.NEURO.last_confirm_armed = "quality"
+  G.NEURO.play_confirm = { signature = "old", content = "old", indices = { 1 } }
   require("core.neuro_lifecycle").reset_run_state()
   local leftover = {}
-  for _, f in ipairs({ "last_quality_content", "last_legality_content", "last_confirm_armed" }) do
+  for _, f in ipairs({ "play_confirm" }) do
     if G.NEURO[f] ~= nil then leftover[#leftover + 1] = f end
   end
   check("a new run inherits no confirmation state from the old one",
@@ -809,23 +790,19 @@ do
   selecting_hand_env(2600)
   G.NEURO = { enabled = true, decision_serial = 5, once_serials = {}, state_enter_serial = 1 }
   G.GAME.blind = { chips = 300, debuff = {}, config = { blind = {} } }
-  G.NEURO.last_quality_reject = "1,2"
-  G.NEURO.last_quality_review_serial = 5
-  G.NEURO.last_quality_content = require("handlers.hand_handlers").play_content(
-    { G.hand.cards[1], G.hand.cards[2] })
-  G.NEURO.last_confirm_armed = "quality"
+  G.NEURO.play_confirm = { signature = "1,2", content = require("handlers.hand_handlers").play_content(
+    { G.hand.cards[1], G.hand.cards[2] }), indices = { 1, 2 }, decision_serial = 5, run_generation = 0 }
 
-  local pending = require("handlers.hand_handlers").pending_confirm_indices()
+  local pending = require("handlers.hand_handlers").pending()
   check("the confirmation the sentence describes is actually open",
-    type(pending) == "table" and table.concat(pending, ",") == "1,2", tostring(pending))
+    type(pending) == "table" and table.concat(pending.indices, ",") == "1,2", tostring(pending))
 
   local q = (require("force.force_selecting_hand").build() or {}).query or ""
-  local GOLDEN = "A play_hand confirmation is open for indices [1,2]: sending play_hand with"
-    .. " exactly those indices commits it; any other selection gets its own confirmation first. "
+  local GOLDEN = "A play_hand confirmation is open for indices [1,2];"
+    .. " any other selection gets its own confirmation first. "
   check("the force states the open confirmation verbatim", q:find(GOLDEN, 1, true) ~= nil, q)
 
-  G.NEURO.last_quality_reject = nil
-  G.NEURO.last_quality_content = nil
+  G.NEURO.play_confirm = nil
   local q2 = (require("force.force_selecting_hand").build() or {}).query or ""
   check("the force really was rebuilt after the latch was cleared",
     q2:find("State: SELECTING_HAND.", 1, true) ~= nil, q2)

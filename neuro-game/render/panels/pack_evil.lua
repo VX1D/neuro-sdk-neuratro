@@ -32,8 +32,9 @@ function M.frame(h, g)
     math.floor(w * 0.28), math.floor(g.title_h * 0.42))
   set_col(h.GOLD, 0.08 * a)
   lg.rectangle("fill", x + cn(4), y + 1, w - cn(8), 1)
+  local eh = g.h - g.title_h - cn(4)
   Prims.embers(x + math.floor(w * 0.09), y + g.title_h, math.floor(w * 0.82),
-    g.h - g.title_h - cn(4), cn(1), h.now, 0.55 * a, 4)
+    eh, cn(1), h.now, 0.55 * a, 4, math.floor(eh / 8 + 0.5) * 8)
   if g.flare < 1 then
     Prims.ember_bloom(g.cx, y + g.title_h, cn(24), cn(1), g.flare, h.GOLD, a)
   end
@@ -177,8 +178,9 @@ end
 
 function M.exit(h, g, x01)
   local cn = h.cn
+  local eh = g.h - g.title_h - cn(4)
   Prims.embers(g.x + math.floor(g.w * 0.09), g.y + g.title_h, math.floor(g.w * 0.82),
-    g.h - g.title_h - cn(4), cn(1), h.now, 0.7 * (1 - x01) * g.a, 6)
+    eh, cn(1), h.now, 0.7 * (1 - x01) * g.a, 6, math.floor(eh / 8 + 0.5) * 8)
 end
 
 return M

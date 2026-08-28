@@ -63,12 +63,11 @@ do
   local err1_message = ActionResult.normalize(err1).message
   check("rejection explains the zero-score", err1_message:find("debuffed") ~= nil and err1_message:find("base hand value") ~= nil, err1_message)
   check("legality latch recorded (keyed on card identity, not indices)",
-    G.NEURO.last_legality_reject == (d1.sort_id .. "," .. d2.sort_id), tostring(G.NEURO.last_legality_reject))
-  check("A3b quality latch untouched by a legality verdict", G.NEURO.last_quality_reject == nil, tostring(G.NEURO.last_quality_reject))
+    (G.NEURO.play_confirm and G.NEURO.play_confirm.signature) == (d1.sort_id .. "," .. d2.sort_id), tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 
   local res2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("identical repeat is honored (returns executor closure)", type(res2) == "function")
-  check("latch cleared after confirmed repeat", G.NEURO.last_legality_reject == nil, tostring(G.NEURO.last_legality_reject))
+  check("latch cleared after confirmed repeat", G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 end
 
 do
@@ -76,7 +75,7 @@ do
   local hand = hand8(d1, d2)
   setup(hand, { d1, d2 })
   local r1 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
-  check("first all-debuffed play rejected (latch armed)", r1 == nil and G.NEURO.last_legality_reject ~= nil)
+  check("first all-debuffed play rejected (latch armed)", r1 == nil and G.NEURO.play_confirm ~= nil)
 
   local e1, e2 = card("2", "Hearts", true), card("3", "Diamonds", true)
   G.hand.cards[7], G.hand.cards[8] = e1, e2
@@ -95,7 +94,7 @@ do
   local res, err = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("partial-debuff play still receives the standard review",
     res == nil and ActionResult.is_error(err))
-  check("review does not arm the legality latch", G.NEURO.last_legality_reject == nil)
+  check("the review arms the confirmation latch", G.NEURO.play_confirm ~= nil)
   local committed = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("reviewed partial-debuff play commits on resend", type(committed) == "function")
 end
@@ -124,7 +123,7 @@ do
   check("intervening clean play receives review", rc == nil and ActionResult.is_error(ec))
   local committed = HandHandlers.handle_play_hand({ indices = { 1, 2 } })
   check("reviewed clean play commits", type(committed) == "function")
-  check("committed clean play clears the legality latch", G.NEURO.last_legality_reject == nil)
+  check("committed clean play clears the legality latch", G.NEURO.play_confirm == nil)
 
   G.FUNCS.get_poker_hand_info = phi_for({ d1, d2 })
   local r2, e2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
@@ -143,17 +142,17 @@ do
     local m1 = ActionResult.normalize(e1).message
     check("verdict is engine-attributed (opens with the facts.boss.legality Selection [ix] = ... line, not just any text mentioning 'Selection') and states the zeroed consequence",
       m1:match("^Selection %[") ~= nil and m1:find("scores 0", 1, true) ~= nil
-        and m1:find("Resend the same indices to commit this play", 1, true) ~= nil, m1)
+        and m1:find("Answer confirm_play with", 1, true) ~= nil, m1)
     check("E2b verdict names no alternative action",
       m1:find("Choose one action now", 1, true) == nil and m1:find("Discard toward one first", 1, true) == nil, m1)
     check("E2c verdict carries the boss-verdict class marker",
       ActionResult.normalize(e1).boss_verdict == true, tostring(ActionResult.normalize(e1).boss_verdict))
   end
-  check("legality latch recorded", G.NEURO.last_legality_reject == (a.sort_id .. "," .. b.sort_id), tostring(G.NEURO.last_legality_reject))
+  check("legality latch recorded", (G.NEURO.play_confirm and G.NEURO.play_confirm.signature) == (a.sort_id .. "," .. b.sort_id), tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 
   local r2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("identical repeat honored (returns executor closure)", type(r2) == "function")
-  check("latch cleared after confirmed repeat", G.NEURO.last_legality_reject == nil)
+  check("latch cleared after confirmed repeat", G.NEURO.play_confirm == nil)
 end
 
 do
@@ -167,8 +166,7 @@ do
         .. "This is a bare High Card -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 1 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play." },
     { args = { { 1, 2, 3, 4, 5 }, "Flush", 2, 50, 6, 1, 2 },
       text = "Selection [1,2,3,4,5] = Flush (lvl 2, 50 chips x 6 mult).\n"
-        .. "Playing spends 1 of 1 hands; discarding spends 1 of 2 discards.\n"
-        .. "Resend the same indices to play." },
+        .. "Playing spends 1 of 1 hands; discarding spends 1 of 2 discards." },
     { args = { { 7, 8 }, "Pair", nil, nil, nil, 4, 3 },
       text = "Selection [7,8] = Pair.\n"
         .. "This is a bare Pair -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 3 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play." },
@@ -192,18 +190,19 @@ do
   check("play with discards left pauses once", r1 == nil and ActionResult.is_error(e1), tostring(e1))
   local msg = ActionResult.normalize(e1).message
   local expected = "Selection [7,8] = Pair (lvl 8, 80 chips x 9 mult).\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 3 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play."
-  check("handler message is exactly weak_pause_text (no steering, mandate phrasing)", msg == expected, msg)
-  check("quality latch armed, legality latch untouched",
-    G.NEURO.last_quality_reject == (a.sort_id .. "," .. b.sort_id) and G.NEURO.last_legality_reject == nil,
-    tostring(G.NEURO.last_quality_reject))
+    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 3 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play.\n"
+    .. "Committing Pair -- 4 hand(s) and 3 discard(s) left.\n"
+    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
+  check("handler message composes the weak pause with the general confirm", msg == expected, msg)
+  check("the confirmation latch is armed on the paused selection",
+    (G.NEURO.play_confirm and G.NEURO.play_confirm.signature) == (a.sort_id .. "," .. b.sort_id),
+    tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
   check("weak firing recorded for this decision point",
     tonumber(G.NEURO.weak_fired_serial) == 0, tostring(G.NEURO.weak_fired_serial))
 
   local r2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("resending the same indices plays them", type(r2) == "function")
-  check("latches cleared after the committed play",
-    G.NEURO.last_quality_reject == nil and G.NEURO.last_legality_reject == nil)
+  check("the latch is cleared after the committed play", G.NEURO.play_confirm == nil)
 end
 
 do
@@ -294,11 +293,13 @@ do
 
   local r1, e1 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("boss verdict fires first", r1 == nil and ActionResult.normalize(e1).boss_verdict == true, tostring(e1))
-  check("weak guard not yet fired", G.NEURO.weak_fired_serial == nil)
+  check("the composed verdict also spends the weak guard", G.NEURO.weak_fired_serial ~= nil)
 
+  local spent_before = G.NEURO.weak_fired_serial
   local r2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("resend after the boss verdict commits without another gate", type(r2) == "function")
-  check("boss-verdict resend does not fire the weak guard", G.NEURO.weak_fired_serial == nil)
+  check("the resend does not re-fire the weak guard",
+    G.NEURO.weak_fired_serial == spent_before, tostring(G.NEURO.weak_fired_serial))
 end
 
 do
@@ -334,11 +335,11 @@ do
   local cp_msg = ActionResult.normalize(e1).message
   check("CP1 cold-check rejects a clean hand on first attempt",
     r1 == nil and ActionResult.is_error(e1)
-      and cp_msg:find("Send the same indices again to commit this play", 1, true) ~= nil, tostring(e1))
+      and cp_msg:find("Answer confirm_play with", 1, true) ~= nil, tostring(e1))
   check("CP1b confirm names the committed hand and a resource fact (agnostic)",
     cp_msg:find("Committing Flush", 1, true) ~= nil and cp_msg:find("discard(s) left", 1, true) ~= nil, cp_msg)
   check("CP1c confirm text does not invite re-review, just resend-to-commit",
-    cp_msg:find("Send the same indices again to commit this play", 1, true) ~= nil
+    cp_msg:find("Answer confirm_play with", 1, true) ~= nil
       and cp_msg:find("Review this choice", 1, true) == nil
       and cp_msg:find("commits without another", 1, true) == nil, cp_msg)
   local r2, e2 = HandHandlers.handle_play_hand({ indices = { 1, 2, 3 } })
@@ -364,10 +365,10 @@ do
     return text, {}, {}, cards
   end
   local r5, e5 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
-  check("CP5 weak pause outranks the general confirm on the first submission",
+  check("CP5 the weak pause composes with the general confirm on the first submission",
     r5 == nil and ActionResult.is_error(e5)
       and ActionResult.normalize(e5).message:find("one of the three lowest-ranking hand types", 1, true) ~= nil
-      and ActionResult.normalize(e5).message:find("Committing", 1, true) == nil, tostring(e5))
+      and ActionResult.normalize(e5).message:find("Committing", 1, true) ~= nil, tostring(e5))
   local r5b = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("CP5b one resend answers the whole quality class -- no second confirm bounce", type(r5b) == "function")
 
@@ -400,8 +401,8 @@ do
       and ActionResult.normalize(e7).message:find("every scoring card in this selection is +DB", 1, true) ~= nil, tostring(e7))
   local r8 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("CP8 boss-verdict resend commits without another confirmation", type(r8) == "function")
-  check("CP9 committed boss resend clears both latches",
-    G.NEURO.last_legality_reject == nil and G.NEURO.last_quality_reject == nil)
+  check("CP9 committed boss resend clears the confirmation latch",
+    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
 
 end
 

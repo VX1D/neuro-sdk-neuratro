@@ -48,11 +48,12 @@ do
   check("the pause is a confirmation, not a failure",
     norm.reason_code == "CONFIRMATION_REQUIRED", tostring(norm.reason_code))
   local expected = "Selection [7,8] = Pair (lvl 5, 30 chips x 3 mult).\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Send this same selection again to commit it, or send a different final selection. It commits if it passes the debuff and blind safety guards; there is no second weak/general confirmation."
+    .. "This is a bare Pair -- one of the three lowest-ranking hand types.\n"
+    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
   check("the message is exactly the zero-discard weak pause text", norm.message == expected, norm.message)
-  check("the weak layer fired and armed the quality latch",
-    G.NEURO.last_quality_reject ~= nil and G.NEURO.last_legality_reject == nil
-      and tonumber(G.NEURO.weak_fired_serial) == 0, tostring(G.NEURO.last_quality_reject))
+  check("the weak layer fired and armed the confirm slot",
+    G.NEURO.play_confirm ~= nil
+      and tonumber(G.NEURO.weak_fired_serial) == 0, tostring(G.NEURO.play_confirm))
 
   local res2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("resending the same selection commits it", type(res2) == "function", type(res2))
@@ -63,7 +64,8 @@ do
   setup(hand, phi("Pair", {}), { hands = 1, discards = 0 })
   local _, err = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   local expected = "Selection [7,8] = Pair.\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Send this same selection again to commit it, or send a different final selection. It commits if it passes the debuff and blind safety guards; there is no second weak/general confirmation."
+    .. "This is a bare Pair -- one of the three lowest-ranking hand types.\n"
+    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
   check("the pause carries the engine verdict with no hand-level entry available",
     ActionResult.normalize(err).message == expected, ActionResult.normalize(err).message)
 end
@@ -74,8 +76,7 @@ do
   local res = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
   check("a non-weak hand still commits on the first send", type(res) == "function", type(res))
   check("no latch armed for the non-weak commit",
-    G.NEURO.last_quality_reject == nil and G.NEURO.last_legality_reject == nil,
-    tostring(G.NEURO.last_quality_reject))
+    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
 end
 
 do
@@ -95,8 +96,7 @@ do
   local msg = ActionResult.normalize(err).message
   check("with a hand in reserve the general confirmation still owns the pause",
     res == nil and msg:find("Committing Pair", 1, true) ~= nil
-      and msg:find("Send the same indices again", 1, true) ~= nil
-      and msg:find("Send this same selection again", 1, true) == nil, msg)
+      and msg:find("Answer confirm_play with", 1, true) ~= nil, msg)
   check("Z10b and it names the weakness instead of committing a bare hand in silence",
     msg:find("lowest%-ranking") ~= nil and msg:find("no discards left", 1, true) ~= nil, msg)
 end

@@ -154,7 +154,8 @@ gfx = setmetatable({
 
   newImage = function() return IMG end,
   newQuad = function(x, y, w, h) return { x = x or 0, y = y or 0, w = w or 71, h = h or 95,
-    getViewport = function(self) return self.x, self.y, self.w, self.h end } end,
+    getViewport = function(self) return self.x, self.y, self.w, self.h end,
+    setViewport = function(self, vx, vy, vw, vh) self.x, self.y, self.w, self.h = vx, vy, vw, vh end } end,
   newMesh = new_mesh,
   newText = new_text,
   newCanvas = function(w, h)
@@ -200,6 +201,7 @@ gfx = setmetatable({
     end
   end,
   origin = function() xf.tx, xf.ty, xf.sx, xf.sy = 0, 0, 1, 1 end,
+  transformPoint = function(x, y) return mx(x), my(y) end,
   translate = function(dx, dy)
     xf.tx = xf.tx + (tonumber(dx) or 0) * xf.sx
     xf.ty = xf.ty + (tonumber(dy) or 0) * xf.sy
@@ -323,11 +325,17 @@ gfx = setmetatable({
       return
     end
     if type(img) == "table" and img.__raster_canvas then
-      local dx, dy = tonumber(quad) or 0, tonumber(x) or 0
-      local dsx = tonumber(r) or 1
-      local dsy = tonumber(sx) or dsx
+      local qx, qy, qw, qh = 0, 0, img.w, img.h
+      local dx, dy, dsx, dsy = quad, x, r, sx
+      if type(quad) == "table" and quad.w then
+        qx, qy, qw, qh = quad.x or 0, quad.y or 0, quad.w, quad.h
+        dx, dy, dsx, dsy = x, y, r, sx
+      end
+      dx, dy = tonumber(dx) or 0, tonumber(dy) or 0
+      dsx = tonumber(dsx) or 1
+      dsy = tonumber(dsy) or dsx
       emit(string.format("I %s %s %s %s %s %s %s", c(), n2(mx(dx)), n2(my(dy)),
-        n2(img.w * dsx * xf.sx), n2(img.h * dsy * xf.sy), n2(0), n2(0)))
+        n2(qw * dsx * xf.sx), n2(qh * dsy * xf.sy), n2(qx), n2(qy)))
       return
     end
     if type(img) == "table" and img.__raster_mesh then

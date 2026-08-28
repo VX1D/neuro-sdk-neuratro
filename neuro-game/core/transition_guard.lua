@@ -3,7 +3,10 @@ local Utils = require("util.utils")
 local gate_now = Utils.gate_now
 
 local STOP_USE_GATED = { use_card = true, use_directional_card = true, skip_booster = true }
-local LOCK = { toggle_shop = "toggle_shop", reroll_shop = "shop_reroll", skip_blind = "skip_blind" }
+-- select_blind reuses skip_blind's lock as a heuristic delay, giving a skipped tag's reward time
+-- to resolve on G.E_MANAGER.
+local LOCK = { toggle_shop = "toggle_shop", reroll_shop = "shop_reroll", skip_blind = "skip_blind",
+  select_blind = "skip_blind" }
 local LATCH = { cash_out = 1.0, select_blind = 0.8, reroll_boss = 0.5, skip_booster = 0.8 }
 
 local last = {}

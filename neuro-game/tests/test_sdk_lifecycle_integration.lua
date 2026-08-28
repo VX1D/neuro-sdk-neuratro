@@ -303,8 +303,13 @@ do
   G.NEURO = force_bridge({
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 5,
-    last_quality_reject = "1,2", last_quality_review_serial = 5, weak_fired_serial = 5,
+    weak_fired_serial = 5,
   })
+  G.NEURO.play_confirm = {
+    signature = "1,2",
+    content = require("handlers.hand_handlers").play_content({ G.hand.cards[1], G.hand.cards[2] }),
+    indices = { 1, 2 }, decision_serial = 5, run_generation = 0,
+  }
   require("core.force_state").arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
   require("core.tx_cache").reset()
   local played = false

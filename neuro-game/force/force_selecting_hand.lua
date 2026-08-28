@@ -45,31 +45,27 @@ local function build()
   local confirming = false
   local pending_confirm = ""
   do
-    local ok_pc, pending = pcall(require("handlers.hand_handlers").pending_confirm_indices)
-    if ok_pc and type(pending) == "table" and #pending > 0 then
-      local ok_ev, Evidence = pcall(require, "core.confirmation_evidence")
-      local verdict, record
-      if ok_ev and Evidence then verdict, record = Evidence.render() end
-      if verdict then
-        confirming = true
-        pending_confirm = verdict .. " "
+    local ok_pc, pend = pcall(require("handlers.hand_handlers").pending)
+    if ok_pc and pend then
+      confirming = true
+      if pend.rendered_verdict then
+        local mismatch = ""
         local p = G and G.NEURO and G.NEURO.plan
         local focus = p and p.hand_focus
         local ok_focus, is_current = pcall(function()
           return require("core.plan_gate").hand_focus_is_current(p)
         end)
         if ok_focus and is_current and type(focus) == "table"
-            and type(record) == "table" and record.hand_type
-            and focus.primary ~= record.hand_type then
-          pending_confirm = pending_confirm .. string.format(
+            and pend.hand_type and focus.primary ~= pend.hand_type then
+          mismatch = string.format(
             "Your declared primary hand is %s; the pending confirmed selection is %s. ",
-            tostring(focus.primary), tostring(record.hand_type))
+            tostring(focus.primary), tostring(pend.hand_type))
         end
+        pending_confirm = mismatch .. pend.rendered_verdict .. " "
       else
-        confirming = true
         pending_confirm = string.format(
-          "A play_hand confirmation is open for indices [%s]: sending play_hand with exactly those indices commits it; any other selection gets its own confirmation first. ",
-          table.concat(pending, ","))
+          "A play_hand confirmation is open for indices [%s]; any other selection gets its own confirmation first. ",
+          table.concat(pend.indices, ","))
       end
     end
   end
@@ -247,7 +243,7 @@ local function build()
     .. pending_confirm
     .. pending_guarded
     .. ForceHelpers.repeat_pressure_note()
-    .. teaching(move_cue)
+    .. move_cue
     .. structure
     .. teaching(banner_lead)
     .. teaching(discard_lead)
@@ -295,6 +291,11 @@ local function build()
     commit_opts[#commit_opts + 1] = ActionRegistry.prompt("discard_hand")
       .. " (uses a discard)"
       .. boss_plan_example
+  end
+  if confirming and Actions.is_action_valid("confirm_play") then
+    hand_actions[#hand_actions + 1] = "confirm_play"
+    commit_opts[#commit_opts + 1] = ActionRegistry.prompt("confirm_play")
+      .. " (yes commits the confirmed selection above, no discards it)"
   end
   if Actions.is_action_valid("use_card") then
     hand_actions[#hand_actions + 1] = "use_card"

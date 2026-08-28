@@ -209,11 +209,12 @@ local function collapse_deadline(TL)
   return shrink_at, shrink_at + TL.SHRINK + TL.HOLD + TL.EXIT
 end
 
-local function hero_cap_for(sn2, count, hero_scale, hero_gap, env_pad)
+local function hero_cap_for(sn2, count, hero_scale, hero_gap, env_pad, dims)
   if count < 2 then return hero_scale end
   local wmax = 1
   for i = 1, count do
-    local ww = card_dimensions(S.pack_winners[i] and S.pack_winners[i].card, sn2.sp_h)
+    local d = dims and dims[i]
+    local ww = d and d.w or card_dimensions(S.pack_winners[i] and S.pack_winners[i].card, sn2.sp_h)
     if ww > wmax then wmax = ww end
   end
   return math.max(1, math.min(hero_scale,
@@ -548,16 +549,23 @@ local function draw_pack_panel(ctx)
 
     local env_x, env_w, env_h
     local hero_hsc
+    local hero_dims
     if collapsing and snap then
       local n_win = math.min(math.max(#S.pack_winners, 1), snap.n_win)
-      local hsc = hero_cap_for(snap, n_win, HERO_SCALE, HERO_GAP, env_pad)
+      local dims = {}
+      for i = 1, n_win do
+        local ww, wh, wsx, wsy = card_dimensions(S.pack_winners[i] and S.pack_winners[i].card, snap.sp_h)
+        dims[i] = { w = ww, h = wh, sx = wsx, sy = wsy }
+      end
+      hero_dims = dims
+      local hsc = hero_cap_for(snap, n_win, HERO_SCALE, HERO_GAP, env_pad, dims)
       hero_hsc = hsc
       local hero_h_max, tot_w = 0, 0
       for i = 1, n_win do
-        local ww, wh = card_dimensions(S.pack_winners[i] and S.pack_winners[i].card, snap.sp_h)
-        local hh = wh * hsc
+        local d = dims[i]
+        local hh = d.h * hsc
         if hh > hero_h_max then hero_h_max = hh end
-        tot_w = tot_w + ww * hsc
+        tot_w = tot_w + d.w * hsc
       end
       hero_h_max = math.floor(hero_h_max)
       local hero_env_w = math.floor(tot_w + (n_win - 1) * HERO_GAP) + 2 * (pk_pad + env_pad)
@@ -813,29 +821,38 @@ local function draw_pack_panel(ctx)
       end
 
       local n = math.min(#S.pack_winners, sn2.n_win)
-      local hsc_n = hero_hsc or hero_cap_for(sn2, n, HERO_SCALE, HERO_GAP, env_pad)
+      local hsc_n = hero_hsc or hero_cap_for(sn2, n, HERO_SCALE, HERO_GAP, env_pad, hero_dims)
       local ccx = sn2.center_cx or center_cx
+      local split_sp, split_hsc0
+      if sn2.split_at and sn2.prev_n and sn2.prev_n < n then
+        split_sp = Motion.anim01(now - sn2.split_at, REFREEZE_D)
+        if split_sp < 1 then
+          split_hsc0 = hero_cap_for(sn2, sn2.prev_n, HERO_SCALE, HERO_GAP, env_pad, hero_dims)
+        end
+      end
       for i, w in ipairs(S.pack_winners) do
         if i > n then break end
         if w.card and not w.hidden then
           local t0 = w.t0 or S.pack_collapse_t
           local aw = now - t0 - (w._anoint or TL.ANOINT)
           if aw >= 0 or col_fold01 <= 0 then
-            local w_lw, w_lh, wsx, wsy = card_dimensions(w.card, sn2.sp_h)
+            local w_lw, w_lh, wsx, wsy
+            local dcache = hero_dims and hero_dims[i]
+            if dcache then
+              w_lw, w_lh, wsx, wsy = dcache.w, dcache.h, dcache.sx, dcache.sy
+            else
+              w_lw, w_lh, wsx, wsy = card_dimensions(w.card, sn2.sp_h)
+            end
             local rank = w._rank or w.slot or i
             local ocx = sn2.sx0 + (rank - 1) * (sw2 + sn2.slot_gap) + math.floor(sw2 / 2)
             local w_ef, w_dy = entry_rise(now, cn, ENTRY, w._entry_t0)
             local w_sp_cy = slot_y + w_dy + sn2.sp_dy + math.floor(w_lh / 2)
             local hero_sc = hsc_n
             local tx = hero_tx(ccx, n, i, w_lw, hero_sc, HERO_GAP)
-            if sn2.split_at and sn2.prev_n and sn2.prev_n < n and i <= sn2.prev_n then
-              local sp = Motion.anim01(now - sn2.split_at, REFREEZE_D)
-              if sp < 1 then
-                local hsc0 = hero_cap_for(sn2, sn2.prev_n, HERO_SCALE, HERO_GAP, env_pad)
-                local tx0 = hero_tx(ccx, sn2.prev_n, i, w_lw, hsc0, HERO_GAP)
-                tx = tx0 + (tx - tx0) * sp
-                hero_sc = hsc0 + (hero_sc - hsc0) * sp
-              end
+            if split_hsc0 and i <= sn2.prev_n then
+              local tx0 = hero_tx(ccx, sn2.prev_n, i, w_lw, split_hsc0, HERO_GAP)
+              tx = tx0 + (tx - tx0) * split_sp
+              hero_sc = split_hsc0 + (hero_sc - split_hsc0) * split_sp
             end
             local hero_cy = slot_y + HERO_HEAD + math.floor(w_lh * hero_sc / 2)
             local g01 = clamp01(aw / TL.GLIDE)

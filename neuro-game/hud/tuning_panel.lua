@@ -1361,6 +1361,7 @@ local DESCS = {
   NEURO_SELFTEST_FILTER = "Only run self-test cases matching this text",
   NEURO_SMALL_REGRESSION = "Run the fixed LLM task battery at boot (small regression check)",
   NEURO_CRASH_GUARDS = "Drop throwing deferred events + guard nil-deref UI callbacks (prevents fast-play hardlocks)",
+  NEURO_CONFIRM_REASON_ALWAYS = "Require a reason on every confirm_play yes, not just when a stronger ready hand is being passed over; turn off for the lighter-friction yes/no-only behavior",
 }
 
 

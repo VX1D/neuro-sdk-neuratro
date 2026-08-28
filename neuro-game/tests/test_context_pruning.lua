@@ -36,7 +36,7 @@ local PLANT = { name = "The Plant", key = "bl_plant", disabled = false }
 
 local s_hand = world("SELECTING_HAND", PLANT)
 check("the joker row a sell price would ride on is rendered",
-  s_hand:find("1. Joker \226\128\148 +4 Mult", 1, true) ~= nil, s_hand)
+  s_hand:find("1. Joker -- +4 Mult", 1, true) ~= nil, s_hand)
 check("no sell value on joker rows while the round blocks selling",
   s_hand:find("(sell ", 1, true) == nil, s_hand)
 
@@ -50,7 +50,7 @@ check("the sell value survives where selling is offered",
 
 local s_plain = world("SHOP", nil)
 check("the unstickered joker row is rendered",
-  s_plain:find("1. Joker \226\128\148 +4 Mult", 1, true) ~= nil, s_plain)
+  s_plain:find("1. Joker -- +4 Mult", 1, true) ~= nil, s_plain)
 check("a joker with no stickers carries no empty flag marker",
   s_plain:find("[-]", 1, true) == nil, s_plain)
 
@@ -192,7 +192,7 @@ do
   check("a card without sort_id does not receive a fabricated '(bought $0)' annotation",
     ctx:find("bought $0", 1, true) == nil, ctx)
   check("a card without sort_id still shows its sell value",
-    ctx:find("No Sort Id — +4 Mult (sell $2)", 1, true) ~= nil, ctx)
+    ctx:find("No Sort Id -- +4 Mult (sell $2)", 1, true) ~= nil, ctx)
   check("a genuinely purchased joker still shows its purchase price",
     ctx:find("(bought $5, sell $3)", 1, true) ~= nil, ctx)
 end
@@ -200,7 +200,7 @@ end
 do
   local OFFERS = { "play_hand", "discard_hand", "buy_from_shop", "sell_card",
     "set_joker_order", "set_joker_intents", "help", "cash_out" }
-  local ROW = "1. Joker \226\128\148 +4 Mult"
+  local ROW = "1. Joker -- +4 Mult"
   local ContextCompact = require("context.context_compact")
 
   local function ctx_for(state, actions, jokers)

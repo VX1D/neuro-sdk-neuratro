@@ -47,6 +47,7 @@ local PersonaPalette = require("render.persona_palette")
 local GfxGuard = require("render.gfx_guard")
 local HUD = require("render.hud_overlay")
 local Orchestrator = require("core.orchestrator")
+local Metrics = require("util.metrics")
 local trace = require("core.trace")
 local SelfTest = require("core.selftest")
 local DebugStats, StagingDebug, TuningPanel
@@ -158,8 +159,20 @@ local _draw_error_last = nil
 local _draw_err_seen = {}
 local drain_gfx_leak = GfxGuard.drain
 G.NEURO.drain_gfx_leak = drain_gfx_leak
+local _draw_metric_keys = {}
+local function _draw_metric_key(label)
+  local key = _draw_metric_keys[label]
+  if not key then
+    key = "draw." .. tostring(label)
+    _draw_metric_keys[label] = key
+  end
+  return key
+end
 local function guarded_draw(label, fn)
+  local key = _draw_metric_key(label)
+  Metrics.time_begin(key)
   local ok, err = xpcall(fn, debug.traceback)
+  Metrics.time_end(key)
   if not ok then
     drain_gfx_leak()
     local msg = tostring(err)
@@ -182,7 +195,9 @@ love.draw = function()
   trace("TRACE: palette block done, calling original_love_draw")
 
   if original_love_draw then
+    Metrics.time_begin("draw.base game draw")
     local base_ok, base_err = xpcall(original_love_draw, debug.traceback)
+    Metrics.time_end("draw.base game draw")
     if not base_ok then
       drain_gfx_leak()
       local e = tostring(base_err)

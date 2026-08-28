@@ -230,11 +230,10 @@ local function _step_autotest()
 end
 
 local function _step_game_update(dt, original_love_update)
-  local update_success, update_err = pcall(function()
-    if original_love_update then
-      original_love_update(dt)
-    end
-  end)
+  local update_success, update_err = true, nil
+  if original_love_update then
+    update_success, update_err = pcall(original_love_update, dt)
+  end
 
   if not update_success then
     local now = Utils.gate_now("game_error_log_cooldown")
@@ -577,10 +576,13 @@ local function _step_transport_fault()
 end
 
 local function _step_force_arming(state_name, now)
+  -- Superseding runs above the staged-delivery gate: a state that moved underneath a buffered
+  -- receipt must still tear the stale window down.
   if force_state_moved(state_name) then
     force_supersede()
     register_valid_actions(state_name)
   end
+  if ConfirmationEvidence.has_staged_delivery() then return end
   if ForceState.reask_due() then
     ForceState.reask()
   end
@@ -698,49 +700,72 @@ local function _step_force_arming(state_name, now)
   end
 end
 
-local function _step_neuro_frame(dt)
-  local errors = {}
-  local function guarded(label, fn)
-    local ok, err = pcall(fn)
-    if not ok then errors[#errors + 1] = tostring(label) .. ": " .. Utils.safe_tostring(err) end
-    return ok
+local _neuro_frame_errors = {}
+local function make_guard(prefix)
+  local keys = {}
+  return function(errors, label, fn, ...)
+    local key = keys[label]
+    if not key then
+      key = prefix .. tostring(label)
+      keys[label] = key
+    end
+    Metrics.time_begin(key)
+    local ok, value = pcall(fn, ...)
+    Metrics.time_end(key)
+    if not ok then
+      errors[#errors + 1] = tostring(label) .. ": " .. Utils.safe_tostring(value)
+    end
+    return ok, value
   end
+end
 
-  guarded("bridge update", function() G.NEURO:update(dt) end)
-  guarded("context delivery", ContextDelivery.step)
-  guarded("confirmation evidence delivery", ConfirmationEvidence.step_delivery)
-  guarded("force delivery", step_force_delivery)
-  guarded("staging", function() Staging.update(dt) end)
-  guarded("receipts", function() NeuroDispatcher.update_receipts() end)
-  guarded("side tasks", function() _step_side_tasks(dt) end)
+local _neuro_guarded = make_guard("frame.neuro.")
+
+local function clear_list(t)
+  for i = #t, 1, -1 do t[i] = nil end
+end
+
+local function _step_neuro_frame(dt)
+  local errors = _neuro_frame_errors
+  clear_list(errors)
+
+  _neuro_guarded(errors, "bridge update", G.NEURO.update, G.NEURO, dt)
+  _neuro_guarded(errors, "context delivery", ContextDelivery.step)
+  _neuro_guarded(errors, "confirmation evidence delivery", ConfirmationEvidence.step_delivery)
+  _neuro_guarded(errors, "force delivery", step_force_delivery)
+  _neuro_guarded(errors, "staging", Staging.update, dt)
+  _neuro_guarded(errors, "receipts", NeuroDispatcher.update_receipts)
+  _neuro_guarded(errors, "side tasks", _step_side_tasks, dt)
 
   if G.NEURO.dev_preview_active then
     if G.FUNCS and NeuroState.get_state_name then
-      guarded("showcase", function() _step_showcase_anim(NeuroState.get_state_name(), neuro_now()) end)
+      _neuro_guarded(errors, "showcase", function() _step_showcase_anim(NeuroState.get_state_name(), neuro_now()) end)
     end
   else
-    guarded("unsent force", _step_unsent_window_guard)
-    guarded("transport fault", _step_transport_fault)
-    guarded("force liveness", _step_force_liveness)
-    guarded("force stall", _step_force_stall)
+    _neuro_guarded(errors, "unsent force", _step_unsent_window_guard)
+    _neuro_guarded(errors, "transport fault", _step_transport_fault)
+    _neuro_guarded(errors, "force liveness", _step_force_liveness)
+    _neuro_guarded(errors, "force stall", _step_force_stall)
 
     local state_name
     if G.FUNCS and NeuroState.get_state_name then
-      guarded("state name", function() state_name = NeuroState.get_state_name() end)
+      local ok, sn = _neuro_guarded(errors, "state name", NeuroState.get_state_name)
+      if ok then state_name = sn end
     end
     if state_name then
       local state_changed = state_name ~= G.NEURO.state
       local prev_state = G.NEURO.state
-      guarded("settled hand outcome", function() GameplayJournal.observe_settled(state_name) end)
-      guarded("joker departures", function() _step_joker_departures(state_name) end)
-      guarded("state transition", function() _step_state_transition(state_name, state_changed, prev_state) end)
-      guarded("shop settle", function() _step_shop_entry_settle(state_name) end)
+      _neuro_guarded(errors, "settled hand outcome", GameplayJournal.observe_settled, state_name)
+      _neuro_guarded(errors, "joker departures", _step_joker_departures, state_name)
+      _neuro_guarded(errors, "state transition", _step_state_transition, state_name, state_changed, prev_state)
+      _neuro_guarded(errors, "shop settle", _step_shop_entry_settle, state_name)
 
       local now
-      guarded("neuro clock", function() now = neuro_now() end)
-      if now then guarded("showcase", function() _step_showcase_anim(state_name, now) end) end
-      guarded("force widening", function() _step_force_widened(state_name) end)
-      if now then guarded("force arming", function() _step_force_arming(state_name, now) end) end
+      local ok_now, now_val = _neuro_guarded(errors, "neuro clock", neuro_now)
+      if ok_now then now = now_val end
+      if now then _neuro_guarded(errors, "showcase", _step_showcase_anim, state_name, now) end
+      _neuro_guarded(errors, "force widening", _step_force_widened, state_name)
+      if now then _neuro_guarded(errors, "force arming", _step_force_arming, state_name, now) end
     end
   end
 
@@ -773,25 +798,27 @@ local function _step_clock_rewind()
   return true
 end
 
+local _outer_errors_buf = {}
+local _outer_guard = make_guard("frame.")
+
 function Orchestrator.update(dt, original_love_update)
-  local outer_errors = {}
-  local function outer_guard(label, fn)
-    local ok, value = pcall(fn)
-    if not ok then
-      outer_errors[#outer_errors + 1] = tostring(label) .. ": " .. Utils.safe_tostring(value)
-    end
-    return ok, value
-  end
+  local outer_errors = _outer_errors_buf
+  clear_list(outer_errors)
 
-  outer_guard("area repair", _step_area_nil_guard)
-  outer_guard("clock rewind", _step_clock_rewind)
+  _outer_guard(outer_errors, "area repair", _step_area_nil_guard)
+  _outer_guard(outer_errors, "clock rewind", _step_clock_rewind)
 
-  local autotest_ok, autotest_done = outer_guard("autotest", _step_autotest)
+  local autotest_ok, autotest_done = _outer_guard(outer_errors, "autotest", _step_autotest)
   if autotest_ok and autotest_done then return end
 
-  outer_guard("game update", function() _step_game_update(dt, original_love_update) end)
-  outer_guard("card draw hook", _step_hook_card_draw)
-  outer_guard("bridge init", _step_bridge_init)
+  _outer_guard(outer_errors, "game update", _step_game_update, dt, original_love_update)
+  _outer_guard(outer_errors, "card draw hook", _step_hook_card_draw)
+  _outer_guard(outer_errors, "bridge init", _step_bridge_init)
+
+  -- Must stay above the error consumers below, or a persistent failure here lands in a buffer
+  -- nothing reads before it is cleared.
+  _outer_guard(outer_errors, "debug stats", DebugStats.sample, dt)
+  _outer_guard(outer_errors, "metrics flush", Metrics.flush)
 
   if G and G.NEURO and G.NEURO.enabled and NeuroState then
     local neuro_success, neuro_err = pcall(_step_neuro_frame, dt)
@@ -805,8 +832,6 @@ function Orchestrator.update(dt, original_love_update)
     print("[neuro-game] Warning: update maintenance error: " .. table.concat(outer_errors, "; "))
   end
 
-  outer_guard("debug stats", function() DebugStats.sample(dt) end)
-  outer_guard("metrics flush", function() Metrics.flush() end)
 end
 
 function Orchestrator.reset_run_state()

@@ -66,12 +66,17 @@ end
 
 local badges = { _v = 1 }
 local rarity = { 0.4, 0.6, 0.8 }
-local fx = "+4 Mult"
+local fx, fx_calls = "+4 Mult", 0
 H.modifier_badges = function() return badges end
 H.layout_modifier_badges = function() return { items = {}, rows = 0, height = 0, row_widths = {} } end
 H.draw_modifier_badges = noop
 H.rarity_color = function() return rarity end
-H.joker_fx = function() return fx end
+-- right_panel captures H.joker_fx at require time, so this closure is what gets called for the
+-- rest of the file; a later reassignment would not be seen.
+H.joker_fx = function()
+  fx_calls = fx_calls + 1
+  return fx
+end
 H.card_dimensions = function() return 12, 18 end
 H.draw_card_mini = function() return 12 end
 
@@ -165,5 +170,25 @@ draw_at(0.76)
 check("TTL rebuild does not repeat on the following frame",
   name_calls == 3 and desc_calls == 3 and wrap_calls == 3 and ui_calls == 2,
   string.format("name=%d desc=%d wrap=%d ui=%d", name_calls, desc_calls, wrap_calls, ui_calls))
+
+do
+  card.ability.extra = { mult = 4 }
+
+  draw_at(4.0)
+  local base_name, base_desc, base_wrap, base_fx = name_calls, desc_calls, wrap_calls, fx_calls
+
+  draw_at(4.01)
+  check("table-extra joker re-runs joker_fx every frame",
+    fx_calls == base_fx + 1, fx_calls)
+  check("table-extra joker skips the expensive rebuild when the fx string didn't change",
+    name_calls == base_name and desc_calls == base_desc and wrap_calls == base_wrap,
+    string.format("name=%d desc=%d wrap=%d", name_calls, desc_calls, wrap_calls))
+
+  fx = "+9 Mult"
+  draw_at(4.02)
+  check("table-extra joker DOES rebuild once the fx string actually changes",
+    desc_calls == base_desc + 1 and wrap_calls == base_wrap + 1 and last_desc == "Description Beta",
+    string.format("desc=%d wrap=%d", desc_calls, wrap_calls))
+end
 
 done()

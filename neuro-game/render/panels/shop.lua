@@ -3,6 +3,7 @@ local RectMesh = require("render.rect_mesh")
 local Prims, S, Motion = H.Prims, H.S, H.Motion
 local round, clamp = Prims.round, Prims.clamp
 local set_col, shadow_text = H.set_col, H.shadow_text
+local push_clip, pop_clip = H.push_clip, H.pop_clip
 local tracked_width, caps_label = H.tracked_width, H.caps_label
 local rarity_color = H.rarity_color
 local draw_card_mini = H.draw_card_mini
@@ -261,7 +262,19 @@ local function draw_shop_panel(ctx)
     lp_metrics.small_font, lp_metrics.wrap = lp_small_font, wrapped_lines
     lp_metrics.badge_gap = ln(2)
     lp_metrics.badge_unit = ln(1)
-    lp_metrics.badge_w = math.max(20, lp_content_w - math.ceil(71 * ((lp_card_line_h - ln(4)) / 95)) - ln(8))
+    -- measure_rows sizes row height from this, so it has to settle before that pass, not in draw.
+    local function size_badges(card_line_h)
+      local sprite_h = card_line_h - ln(4)
+      lp_metrics.badge_w = math.max(20, lp_content_w - math.ceil(71 * (sprite_h / 95)) - ln(8))
+      for i = 1, #shop_rows do
+        local r = shop_rows[i]
+        if r.kind == "shopcard" and r.badges and #r.badges > 0 then
+          local cw = card_dimensions(r.card, sprite_h)
+          r.badge_w = math.max(20, lp_content_w - (r.indent or 0) - (cw or 0) - ln(8))
+        end
+      end
+    end
+    size_badges(lp_card_line_h)
     local lp_data_h = ln(8) + measure_rows(shop_rows)
     local lp_title_h = ln(44)
     local lp_total_h = lp_title_h + lp_data_h
@@ -273,7 +286,8 @@ local function draw_shop_panel(ctx)
       lp_avail_h = hud_layout().panel_available_height(shop_anchor, me.shop_offset_y, sh, 0)
     else
       local anchored_full_height = anchor:sub(1, 6) == "middle" or anchor:sub(1, 6) == "bottom"
-      lp_avail_h = anchored_full_height and math.max(1, sh - 16) or math.max(1, sh - lp_y - 10)
+      local lp_y_stable = me.p_y_target_stable or lp_y
+      lp_avail_h = anchored_full_height and math.max(1, sh - 16) or math.max(1, sh - lp_y_stable - 10)
     end
     local lp_pref_h = math.min(lp_avail_h, math.floor(sh * 0.72))
     S.lp_compact = Rows.want_compact(S.lp_compact, lp_total_h, lp_pref_h)
@@ -284,6 +298,7 @@ local function draw_shop_panel(ctx)
       lp_small_line_h = lp_metrics.small_line_h
       lp_card_line_h, lp_sep_h = lp_metrics.card_line_h, lp_metrics.sep_h
       lp_hdr_line_h = lp_metrics.header_line_h
+      size_badges(lp_card_line_h)
       lp_data_h = ln(8) + measure_rows(shop_rows)
       lp_total_h = lp_title_h + lp_data_h
       if lp_total_h > lp_avail_h then
@@ -485,14 +500,16 @@ local function draw_shop_panel(ctx)
     end
     lcy = lcy + l_U + 2
 
-    local lp_clip_y = lp_y + lp_total_h
+    local lp_wrap_y = lp_y + lp_total_h_target
     local lp_col = 1
     local lx = lp_x
     local lp_rows_y0 = lcy
+    local lp_clip = push_clip(lp_x + lp_dx - 2, lp_y,
+      lp_w_total + 4, math.max(0, math.min(lp_y + lp_total_h, sh) - lp_y))
     love.graphics.setFont(lp_font)
     for ri, r in ipairs(shop_rows) do
       local cur_h = _row_hs[ri]
-      if lcy + cur_h > lp_clip_y then
+      if lcy + cur_h > lp_wrap_y then
         if lp_col < lp_cols then
           lp_col = lp_col + 1
           lx = lx + lp_w
@@ -658,10 +675,13 @@ local function draw_shop_panel(ctx)
         end
         shadow_text(lp_txt, name_x, row_cy, name_rc, (afford and 0.98 or 0.72) * row_sa, 0.42 * row_sa, ln(1))
         if r.badges and #r.badges > 0 then
-          local badge_layout = Rows.badge_layout(
-            r.card, r.badges, lp_small_font, math.max(1, row_x2 - name_x), ln(1), 1)
-          draw_modifier_badges(badge_layout, name_x, lcy + lp_card_line_h,
-            (afford and 1 or 0.6) * row_sa, th, pin_mo(mo))
+          local badge_w = r.badge_w or math.max(1, row_x2 - name_x)
+          local ok_badges, badge_layout = pcall(Rows.badge_layout,
+            r.card, r.badges, lp_small_font, badge_w, ln(1), 1)
+          if ok_badges and badge_layout then
+            draw_modifier_badges(badge_layout, name_x, lcy + lp_card_line_h,
+              (afford and 1 or 0.6) * row_sa, th, pin_mo(mo))
+          end
         end
         lcy = lcy + cur_h
       elseif r.kind == "header" then
@@ -737,6 +757,7 @@ local function draw_shop_panel(ctx)
       love.graphics.pop()
     end
     love.graphics.setFont(font)
+    pop_clip(lp_clip)
 
     if lp_pushed then love.graphics.pop() end
     end  -- lp_on_screen; the occupancy below is published either way

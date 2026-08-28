@@ -41,14 +41,8 @@ end
 
 function M.clear_pending_confirm()
   if not Utils.neuro_ready() then return end
-  G.NEURO.last_quality_reject = nil
-  G.NEURO.last_quality_review_serial = nil
-  G.NEURO.last_quality_content = nil
-  G.NEURO.last_legality_reject = nil
-  G.NEURO.last_legality_review_serial = nil
-  G.NEURO.last_legality_content = nil
   G.NEURO.weak_fired_serial = nil
-  G.NEURO.last_confirm_armed = nil
+  G.NEURO.play_confirm = nil
   G.NEURO.pending_confirmation = nil
   G.NEURO.confirmation_delivery = nil
   G.NEURO.last_sell_reject = nil
@@ -100,7 +94,7 @@ LifecycleRegistry.register_fields("run", {
   "joker_intents_ack_identity", "reward_joker_roster",
   "plan", "plan_revision", "joker_intent_revision", "econ_plan_ok", "blind_plan_ok", "blind_plan_scope", "shop_plan_revision_required",
   "economy_epoch", "shop_visit_epoch", "shop_entry_dollars", "shop_entry_pending", "joker_order_ack",
-  "selected_back_key", "pack_exit_pending", "last_legality_reject", "last_legality_review_serial", "last_quality_reject", "last_quality_review_serial", "last_quality_content", "last_legality_content", "last_confirm_armed", "weak_fired_serial", "last_sell_reject", "last_sell_review_serial", "last_voucher_reject", "last_voucher_review_serial", "jokers_sold", "jokers_sold_run", "joker_intents", "joker_observations", "joker_hits", "joker_bought_cost", "last_reward_outcome_key", "rare_joker_announced", "blind_reward_cache", "blind_reward_round",
+  "selected_back_key", "pack_exit_pending", "weak_fired_serial", "play_confirm", "last_sell_reject", "last_sell_review_serial", "last_voucher_reject", "last_voucher_review_serial", "jokers_sold", "jokers_sold_run", "joker_intents", "joker_observations", "joker_hits", "joker_bought_cost", "last_reward_outcome_key", "rare_joker_announced", "blind_reward_cache", "blind_reward_round",
   "state", "state_enter_serial", "decision_serial", "decision_ack_count", "decision_ack_serial",
   "decision_ack_level", "decision_ack_at", "setup_acknowledged",
   "consumed_actions", "consumed_action_owner",
@@ -132,14 +126,35 @@ end, 10)
 LifecycleRegistry.register_hook("run", "showcase", function()
   require("hud.showcase").reset_run_state()
 end, 70)
-local HUD_STATE_KEEP = { new_state = true, invalidate_caches = true }
-LifecycleRegistry.register_hook("run", "hud_state", function()
+-- Loaded assets are filename-keyed with no per-run state, so they survive a run. Retry budgets
+-- and `false` give-up markers must not, or a transient early-boot failure becomes permanent.
+local HUD_STATE_KEEP = {
+  new_state = true, invalidate_caches = true,
+  panel_emote_cache = true,
+  neuro_logo = true,
+}
+function M.reset_hud_state()
   local S = require("hud.state")
   local fresh = S.new_state()
   for k in pairs(S) do
     if not HUD_STATE_KEEP[k] and fresh[k] == nil then S[k] = nil end
   end
-  for k, v in pairs(fresh) do S[k] = v end
+  for k, v in pairs(fresh) do
+    if HUD_STATE_KEEP[k] then
+      if S[k] == nil then S[k] = v end
+    else
+      S[k] = v
+    end
+  end
+  if type(S.panel_emote_cache) == "table" then
+    for name, emote in pairs(S.panel_emote_cache) do
+      if emote == false then S.panel_emote_cache[name] = nil end
+    end
+  end
+end
+
+LifecycleRegistry.register_hook("run", "hud_state", function()
+  M.reset_hud_state()
   local HudShared = require("render.hud_shared")
   if HudShared.carousel_reset then HudShared.carousel_reset() end
 end, 75)
@@ -172,6 +187,7 @@ function M.reset_run_state()
   N._prev_ante         = 0
   N.economy_epoch      = 0
   N.shop_visit_epoch   = 0
+  N.render_dirty_epoch = 0
   N.plan_revision      = 0
   N.joker_intent_revision = 0
   N._reservation_epoch = N.run_generation

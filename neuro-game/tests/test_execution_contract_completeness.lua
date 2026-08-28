@@ -4,9 +4,13 @@ local check, done = require("tests.helpers").harness("execution-contract-complet
 local Actions = require("core.actions")
 local Execution = require("core.action_execution")
 
+local NO_GENERIC_WRAP = { confirm_play = true }
+
 local mutating = {}
 for _, definition in ipairs(Actions.get_static_actions()) do
-  mutating[#mutating + 1] = definition.name
+  if not NO_GENERIC_WRAP[definition.name] then
+    mutating[#mutating + 1] = definition.name
+  end
 end
 table.sort(mutating)
 

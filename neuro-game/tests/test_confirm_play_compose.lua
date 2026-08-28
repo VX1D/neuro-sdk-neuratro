@@ -65,7 +65,7 @@ do -- bypass fires: last hand, no discards, <=1 ready hand (poker_hands empty) -
   setup(hand, phi("Flush", {}, {}), { hands = 1, discards = 0 })
   local res = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
   check("forced_play (1 hand/0 disc/<=1 ready) commits on first send", type(res) == "function", type(res))
-  check("no latch armed when confirm bypassed", G.NEURO.last_quality_reject == nil, tostring(G.NEURO.last_quality_reject))
+  check("no latch armed when confirm bypassed", G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
 end
 
 do -- negative: last hand, no discards, but >=2 ready hands -> NOT forced -> confirm still fires
@@ -74,7 +74,7 @@ do -- negative: last hand, no discards, but >=2 ready hands -> NOT forced -> con
   local res, err = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
   check(">=2 ready hands: confirm fires despite last hand/no discards",
     res == nil and ActionResult.is_error(err), tostring(err))
-  check("latch armed by the confirm", G.NEURO.last_quality_reject ~= nil, tostring(G.NEURO.last_quality_reject))
+  check("latch armed by the confirm", G.NEURO.play_confirm ~= nil, tostring(G.NEURO.play_confirm))
 end
 
 do -- negative: more than one hand left -> never forced -> confirm fires
@@ -92,17 +92,19 @@ do
   check("first play with discards left pauses once", res1 == nil and ActionResult.is_error(err1), tostring(err1))
   local msg = ActionResult.normalize(err1).message
   local expected = "Selection [7,8] = Pair.\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 3 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play."
-  check("message is exactly the weak pause text (layer C wins over layer D)",
-    msg == expected and msg:find("Committing") == nil, msg)
-  check("quality latch armed on the paused selection", G.NEURO.last_quality_reject ~= nil, tostring(G.NEURO.last_quality_reject))
+    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 3 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play.\n"
+    .. "Committing Pair -- 4 hand(s) and 3 discard(s) left.\n"
+    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
+  check("message composes the weak pause with the general confirm (layer C and D both surface)",
+    msg == expected, msg)
+  check("quality latch armed on the paused selection", G.NEURO.play_confirm ~= nil, tostring(G.NEURO.play_confirm))
   local res2, err2 = HandHandlers.handle_play_hand({ indices = { 6, 7 } })
   check("weak spent for this decision point: a different selection meets the general confirm, not a free pass",
     res2 == nil and ActionResult.is_error(err2)
       and ActionResult.normalize(err2).message:find("Committing Pair", 1, true) ~= nil, tostring(err2))
   local res3 = HandHandlers.handle_play_hand({ indices = { 6, 7 } })
   check("resending that exact selection now commits", type(res3) == "function", type(res3))
-  check("latch cleared after confirmed play", G.NEURO.last_quality_reject == nil, tostring(G.NEURO.last_quality_reject))
+  check("latch cleared after confirmed play", G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
 end
 
 done()

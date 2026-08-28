@@ -265,13 +265,13 @@ do
       and verdict:find("Selection [1,2] = Pair (lvl 2).", 1, true) ~= nil
       and verdict:find("BOSS (The Eye): Pair was already played this round -- under this boss it scores 0."
         .. " Hand types already played this round: Pair.", 1, true) ~= nil
-      and verdict:find("2 hand(s), 1 discard(s) left. Resend the same indices to commit this play.", 1, true) ~= nil,
+      and verdict:find("2 hand(s), 1 discard(s) left.", 1, true) ~= nil,
     verdict)
   check("verdict: no alternative is ever named -- the frame is exactly its three parts, nothing appended",
     verdict == "Selection [1,2] = Pair (lvl 2).\n"
       .. "BOSS (The Eye): Pair was already played this round -- under this boss it scores 0."
       .. " Hand types already played this round: Pair.\n"
-      .. "2 hand(s), 1 discard(s) left. Resend the same indices to commit this play.",
+      .. "2 hand(s), 1 discard(s) left.",
     verdict)
   blind.hands = {}
   check("verdict: silent on a legal play -- never speak on a legal action",
@@ -318,7 +318,8 @@ do
   check("the verdict does not advance the decision serial, so the resend latch stays valid",
     G.NEURO.decision_serial == 7, tostring(G.NEURO.decision_serial))
   check("the legality latch is armed for the same selection",
-    G.NEURO.last_legality_reject == "11,12", tostring(G.NEURO.last_legality_reject))
+    G.NEURO.play_confirm and G.NEURO.play_confirm.signature == "11,12",
+    tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 
   G.NEURO.force_inflight = true
   G.TIMERS.REAL = 200
