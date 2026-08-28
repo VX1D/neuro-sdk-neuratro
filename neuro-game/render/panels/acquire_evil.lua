@@ -81,8 +81,9 @@ local function frame(ctx, g)
   end
   if caf > 0 then
     Prims.counter_glow(g.x, g.y, g.w, g.h, th.GOLD, 0.55 * a * caf, g.pulse, 0)
-    Prims.embers(g.x + cn(6), g.y + cn(6), g.w - cn(12), g.h - cn(10), cn(1),
-      g.now, 0.45 * a * caf, 4)
+    local eh = g.h - cn(10)
+    Prims.embers(g.x + cn(6), g.y + cn(6), g.w - cn(12), eh, cn(1),
+      g.now, 0.45 * a * caf, 4, math.floor(eh / 8 + 0.5) * 8)
   end
   Prims.gothic_frame(g.x, g.y, g.w, g.h, u, th.GOLD, th.FRD, a, 0, g.pulse, caf <= 0)
 end

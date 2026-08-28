@@ -387,6 +387,7 @@ run play_size     "$LUAJIT" tests/test_play_size_contract.lua
 run adv_limits    "$LUAJIT" tests/test_advertised_limits.lua
 run hand_identity "$LUAJIT" tests/test_hand_commit_identity.lua
 run confirm_compose "$LUAJIT" tests/test_confirm_play_compose.lua
+run confirm_tool  "$LUAJIT" tests/test_confirm_play_tool.lua
 run weak_final    "$LUAJIT" tests/test_forced_play_weak_pause.lua
 run latch_prec    "$LUAJIT" tests/test_confirm_latch_precedence.lua
 run loop_escape   "$LUAJIT" tests/test_loop_escape.lua

@@ -158,8 +158,13 @@ local function hand_noop(action)
     return false
   end
   if action == "play" then
-    G.NEURO.last_quality_reject = Hand.play_signature({ G.hand.cards[1] })
-    G.NEURO.last_quality_review_serial = 1
+    G.NEURO.play_confirm = {
+      signature = Hand.play_signature({ G.hand.cards[1] }),
+      content = Hand.play_content({ G.hand.cards[1] }),
+      indices = { 1 },
+      decision_serial = 1,
+      run_generation = G.NEURO.run_generation,
+    }
   end
   local handler = action == "play" and Hand.handle_play_hand or Hand.handle_discard_hand
   return handler({ indices = { 1 }, _action_id = action .. "-false" })()

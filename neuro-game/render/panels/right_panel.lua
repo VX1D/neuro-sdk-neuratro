@@ -3,7 +3,9 @@ local RectMesh = require("render.rect_mesh")
 local Prims, S, Motion, Utils = H.Prims, H.S, H.Motion, H.Utils
 local round = Prims.round
 local clamp = Prims.clamp
+local quant_alpha = Prims.quant_alpha
 local set_col, shadow_text = H.set_col, H.shadow_text
+local push_clip, pop_clip = H.push_clip, H.pop_clip
 local smoothstep01 = H.smoothstep01
 local draw_card_mini, card_dimensions, rarity_color, joker_fx = H.draw_card_mini, H.card_dimensions, H.rarity_color, H.joker_fx
 local card_display_name, card_description = H.card_display_name, H.card_description
@@ -34,6 +36,28 @@ local FLASH_C = { 0, 0, 0 }
 local GLITCH_R = { 0.95, 0.10, 0.16 }
 local GLITCH_C = { 0.12, 0.80, 0.90 }
 local PLAIN_WHITE = { 1, 1, 1 }
+
+local _ctr_txt = {}
+local function counter_text(i, n)
+  local per = _ctr_txt[n]
+  if not per then per = {}; _ctr_txt[n] = per end
+  local t = per[i]
+  if not t then t = tostring(i) .. "/" .. tostring(n); per[i] = t end
+  return t
+end
+
+local CTR_W_MAX = 64
+local _ctr_w, _ctr_w_font, _ctr_w_n = {}, nil, 0
+local function counter_w(text, font)
+  if font ~= _ctr_w_font then _ctr_w, _ctr_w_n, _ctr_w_font = {}, 0, font end
+  local w = _ctr_w[text]
+  if w then return w end
+  w = font:getWidth(text)
+  if _ctr_w_n >= CTR_W_MAX then _ctr_w, _ctr_w_n = {}, 0 end
+  _ctr_w[text] = w
+  _ctr_w_n = _ctr_w_n + 1
+  return w
+end
 
 local function round_eval_flash(now)
   return S.ov.re_seen
@@ -200,7 +224,7 @@ local function draw_rp_header(ctx)
     local lw = tracked_width(state_label, TRACK_SM, sl_font)
     local dot_x = tx + lw + r_U + rn(2)
     local dot_gap, dot_r = rn(6), rn(3) / 2
-    caps_label(state_label, tx, sl_y, ACC, 0.82 + 0.12 * breathe, TRACK_SM, sl_font, 0.32, rn(1),
+    caps_label(state_label, tx, sl_y, ACC, 0.82 + 0.12 * quant_alpha(breathe), TRACK_SM, sl_font, 0.32, rn(1),
       nil, S, "rp_state_label", sl_in)
     if persona_evil then
       local fsz = rn(3)
@@ -314,7 +338,6 @@ local function draw_desc_carousel(P)
     local cur_jc = jokers[cy_slot + 1]
     local cached = cy_cache[cy_slot]
     if cur_jc then
-      local fx = joker_fx(cur_jc) or ""
       local sf2 = rfont_small
       local wrap_w = content_w - rn(36)
       local badges = modifier_badges(cur_jc)
@@ -324,11 +347,28 @@ local function draw_desc_carousel(P)
       local r1, r2, r3 = rc2[1], rc2[2], rc2[3]
       local placeholder_revision = Utils.placeholder_revision(cur_jc)
       local ui_text_revision = Utils.ui_text_revision(cur_jc)
-      local changed = not cached or cached.jc ~= cur_jc or cached.fx ~= fx
+      -- Scaling jokers mutate `extra` in place, so a table-typed `extra` can't be fingerprinted by
+      -- reference: re-run joker_fx() for it, but gate the rebuild below on the returned string.
+      local ab = cur_jc.ability or {}
+      local fx_extra = ab.extra
+      local fx_extra_is_table = type(fx_extra) == "table"
+      local fx_inputs_stale = not cached or cached.jc ~= cur_jc
+        or cached.fx_xm ~= ab.x_mult or cached.fx_hm ~= ab.h_mult or cached.fx_hc ~= ab.h_chips
+        or cached.fx_tm ~= ab.t_mult or cached.fx_tc ~= ab.t_chips
+        or (not fx_extra_is_table and cached.fx_extra ~= fx_extra)
+      local fx
+      if fx_inputs_stale or fx_extra_is_table then
+        fx = joker_fx(cur_jc) or ""
+      else
+        fx = cached.fx
+      end
+      local fx_stale = not cached or fx ~= cached.fx
+      local changed = not cached or cached.jc ~= cur_jc
         or cached.wrap_w ~= wrap_w or cached.font ~= sf2 or cached.badges_v ~= badges_v
         or cached.r1 ~= r1 or cached.r2 ~= r2 or cached.r3 ~= r3
         or cached.placeholder_revision ~= placeholder_revision
         or cached.ui_text_revision ~= ui_text_revision
+        or fx_stale
       if changed then
         local desc = card_description(cur_jc) or ""
         if desc == "" and cur_jc.config and cur_jc.config.center then
@@ -343,6 +383,8 @@ local function draw_desc_carousel(P)
           rc = rc2, r1 = r1, r2 = r2, r3 = r3, jc = cur_jc, wrap_w = wrap_w, font = sf2,
           placeholder_revision = Utils.placeholder_revision(cur_jc),
           ui_text_revision = Utils.ui_text_revision(cur_jc),
+          fx_xm = ab.x_mult, fx_hm = ab.h_mult, fx_hc = ab.h_chips, fx_tm = ab.t_mult, fx_tc = ab.t_chips,
+          fx_extra = fx_extra,
         }
         cy_cache[cy_slot] = cached
       end
@@ -403,9 +445,9 @@ local function draw_desc_carousel(P)
       shadow_text(name_txt, name_x, name_y, rc, 0.97 * fade_a, 0.30 * fade_a, rn(1))
 
       love.graphics.setFont(rfont_small)
-      local slot_txt = tostring(cy_slot + 1) .. "/" .. tostring(n)
-      local stw = sf:getWidth(slot_txt)
-      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 0.78 + 0.10 * pulse, 0.30, rn(1))
+      local slot_txt = counter_text(cy_slot + 1, n)
+      local stw = counter_w(slot_txt, sf)
+      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 0.78 + 0.10 * quant_alpha(pulse), 0.30, rn(1))
 
       local strip_h = badge_layout.height
       local desc_lines = (#lns > 0)
@@ -502,12 +544,13 @@ local function draw_rp_rows(ctx)
   if #panel_rows > 0 then
     cy = cy + r_U
     local clip_y = p_y + total_h - footer_h
+    local wrap_y = p_y + (me.panel_h_target or total_h) - footer_h
     local rp_col = 1
     local rx = p_x
     local rows_y0 = cy
     local row_sdx = S.right_panel_slide_frac > 0
       and round((me.main_slide_dir or 1) * (pw_total + 20) * S.right_panel_slide_frac) or 0
-    love.graphics.setScissor(p_x + row_sdx - 2, p_y,
+    local rows_clip = push_clip(p_x + row_sdx - 2, p_y,
       pw_total + 4, math.max(0, math.min(clip_y, sh) - p_y))
     for c = 2, (me.n_cols_used or n_cols) do
       set_col(FRD, 0.90)
@@ -524,9 +567,10 @@ local function draw_rp_rows(ctx)
     local transition_dip = 1 - 0.55 * transition_recency
     local row_dim = spotlight_dim * transition_dip
     local cur_card_a = row_dim
-    for _, r in ipairs(panel_rows) do
-      local cur_h = row_h(r)
-      if cy + cur_h > clip_y and rp_col < n_cols then
+    local row_hs = me.row_hs
+    for ri, r in ipairs(panel_rows) do
+      local cur_h = row_hs and row_hs[ri] or row_h(r)
+      if cy + cur_h > wrap_y and rp_col < n_cols then
         rp_col = rp_col + 1
         rx = rx + p_w
         cy = rows_y0
@@ -728,7 +772,7 @@ local function draw_rp_rows(ctx)
       end
     end
     love.graphics.setFont(font)
-    love.graphics.setScissor()
+    pop_clip(rows_clip)
   end
 end
 
@@ -810,8 +854,8 @@ local function draw_footer_legend(list, meta, g, th, a)
   local budget = math.max(1, inner - 2 * rn(20))
 
   local n = meta and meta.n or 0
-  local ct = n > 1 and (tostring(meta.i or 1) .. "/" .. tostring(n)) or nil
-  local ct_w = ct and font:getWidth(ct) or 0
+  local ct = n > 1 and counter_text(meta.i or 1, n) or nil
+  local ct_w = ct and counter_w(ct, font) or 0
   local gap = ct and rn(6) or 0
 
   local lay_w = math.max(1, budget - ct_w - gap)
@@ -860,9 +904,9 @@ local function draw_footer_legend(list, meta, g, th, a)
     g.mid - drop - math.floor(lay.height / 2), a, th, LEGEND_MO)
 
   if gloss then
-    shadow_text(gloss, g.p_x + math.floor((g.pw_total - gloss_w) / 2),
-      g.mid + drop - math.floor(fh / 2),
-      th.DIM, (0.90 + 0.06 * g.pulse) * ta, 0.50 * ta, u)
+    local gloss_x, gloss_y = g.p_x + math.floor((g.pw_total - gloss_w) / 2), g.mid + drop - math.floor(fh / 2)
+    shadow_text(gloss, gloss_x, gloss_y, th.DIM, 0, 0.50, u, nil, ta, "sh")
+    shadow_text(gloss, gloss_x, gloss_y, th.DIM, 1, 0, u, nil, (0.90 + 0.06 * g.pulse) * ta, "mn")
   end
   love.graphics.setFont(old_font)
 end
@@ -894,13 +938,15 @@ local function draw_rp_footer(ctx)
     local prev_emote, prev_quip = da.footer_prev_emote, da.footer_prev_quip
     local now_emote = footer_is_emote and true or false
 
-    local fading = ffade < 1 and prev_emote ~= nil
+    local had_prev_footer = prev_emote ~= nil or da.footer_prev_legend ~= nil
+      or (prev_quip and prev_quip ~= "")
+    local fading = ffade < 1 and had_prev_footer
 
     if fading then
       local oa = 1 - ffade
-      if prev_emote and footer_emote and footer_emote.img then
+      if prev_emote and prev_emote.img then
         if not now_emote then
-          draw_footer_emote(footer_emote, p_x, pw_total, fy, footer_h, rn, now, 0.97 * oa)
+          draw_footer_emote(prev_emote, p_x, pw_total, fy, footer_h, rn, now, 0.97 * oa)
         end
       elseif (not prev_emote) and da.footer_prev_legend and lg then
         draw_footer_legend(da.footer_prev_legend, da.footer_prev_legend_meta, lg, th, oa)
@@ -909,7 +955,8 @@ local function draw_rp_footer(ctx)
         local ot = trunc(prev_quip, pw_total - rn(24), rfont_small)
         local ox = p_x + (pw_total - rfont_small:getWidth(ot)) / 2
         local oy = fy + (footer_h - r_small_text_h) / 2
-        shadow_text(ot, ox, oy, DIM, (0.90 + 0.06 * pulse) * oa, 0.50 * oa, rn(1))
+        shadow_text(ot, ox, oy, DIM, 0, 0.50, rn(1), nil, oa, "sh")
+        shadow_text(ot, ox, oy, DIM, 1, 0, rn(1), nil, (0.90 + 0.06 * pulse) * oa, "mn")
       end
     end
 
@@ -939,7 +986,8 @@ local function draw_rp_footer(ctx)
       local qw = qf:getWidth(qt)
       local qx = p_x + (pw_total - qw) / 2
       local qy = fy + (footer_h - r_small_text_h) / 2
-      shadow_text(qt, qx, qy, DIM, (0.90 + 0.06 * pulse) * ffade, 0.50 * ffade, rn(1))
+      shadow_text(qt, qx, qy, DIM, 0, 0.50, rn(1), nil, ffade, "sh")
+      shadow_text(qt, qx, qy, DIM, 1, 0, rn(1), nil, (0.90 + 0.06 * pulse) * ffade, "mn")
       if persona_evil then
         draw_band_flanks(bandg, th, bandg.mid, qx - rn(8), qx + qw + rn(8), ffade,
           GOLD[1], GOLD[2], GOLD[3], #qt % 2 == 0)

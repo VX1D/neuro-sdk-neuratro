@@ -4,6 +4,7 @@ local StateKinds = require("core.state_kinds")
 local ActionRegistry = require("core.action_registry")
 local Limits = require("core.plan_limits")
 local GameFacts = require("facts.game_facts")
+local Utils = require("util.utils")
 
 local function action_def(name, description, schema, arg_hints)
   return {
@@ -51,6 +52,23 @@ local function boss_plan_schema()
       boss_plan = { type = "string" },
     },
   }
+end
+
+-- A fresh schema object per call, not an in-schema conditional: SPECIFICATION.md warns those
+-- aren't reliably supported.
+local function confirm_play_schema()
+  local HH = Utils.lazy_require("handlers.hand_handlers")
+  local pend = HH and HH.pending and HH.pending()
+  local always_reason = require("core.config").bool("NEURO_CONFIRM_REASON_ALWAYS")
+  local props = {
+    answer = { type = "string", enum = { "yes", "no" } },
+  }
+  -- Advertised, never required: `required` would also reject a bare answer:"no", the discard path.
+  -- handle_confirm_play enforces it on yes instead.
+  if always_reason or (pend and pend.dominant_alt) then
+    props.reason = { type = "string" }
+  end
+  return { type = "object", properties = props, required = { "answer" } }
 end
 
 local function joker_intents_schema()
@@ -127,7 +145,7 @@ local function build_param_actions()
       },
       required = { "area", "index" }
     }),
-    play_hand = action_def("play_hand", "Play {count:indices:hand card} as a poker hand. Committing takes two sends: the first play_hand returns a confirmation with the engine verdict and spends nothing, and an identical re-send of the same `indices` commits it, uses one hand (H) and scores. Sending different indices instead starts a fresh confirmation for that selection. On your last hand with no discards left and at most one ready hand there is nothing to weigh, so the first send commits immediately. `indices` are the 1-indexed hand positions from Your hand. Judge the hand yourself from Your hand, the Hand levels, and the Ready/Close facts before playing. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
+    play_hand = action_def("play_hand", "Play {count:indices:hand card} as a poker hand. Committing takes two sends: the first play_hand returns a confirmation with the engine verdict and spends nothing, and a `confirm_play` with `answer:\"yes\"` commits it, using one hand (H) and scoring. Sending different indices instead starts a fresh confirmation for that selection. On your last hand with no discards left and at most one ready hand there is nothing to weigh, so the first send commits immediately unless the hand is one of the three lowest-ranking types or the boss blind has something to say about it. `indices` are the 1-indexed hand positions from Your hand. Judge the hand yourself from Your hand, the Hand levels, and the Ready/Close facts before playing. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
       type = "object",
       properties = {
         indices = {
@@ -139,6 +157,7 @@ local function build_param_actions()
       },
       required = { "indices" }
     }, { indices = "hand positions" }),
+    confirm_play = action_def("confirm_play", "Answer the play_hand confirmation shown in the current prompt. `answer:\"yes\"` commits exactly the selection that confirmation names -- it spends one hand and scores. `answer:\"no\"` discards the confirmation and returns you to a fresh choice; nothing is spent. This action exists only while a confirmation is open, and it can only answer that one: if your hand changed since it was issued, `yes` is refused and the confirmation is discarded, so choose again. To confirm a different selection, send play_hand with those indices instead -- that opens its own confirmation. When the confirmation asks for one, `answer:\"yes\"` also takes `reason`: a specific, non-boilerplate sentence naming why this is the play, and naming why you prefer it over any other ready hand the confirmation points at.", confirm_play_schema()),
     discard_hand = action_def("discard_hand", "Discard {count:indices:hand card} immediately and draw the same number of replacements. This is FINAL and costs one discard, not a hand -- discards are the cheap re-draw resource (only usable while you have discards left). `indices` are the 1-indexed hand positions from Your hand. Use it to throw away weak cards and draw toward a better hand. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
       type = "object",
       properties = {
@@ -358,6 +377,7 @@ local STATE_ACTIONS = {
   SELECTING_HAND = {
     "play_hand",
     "discard_hand",
+    "confirm_play",
     "use_card",
     "use_directional_card",
     "sell_card",
@@ -470,6 +490,11 @@ local function validate_play_or_discard(action_name)
 end
 VALIDATORS.play_hand = validate_play_or_discard
 VALIDATORS.discard_hand = validate_play_or_discard
+
+VALIDATORS.confirm_play = function()
+  local HH = Utils.lazy_require("handlers.hand_handlers")
+  if not (HH and type(HH.confirm_ready) == "function" and HH.confirm_ready()) then return false end
+end
 
 VALIDATORS.set_joker_order = function()
   if not G or not G.jokers or not G.jokers.cards or #G.jokers.cards < 2 then
@@ -712,9 +737,13 @@ local _static_actions_caps = nil
 
 local function caps_signature()
   local names = GameFacts.visible_hand_names()
+  local HH = Utils.lazy_require("handlers.hand_handlers")
+  local pend = HH and HH.pending and HH.pending()
   return table.concat({
     Limits.play_select_max(), Limits.discard_select_max(), Limits.hand_select_max(),
     names and table.concat(names, ",") or "-",
+    (pend and pend.dominant_alt) and "1" or "0",
+    require("core.config").bool("NEURO_CONFIRM_REASON_ALWAYS") and "1" or "0",
   }, "/")
 end
 

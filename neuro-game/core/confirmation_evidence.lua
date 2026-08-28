@@ -1,10 +1,6 @@
 local M = {}
 
-local ROLLBACK_FIELDS = {
-  "last_legality_reject", "last_legality_review_serial", "last_legality_content",
-  "last_quality_reject", "last_quality_review_serial", "last_quality_content",
-  "last_confirm_armed", "weak_fired_serial", "pending_confirmation",
-}
+local ROLLBACK_FIELDS = { "weak_fired_serial", "pending_confirmation", "play_confirm" }
 
 local function neuro()
   return G and G.NEURO
@@ -18,7 +14,6 @@ end
 
 local function copy_candidate(candidate)
   return {
-    class = candidate.class,
     signature = candidate.signature,
     content = candidate.content,
     indices = copy_indices(candidate.indices),
@@ -47,32 +42,19 @@ local function restore_rollback(snapshot)
   end
 end
 
-local function live_signature(class)
-  local n = neuro()
-  if not n then return nil end
-  if class == "legality" then return n.last_legality_reject, n.last_legality_content end
-  if class == "quality" then return n.last_quality_reject, n.last_quality_content end
-  return nil
-end
-
 local function identity_matches(candidate)
   local n = neuro()
   if not (n and type(candidate) == "table") then return false end
   if tonumber(candidate.run_generation) ~= (tonumber(n.run_generation) or 0) then return false end
   if tonumber(candidate.decision_serial) ~= (tonumber(n.decision_serial) or 0) then return false end
-  if n.last_confirm_armed ~= candidate.class then return false end
-  local signature, content = live_signature(candidate.class)
-  if signature ~= candidate.signature then return false end
-  if candidate.content ~= nil and content ~= candidate.content then return false end
   return true
 end
 
-function M.candidate(class, signature, content, indices, hand_type)
+function M.candidate(signature, content, indices, hand_type)
   local n = neuro()
-  if not (n and (class == "legality" or class == "quality")) then return nil end
+  if not n then return nil end
   if type(signature) ~= "string" or signature == "" then return nil end
   return {
-    class = class,
     signature = signature,
     content = content,
     indices = copy_indices(indices),
@@ -96,6 +78,10 @@ function M.stage(candidate, final_wire_text, receipt, rollback_snapshot)
   return true
 end
 
+function M.has_staged_delivery()
+  return neuro() and neuro().confirmation_delivery ~= nil or false
+end
+
 function M.step_delivery()
   local n = neuro()
   local delivery = n and n.confirmation_delivery
@@ -112,7 +98,6 @@ function M.step_delivery()
   if not still_current then return false end
   local c = delivery.candidate
   n.pending_confirmation = {
-    class = c.class,
     signature = c.signature,
     content = c.content,
     indices = copy_indices(c.indices),

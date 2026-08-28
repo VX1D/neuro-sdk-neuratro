@@ -243,21 +243,28 @@ local function resolve_hover(msg)
   local juice_scale = 0.5
   local juice_rot = 0.3
 
-  if name == "play_hand" or name == "discard_hand" then
-    if payload.indices and G and G.hand and G.hand.cards then
-      for _, idx in ipairs(payload.indices) do
+  local is_confirmed_play = name == "confirm_play" and payload.answer == "yes"
+  if name == "play_hand" or name == "discard_hand" or is_confirmed_play then
+    local play_indices = payload.indices
+    if is_confirmed_play then
+      local HH = Utils.lazy_require("handlers.hand_handlers")
+      local pend = HH and HH.pending and HH.pending()
+      play_indices = pend and pend.indices or nil
+    end
+    if play_indices and G and G.hand and G.hand.cards then
+      for _, idx in ipairs(play_indices) do
         if G.hand.cards[idx] then
           cards[#cards + 1] = G.hand.cards[idx]
         end
       end
     end
     hover_dur = paced("staging_hover", "NEURO_HOVER_PER_CARD", PER_CARD_FLOOR_S)
-    if name == "play_hand" then
-      label = "Playing hand"
-      post_dur = tuned("staging_post", "NEURO_POST_PLAY")
-    else
+    if name == "discard_hand" then
       label = "Discarding"
       post_dur = tuned("staging_post", "NEURO_POST_DISCARD")
+    else
+      label = "Playing hand"
+      post_dur = tuned("staging_post", "NEURO_POST_PLAY")
     end
 
   elseif name == "buy_from_shop" then
@@ -328,7 +335,8 @@ local function resolve_hover(msg)
     commit_dur = lift_safe_commit(commit_dur, hover_dur)
   end
 
-  return cards, hover_dur, post_dur, label, juice_scale, juice_rot, commit_dur, hold_dur
+  local play_like = name == "play_hand" or name == "discard_hand" or is_confirmed_play
+  return cards, hover_dur, post_dur, label, juice_scale, juice_rot, commit_dur, hold_dur, play_like
 end
 
 local function glow_map()
@@ -405,16 +413,15 @@ clear_hovers = function(cards, keep_glow)
 end
 
 local function anticipate(entry)
-  if not entry or entry.anticipated then return end
+  if not entry or entry.anticipated or not entry.play_like then return end
   local name = entry.msg and entry.msg.data and entry.msg.data.name
-  if name ~= "play_hand" and name ~= "discard_hand" then return end
   entry.anticipated = true
   local NeuroAnim = Utils.lazy_require("render.neuro-anim")
   if not NeuroAnim then return end
-  if name == "play_hand" and NeuroAnim.pre_play then
+  if name == "discard_hand" then
+    if NeuroAnim.pre_discard then pcall(NeuroAnim.pre_discard, entry.hover_cards) end
+  elseif NeuroAnim.pre_play then
     pcall(NeuroAnim.pre_play, entry.hover_cards)
-  elseif name == "discard_hand" and NeuroAnim.pre_discard then
-    pcall(NeuroAnim.pre_discard, entry.hover_cards)
   end
 end
 
@@ -465,6 +472,18 @@ function Staging.should_stage(msg)
     if not ok_preflight then report_preflight_error("play confirmation", preflight_err) end
     if skip then return false end
   end
+  if name == "confirm_play" then
+    local skip = false
+    local ok_preflight, preflight_err = pcall(function()
+      local d = payload_of(msg)
+      if d.answer ~= "yes" then skip = true return end
+      local HH = Utils.lazy_require("handlers.hand_handlers")
+      local pend = HH and HH.pending and HH.pending()
+      if not pend then skip = true end
+    end)
+    if not ok_preflight then report_preflight_error("confirm play", preflight_err) end
+    if skip then return false end
+  end
   if name == "use_card" or name == "use_directional_card" then
     local skip = false
     local ok_preflight, preflight_err = pcall(function()
@@ -504,6 +523,11 @@ function Staging.queue(msg, bridge)
     return false
   end
 
+  -- Hover targets resolve before validation: preflight runs the handler body, which clears
+  -- G.NEURO.play_confirm -- where confirm_play's indices come from.
+  local ok_resolve, cards, hover_dur, post_dur, label, j_scale, j_rot, commit_dur, hold_dur, play_like =
+    pcall(resolve_hover, msg)
+
   local validate = _validator or require("core.dispatcher").validate_message
   local ok_validate, accepted = pcall(validate, msg, bridge)
   if not ok_validate then
@@ -529,14 +553,13 @@ function Staging.queue(msg, bridge)
     cancel_staged("Action cancelled: replaced by newer action")
   end
 
-  local ok_resolve, cards, hover_dur, post_dur, label, j_scale, j_rot, commit_dur, hold_dur = pcall(resolve_hover, msg)
   if not ok_resolve then
     debug_mark("resolve failed", cards)
     cards, hover_dur, post_dur = {}, 0, 0
     label = Utils.humanize_identifier((msg.data and msg.data.name) or "action")
-    j_scale, j_rot, commit_dur, hold_dur = nil, nil, 0, 0
+    j_scale, j_rot, commit_dur, hold_dur, play_like = nil, nil, 0, 0, false
   end
-  local is_multi = (#cards > 1 and (msg.data.name == "play_hand" or msg.data.name == "discard_hand"))
+  local is_multi = (#cards > 1 and play_like)
 
   local state_at_queue = G and G.NEURO and G.NEURO.state or nil
   do
@@ -558,6 +581,7 @@ function Staging.queue(msg, bridge)
     hold_dur = hold_dur or 0,
     label = label,
     multi = is_multi,
+    play_like = play_like,
     juice_scale = j_scale or 0.5,
     juice_rot = j_rot or 0.3,
     phase = "HOVER",
@@ -652,7 +676,7 @@ function Staging.update()
     elseif staged.phase == "EXECUTE" then
       local entry = staged
       local exec_name = entry.msg and entry.msg.data and entry.msg.data.name
-      if exec_name ~= "play_hand" and exec_name ~= "discard_hand" then
+      if not entry.play_like then
         pcall(clear_hovers, entry.hover_cards, (entry.commit_dur or 0) > 0)
       end
       if G and G.NEURO then
@@ -680,7 +704,7 @@ function Staging.update()
       else
         debug_mark("executed", nil)
       end
-      if exec_name == "play_hand" or exec_name == "discard_hand" then
+      if entry.play_like then
         local result = id ~= nil and TxCache.get(id) or nil
         if id ~= nil and (not result or not result.ok) then
           pcall(clear_hovers, entry.hover_cards)
@@ -794,8 +818,10 @@ function Staging.reset_run_state()
   }
 end
 
+local function staged_hover_count() return staged and staged.hover_cards and #staged.hover_cards or 0 end
+
 if rawget(_G, "NEURO_TEST") then
-  Staging._test = { set_validator = set_validator }
+  Staging._test = { set_validator = set_validator, staged_hover_count = staged_hover_count }
   Staging._hover_card = hover_card
   Staging._unhover_card = unhover_card
   Staging._juice_target_settled = juice_target_settled

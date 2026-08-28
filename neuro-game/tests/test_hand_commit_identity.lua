@@ -46,8 +46,14 @@ end
 
 do
   local cards, execution = setup()
-  G.NEURO.last_quality_reject = HandHandlers.play_signature({ cards[1], cards[2], cards[3] })
-  G.NEURO.last_quality_review_serial = 1
+  local confirmed = { cards[1], cards[2], cards[3] }
+  G.NEURO.play_confirm = {
+    signature = HandHandlers.play_signature(confirmed),
+    content = HandHandlers.play_content(confirmed),
+    indices = { 1, 2, 3 },
+    decision_serial = 1,
+    run_generation = 0,
+  }
   local commit = HandHandlers.handle_play_hand({ indices = { 1, 2, 3 } })
   check("play prepares an executor", type(commit) == "function")
   G.hand.cards = { cards[5], cards[4], cards[3], cards[2], cards[1] }

@@ -30,12 +30,12 @@ end
 local function arm()
   local sig = {}
   for i = 1, 2 do sig[#sig + 1] = tostring(G.hand.cards[i].sort_id) end
-  G.NEURO.last_confirm_armed = "quality"
-  G.NEURO.last_quality_reject = table.concat(sig, ",")
-  G.NEURO.last_quality_review_serial = G.NEURO.decision_serial
-  G.NEURO.last_quality_content = "sealed"
-  local candidate = Evidence.candidate("quality", G.NEURO.last_quality_reject,
-    G.NEURO.last_quality_content, { 1, 2 }, "Pair")
+  local signature = table.concat(sig, ",")
+  G.NEURO.play_confirm = {
+    signature = signature, content = "sealed", indices = { 1, 2 },
+    decision_serial = G.NEURO.decision_serial, run_generation = G.NEURO.run_generation,
+  }
+  local candidate = Evidence.candidate(signature, "sealed", { 1, 2 }, "Pair")
   local receipt = { status = "written" }
   assert(Evidence.stage(candidate, "Committing Pair -- 300 to clear. Send the same indices again to commit this play.", receipt))
   assert(Evidence.step_delivery())
@@ -51,6 +51,7 @@ local confirming = force()
 
 check("the confirm turn carries the engine verdict it is asking about",
   confirming:find("Committing Pair", 1, true) ~= nil, confirming)
+check("the confirm turn offers confirm_play", confirming:find("confirm_play", 1, true) ~= nil, confirming)
 
 local TEACHING = {
   ["the numbered rules block"] = "Rules: 1)",
@@ -67,6 +68,7 @@ local FACTS = {
   ["the shape summary"] = "Shape:",
   ["the hand-index range"] = "Hand card indices:",
   ["the move line"] = "Your move:",
+  ["the chips/hands/discards move cue"] = "You still need",
 }
 for label, mark in pairs(FACTS) do
   check("the confirm turn keeps " .. label,
@@ -80,8 +82,7 @@ board()
 arm()
 force()
 Evidence.clear()
-G.NEURO.last_confirm_armed = nil
-G.NEURO.last_quality_reject = nil
+G.NEURO.play_confirm = nil
 local after = force()
 check("a confirm turn does not spend the round's rules gate",
   after:find("Rules: 1)", 1, true) ~= nil, after)

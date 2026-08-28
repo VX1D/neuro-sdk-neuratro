@@ -78,6 +78,20 @@ local function apply_play()
   G.GAME.current_round.hands_left = G.GAME.current_round.hands_left - 1
 end
 
+local function content_of(cards)
+  local parts = {}
+  for _, c in ipairs(cards) do
+    local base = c.base or {}
+    local center = c.config and c.config.center
+    parts[#parts + 1] = table.concat({
+      tostring(c.sort_id or "?"), tostring(base.value or "?"),
+      tostring(base.suit or "?"), tostring(center and center.key or "?"),
+    }, "/")
+  end
+  table.sort(parts)
+  return table.concat(parts, ",")
+end
+
 local function result_bridge()
   local b = { results = {}, contexts = {} }
   function b:send_action_result(id, ok, msg, reason)
@@ -127,8 +141,8 @@ do
   check("confirm: decision serial untouched (resend latch stays valid)",
     G.NEURO.decision_serial == 5)
   check("confirm: play latch survives the force closure",
-    G.NEURO.last_quality_reject == "1,2"
-      and G.NEURO.last_quality_review_serial == 5)
+    G.NEURO.play_confirm and G.NEURO.play_confirm.signature == "1,2"
+      and G.NEURO.play_confirm.decision_serial == 5)
 
   G.TIMERS.REAL = 322
   G.NEURO.force_inflight = false
@@ -148,8 +162,11 @@ end
 do
   selecting_hand_env(340)
   G.NEURO = bridge_neuro({ dispatcher = Dispatcher, actions = Actions })
-  G.NEURO.last_quality_reject = "1,2"
-  G.NEURO.last_quality_review_serial = 0
+  G.NEURO.play_confirm = {
+    signature = "1,2",
+    content = content_of({ G.hand.cards[1], G.hand.cards[2] }),
+    indices = { 1, 2 }, decision_serial = 0, run_generation = 0,
+  }
   G.NEURO.weak_fired_serial = 0
   Staging.reset_run_state()
   require("core.tx_cache").reset()

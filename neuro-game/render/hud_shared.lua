@@ -188,8 +188,9 @@ local function caps_label(s, x, y, col, a, track, f, sh_a, off, outline, owner, 
     o.shadow_color = (o.shadow_alpha > 0) and CAPS_SHADOW or nil
     o.shadow_dx, o.shadow_dy = off or 1, off or 1
     o.tint_alpha = t
-    if draw_cached_tracked_text(owner, key, s, x, y, o) then
-      return x + tracked_width(s, track, f)
+    local hit, w = draw_cached_tracked_text(owner, key, s, x, y, o)
+    if hit then
+      return x + (w or tracked_width(s, track, f))
     end
   end
   local esh = sh_a and (sh_a * t) or nil

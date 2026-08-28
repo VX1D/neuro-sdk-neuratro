@@ -71,7 +71,8 @@ local N_KEYS = {
   "last_action_name", "recent_actions", "dev_footer",
 }
 
-local HUD_KEEP = { new_state = true, invalidate_caches = true }
+local SWAP_KEEP = { new_state = true, invalidate_caches = true }
+local reset_hud = require("core.neuro_lifecycle").reset_hud_state
 
 local _gstore, _nstore, _hud = nil, nil, nil
 local _mounted, _dirty = false, true
@@ -249,10 +250,10 @@ end
 local function swap_hud()
   local keys, seen = {}, {}
   for k in pairs(S) do
-    if not HUD_KEEP[k] then seen[k] = true; keys[#keys + 1] = k end
+    if not SWAP_KEEP[k] then seen[k] = true; keys[#keys + 1] = k end
   end
   for k in pairs(_hud) do
-    if not HUD_KEEP[k] and not seen[k] then keys[#keys + 1] = k end
+    if not SWAP_KEEP[k] and not seen[k] then keys[#keys + 1] = k end
   end
   for _, k in ipairs(keys) do S[k], _hud[k] = _hud[k], S[k] end
 end
@@ -296,14 +297,6 @@ local function swap_all()
   swap_hud()
   swap_viewport()
   swap_clock()
-end
-
-local function reset_hud()
-  local fresh = S.new_state()
-  for k in pairs(S) do
-    if not HUD_KEEP[k] and fresh[k] == nil then S[k] = nil end
-  end
-  for k, v in pairs(fresh) do S[k] = v end
 end
 
 local function reset_pack_anim()

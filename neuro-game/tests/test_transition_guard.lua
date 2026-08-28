@@ -20,7 +20,8 @@ check("use_card blocked while STOP_USE>0", blocked("use_card"))
 G.GAME.STOP_USE = 0
 check("use_card allowed again once STOP_USE clears", not blocked("use_card"))
 
-for _, pair in ipairs({ { "toggle_shop", "toggle_shop" }, { "reroll_shop", "shop_reroll" }, { "skip_blind", "skip_blind" } }) do
+for _, pair in ipairs({ { "toggle_shop", "toggle_shop" }, { "reroll_shop", "shop_reroll" }, { "skip_blind", "skip_blind" },
+    { "select_blind", "skip_blind" } }) do
   local action, lock = pair[1], pair[2]
   G.CONTROLLER.locks = {}
   check(action .. " allowed when lock clear", not blocked(action))

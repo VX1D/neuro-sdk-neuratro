@@ -16,10 +16,25 @@ local FLUSH_CAP = 2 * 1024 * 1024
 local _flush_next_at = 0
 local _flush_bytes = nil
 
+function M.timing_snapshot()
+  local out = {}
+  for label, t in pairs(M._timings) do
+    out[label] = {
+      total_ms = t.total or 0,
+      n = t.n or 0,
+      avg_ms = (t.n or 0) > 0 and (t.total or 0) / t.n or 0,
+      max_ms = t.max or 0,
+      last_ms = t.last or 0,
+    }
+  end
+  return out
+end
+
 local function encode_counters()
   local ok, Json = pcall(require, "util.neuro_json")
   if not (ok and Json and type(Json.encode) == "function") then return nil end
-  local ok_enc, body = pcall(Json.encode, { t = wall(), counters = M._counters, gauges = M._gauges })
+  local ok_enc, body = pcall(Json.encode,
+    { t = wall(), counters = M._counters, gauges = M._gauges, timings = M.timing_snapshot() })
   if not ok_enc or type(body) ~= "string" then return nil end
   return body .. "\n"
 end
@@ -54,13 +69,14 @@ function M.record_timing(label, seconds)
   local ms = seconds * 1000
   local t = M._timings[label]
   if not t then
-    t = { ema = 0, last = 0, max = 0, n = 0 }
+    t = { ema = 0, last = 0, max = 0, n = 0, total = 0 }
     M._timings[label] = t
   end
   t.last = ms
   t.ema = t.ema == 0 and ms or (t.ema * 0.9 + ms * 0.1)
   if ms > t.max then t.max = ms else t.max = t.max * 0.98 + ms * 0.02 end
   t.n = t.n + 1
+  t.total = (t.total or 0) + ms
 end
 
 function M.time_begin(label)

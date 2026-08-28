@@ -3,6 +3,7 @@ local Prims, S = H.Prims, H.S
 local Motion = Prims.Motion
 local round = Prims.round
 local clamp01 = Prims.clamp01
+local quant_alpha = Prims.quant_alpha
 local smoothstep01 = H.smoothstep01
 local set_col = H.set_col
 local shadow_text = H.shadow_text
@@ -356,9 +357,9 @@ end
 
 local function lp(u, v, m) return u + ((v or u) - u) * m end
 
-local function geom_at(Lr, Lf, m, cx, top_y, out)
+local function geom_at(Lr, Lf, m, cx, top_y, out, w_override)
   local a, b = Lr or Lf, Lf or Lr
-  local w = round(lp(a.w, b.w, m))
+  local w = w_override or round(lp(a.w, b.w, m))
   local h = round(lp(a.h, b.h, m))
   local x = round(cx - w / 2)
   local y = top_y
@@ -370,7 +371,7 @@ local function geom_at(Lr, Lf, m, cx, top_y, out)
   g.card_w = round(lp(a.card_w, b.card_w, m))
   g.card_h = round(lp(a.card_h, b.card_h, m))
   g.text_x = x + round(lp(a.text_dx, b.text_dx, m))
-  g.text_w = round(lp(a.text_w, b.text_w, m))
+  g.text_w = w_override and (a.text_w + (w_override - a.w)) or round(lp(a.text_w, b.text_w, m))
   g.eyebrow_y = y + round(lp(a.eyebrow_dy, b.eyebrow_dy, m))
   g.name_y = y + round(lp(a.name_dy, b.name_dy, m))
   g.badges_y = y + round(lp(a.badges_dy, b.badges_dy, m))
@@ -408,7 +409,7 @@ end
 local _neutral_bands, _neutral_frame_col = { { 0, 0, false, 0 } }, { 0, 0, 0 }
 local _neutral_wash_plate, _neutral_outline = { 0, 0, 0 }, { 0, 0, 0 }
 local _eyebrow_col = { 0, 0, 0 }
-local _swap_layout, _flight, _flight_probe = {}, {}, {}
+local _flight, _flight_probe = {}, {}
 
 local function neutral_frame(ctx, g)
   local th, mo = H.bind(ctx)
@@ -560,6 +561,7 @@ local function draw_acquire(ctx)
   small_f = small_f or font
 
   local card, Lr, Lf
+  local w_override
   if mode == "full" then
     card = js.card
     if not js._Lf then js._Lf = layout_full(ctx, js) end
@@ -581,15 +583,10 @@ local function draw_acquire(ctx)
       if k >= 1 then
         sc._w_from, sc._w_from_at = nil, nil
       else
-        local w2 = round(sc._w_from + (Lr.w - sc._w_from) * smoothstep01(k))
-        local Ld = _swap_layout
-        for lk, lv in pairs(Lr) do Ld[lk] = lv end
-        Ld.text_w = Lr.text_w + (w2 - Lr.w)
-        Ld.w = w2
-        Lr = Ld
+        w_override = round(sc._w_from + (Lr.w - sc._w_from) * smoothstep01(k))
       end
     end
-    sc._w_draw = Lr.w
+    sc._w_draw = w_override or Lr.w
   end
 
   local ease = (deco and deco.ease) or smoothstep01
@@ -643,7 +640,7 @@ local function draw_acquire(ctx)
 
   local cx = stage_cx(ctx, sw)
   local top_y = ctx.center_top_y + slide_y
-  local g = geom_at(Lr, Lf, m, cx, top_y, _geom_out)
+  local g = geom_at(Lr, Lf, m, cx, top_y, _geom_out, w_override)
   g.a = a
   g.rad = (deco and deco.rad) and deco.rad(cn) or 0
   g.content_a_receipt = (mode == "receipt") and 1
@@ -775,7 +772,7 @@ local function draw_acquire(ctx)
   if Lf and cf_in > 0 then
     local fw_a = content_a * cf_in
     local e2 = caps_label(Lf.label, g.text_x, g.eyebrow_y, sc_pg or th.pg,
-      0.92 + 0.08 * mo.pulse, me.TRACK_SM or 1, efont,
+      0.92 + 0.08 * quant_alpha(mo.pulse), me.TRACK_SM or 1, efont,
       0.30, nil, nil, S, "acq_forward_eyebrow", fw_a)
     if Lf.chip_str then
       shadow_text(Lf.chip_str, e2 + cn(6), g.eyebrow_y, th.WHITE,

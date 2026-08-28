@@ -57,8 +57,8 @@ function Rows.height(r, m)
       local unit = m.badge_unit or 1
       local bh = m.small_line_h * 2
       if m.small_font then
-        local w = math.max(20, (m.badge_w or m.content_w or 0) - (r.indent or 0))
-        local ok, layout = pcall(Rows.badge_layout, r.card, r.badges, m.small_font, w, unit, 1, nil)
+        local w = math.max(20, r.badge_w or (m.badge_w or m.content_w or 0) - (r.indent or 0))
+        local ok, layout = pcall(Rows.badge_layout, r.card, r.badges, m.small_font, w, unit, 1)
         if ok and layout and layout.height and layout.height > 0 then bh = layout.height end
       end
       return m.card_line_h + bh + (m.badge_gap or 2)
@@ -132,13 +132,24 @@ function Rows.pack_columns(rows, m, avail_data, max_cols, heights)
   return cols, math.min(max_col, avail_data)
 end
 
+Rows.COLS_UNLATCH_STREAK = 180
+
 function Rows.latch_columns(latch, want, sig, max_cols)
   want = math.max(1, math.min(tonumber(want) or 1, max_cols or 1))
   if type(latch) ~= "table" or latch.sig ~= sig then
-    latch = { sig = sig, cols = want }
+    latch = { sig = sig, cols = want, low_streak = 0 }
     return latch, want
   end
-  if want > latch.cols then latch.cols = want end
+  if want > latch.cols then
+    latch.cols, latch.low_streak = want, 0
+  elseif want < latch.cols then
+    latch.low_streak = (latch.low_streak or 0) + 1
+    if latch.low_streak >= Rows.COLS_UNLATCH_STREAK then
+      latch.cols, latch.low_streak = want, 0
+    end
+  else
+    latch.low_streak = 0
+  end
   if latch.cols > max_cols then latch.cols = max_cols end
   return latch, latch.cols
 end

@@ -83,7 +83,7 @@ for _, case in ipairs(CASES) do
   local line = details_line(case.name)
   check(case.key .. ": the details block renders a line", line ~= nil, tostring(line))
   if line then
-    local body = line:match("^%d+%. .-\226\128\148 (.*)$") or line
+    local body = line:match("^%d+%. .- %-%- (.*)$") or line
     local live = numbers(case.live_text)
     local rendered = numbers(body)
 

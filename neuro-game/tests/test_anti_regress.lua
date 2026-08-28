@@ -775,6 +775,8 @@ do
   check("no LOCK token on a free card", CtxHand.card_token(G.hand.cards[1], true):find("LOCK") == nil)
 
   local H = D.get_action_handler
+  -- Spend the weak budget so the accepted play is not also paused for weak-hand advice.
+  G.NEURO.weak_fired_serial = tonumber(G.NEURO.decision_serial) or 0
   local c_omit, e_omit = H("play_hand")({ indices = { 1, 3 } })
   check("play omitting locked card rejected", c_omit == nil and ActionResult.is_error(e_omit) and action_error(e_omit):find("force%-selected") ~= nil, e_omit)
   local c_ok = H("play_hand")({ indices = { 1, 2, 3 } })
@@ -986,6 +988,8 @@ do
   G.hand = { cards = cc, highlighted = { cc[1], cc[2], cc[3], cc[4] } }
   G.GAME.current_round.hands_left = 3
   G.GAME.blind = { debuff = { h_size_le = 3 } }
+  -- Spend the weak budget so the accepted play is not also paused for weak-hand advice.
+  G.NEURO.weak_fired_serial = tonumber(G.NEURO.decision_serial) or 0
   local fn_over, err_over = HH.handle_play_hand({ indices = { 1, 2, 3, 4 } })
   check("h_size_le rejects oversized play", fn_over == nil and ActionResult.is_error(err_over) and action_error(err_over):find("at most 3") ~= nil, err_over)
   check("h_size_le allows a play within the limit", type(HH.handle_play_hand({ indices = { 1, 2, 3 } })) == "function")
@@ -2848,30 +2852,36 @@ do
   G.hand = { cards = { c1, c2, c3 }, highlighted = {} }
   G.FUNCS = G.FUNCS or {}
   G.FUNCS.get_poker_hand_info = function(_) return "Pair", nil, { Pair = { c1, c2 } }, { c1, c2 }, nil end
-  G.NEURO.last_quality_reject = nil
+  G.NEURO.play_confirm = nil
   G.NEURO.weak_fired_serial = nil
   local msg = { command = "action", data = { name = "play_hand", indices = { 1, 2 }, id = "wk1" } }
   check("WEAK: should_stage=false for a first play with discards left (no card-lift on the pause)",
     Staging.should_stage(msg) == false)
-  G.NEURO.last_quality_reject = "901,902"
-  G.NEURO.last_quality_review_serial = tonumber(G.NEURO.decision_serial) or 0
+  G.NEURO.play_confirm = {
+    signature = "901,902",
+    content = require("handlers.hand_handlers").play_content({ c1, c2 }),
+    indices = { 1, 2 }, decision_serial = tonumber(G.NEURO.decision_serial) or 0,
+    run_generation = tonumber(G.NEURO.run_generation) or 0,
+  }
   G.NEURO.weak_fired_serial = tonumber(G.NEURO.decision_serial) or 0
   check("WEAK: should_stage=true on the re-send (cards lift for the real play)",
     Staging.should_stage(msg) == true)
-  G.NEURO.last_quality_reject = nil
-  G.NEURO.last_quality_review_serial = nil
+  G.NEURO.play_confirm = nil
   G.NEURO.weak_fired_serial = nil
   G.GAME.current_round.discards_left = 0
   check("CONFIRM: first play at 0 discards still requests review",
     Staging.should_stage(msg) == false)
-  G.NEURO.last_quality_reject = "901,902"
-  G.NEURO.last_quality_review_serial = tonumber(G.NEURO.decision_serial) or 0
+  G.NEURO.play_confirm = {
+    signature = "901,902",
+    content = require("handlers.hand_handlers").play_content({ c1, c2 }),
+    indices = { 1, 2 }, decision_serial = tonumber(G.NEURO.decision_serial) or 0,
+    run_generation = tonumber(G.NEURO.run_generation) or 0,
+  }
   check("CONFIRM: re-send at 0 discards stages the reviewed play",
     Staging.should_stage(msg) == true)
   G.GAME.blind = saved_blind; G.hand = saved_hand
   if G.FUNCS then G.FUNCS.get_poker_hand_info = saved_gpi end
-  G.NEURO.last_quality_reject = nil
-  G.NEURO.last_quality_review_serial = nil
+  G.NEURO.play_confirm = nil
   G.NEURO.weak_fired_serial = nil
 
 end
@@ -2885,7 +2895,7 @@ do
   G.GAME.current_round.discards_left = 3; G.GAME.current_round.hands_left = 4
   G.GAME.blind = {}
   G.FUNCS.get_poker_hand_info = function(_) return "Pair", nil, { Pair = { {} } }, {}, nil end
-  G.NEURO.last_quality_reject = nil
+  G.NEURO.play_confirm = nil
   G.NEURO.weak_fired_serial = nil
   local real = { command = "action",
     data = { name = "play_hand", id = "j1", data = J.encode({ indices = { 1, 2 } }) } }
@@ -4747,7 +4757,7 @@ do
   end
   check("the play_hand contract states the two-send commit protocol",
     play_desc:find("two sends", 1, true) ~= nil
-      and play_desc:find("identical re%-send") ~= nil
+      and play_desc:find("confirm_play", 1, true) ~= nil
       and play_desc:find("is FINAL", 1, true) == nil,
     play_desc:sub(1, 120))
   check("the play_hand contract documents the single-send corner",

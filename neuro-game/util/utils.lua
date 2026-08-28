@@ -1,4 +1,6 @@
 local Utils = {}
+-- collect_placeholder_values has no signature guard, so this TTL is the only thing that refreshes
+-- a joker counter surfacing solely through loc_vars. Keep it short.
 Utils.UI_TEXT_TTL = 0.75
 
 function Utils.safe_tostring(value)
@@ -797,11 +799,12 @@ local _font_cache = {}
 function Utils.font_at(path, base_px, scale)
   local px = math.floor(base_px * (scale or 1) + 0.5)
   if px < 1 then px = 1 end
-  local key = tostring(path) .. "@" .. px
-  local f = _font_cache[key]
+  local by_px = _font_cache[path or false]
+  if not by_px then by_px = {}; _font_cache[path or false] = by_px end
+  local f = by_px[px]
   if not f then
     f = Utils.try(love.graphics.newFont, path, px) or love.graphics.newFont(px)
-    _font_cache[key] = f
+    by_px[px] = f
   end
   return f
 end

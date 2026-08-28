@@ -209,8 +209,10 @@ local function draw_shaded_quad(atlas_key, pos, x, y, scale_x, scale_y_or_a, a_o
   local clear = (G.C and G.C.CLEAR) or CLEAR_RGBA
   local iw, ih = atlas.image:getDimensions()
   _tex_details[1], _tex_details[2], _tex_details[3], _tex_details[4] = pos.x, pos.y, px, py
-  _image_details[1], _image_details[2] = iw, ih
   shader:send("texture_details", _tex_details)
+  -- G.SHADERS is shared with the base game, which rewrites every uniform per sprite draw, so an
+  -- "already sent it" cache would serve the base game's values.
+  _image_details[1], _image_details[2] = iw, ih
   shader:send("image_details", _image_details)
   shader:send("mouse_screen_pos", ORIGIN_2)
   shader:send("screen_scale", (G.TILESCALE or 3.65) * (G.TILESIZE or 20) * (G.CANV_SCALE or 1))
@@ -388,9 +390,52 @@ local function dims_from_sprite(card, h, px, py)
   return w, render_h, scale_x, scale_y
 end
 
+local DIMS_CACHE = setmetatable({}, { __mode = "k" })
+local DIMS_REVALIDATE_S = 0.75
+local DIMS_BUCKET_MAX = 8
+
+local function resolve_dims(card, h)
+  local cfg = card and card.config
+  local center = cfg and cfg.center
+  local front = cfg and cfg.card
+  local now = Utils.now()
+  -- These are rewritten in place on the same center table, so fingerprint values, not identity.
+  local ds = center and center.display_size
+  local ps = center and center.pixel_size
+  local dw = (ds and tonumber(ds.w)) or (ps and tonumber(ps.w)) or nil
+  local dh = (ds and tonumber(ds.h)) or (ps and tonumber(ps.h)) or nil
+  local dkey = center and center.key or nil
+  local bucket = card ~= nil and DIMS_CACHE[card] or nil
+  local entry = bucket and bucket[h]
+  if entry and entry.center == center and entry.front == front
+      and entry.dw == dw and entry.dh == dh and entry.dkey == dkey
+      and (now - entry.at) < DIMS_REVALIDATE_S then
+    return entry.ak, entry.pos, entry.atlas, entry.is_front, entry.px, entry.py,
+      entry.w, entry.render_h, entry.scale_x, entry.scale_y
+  end
+  local ak, pos, atlas, is_front, px, py = resolve_card_sprite(card)
+  local w, render_h, scale_x, scale_y = dims_from_sprite(card, h, px, py)
+  if card == nil then return ak, pos, atlas, is_front, px, py, w, render_h, scale_x, scale_y end
+  if not bucket then bucket = {}; DIMS_CACHE[card] = bucket end
+  entry = bucket[h]
+  if not entry then
+    -- Flight animations sweep `h` continuously, so the per-card bucket needs a cap.
+    local n = 0
+    for _ in pairs(bucket) do n = n + 1 end
+    if n >= DIMS_BUCKET_MAX then bucket = {}; DIMS_CACHE[card] = bucket end
+    entry = {}
+    bucket[h] = entry
+  end
+  entry.center, entry.front, entry.at = center, front, now
+  entry.dw, entry.dh, entry.dkey = dw, dh, dkey
+  entry.ak, entry.pos, entry.atlas, entry.is_front, entry.px, entry.py = ak, pos, atlas, is_front, px, py
+  entry.w, entry.render_h, entry.scale_x, entry.scale_y = w, render_h, scale_x, scale_y
+  return ak, pos, atlas, is_front, px, py, w, render_h, scale_x, scale_y
+end
+
 local function card_dimensions(card, h)
-  local _, _, _, _, px, py = resolve_card_sprite(card)
-  return dims_from_sprite(card, h, px, py)
+  local _, _, _, _, _, _, w, render_h, scale_x, scale_y = resolve_dims(card, h)
+  return w, render_h, scale_x, scale_y
 end
 
 local function draw_debuff_overlay(x, y, w, h, a)
@@ -524,8 +569,7 @@ end
 local function draw_card_mini_approx(card, x, y, h, a, skip_art_badge)
   a = a or 1
   if not card or not G or not G.ASSET_ATLAS then return 0, 0 end
-  local ak, pos, atlas, is_front, px, py = resolve_card_sprite(card)
-  local w, render_h, scale_x, scale_y = dims_from_sprite(card, h, px, py)
+  local ak, pos, atlas, is_front, px, py, w, render_h, scale_x, scale_y = resolve_dims(card, h)
   local center = card.config and card.config.center
   local is_stone = (center and center.key == "m_stone")
     or (card.ability and card.ability.effect == "Stone Card")
@@ -819,61 +863,221 @@ local function glow_alpha(a, attack, lift01)
   return shop_attack01(a, attack_gain(lift01))
 end
 
+local EVIL_GLOW_MAX_DIM = 2048
+local _evil_glow_canvas = nil
+local _evil_glow_canvas_w, _evil_glow_canvas_h = 0, 0
+local _evil_glow_canvas_ok = nil
+local _evil_glow_quad = nil
+
+local function evil_glow_canvas(w, h)
+  if _evil_glow_canvas_ok == false then return nil end
+  if type(love.graphics.newCanvas) ~= "function" then _evil_glow_canvas_ok = false; return nil end
+  if not (_evil_glow_canvas and _evil_glow_canvas_w >= w and _evil_glow_canvas_h >= h) then
+    local nw = math.max(w, _evil_glow_canvas_w, 128)
+    local nh = math.max(h, _evil_glow_canvas_h, 128)
+    local ok, canvas = pcall(love.graphics.newCanvas, nw, nh)
+    if not ok or not canvas then _evil_glow_canvas_ok = false; return nil end
+    if _evil_glow_canvas and _evil_glow_canvas.release then pcall(_evil_glow_canvas.release, _evil_glow_canvas) end
+    _evil_glow_canvas, _evil_glow_canvas_w, _evil_glow_canvas_h = canvas, nw, nh
+    _evil_glow_quad = nil
+  end
+  _evil_glow_canvas_ok = true
+  return _evil_glow_canvas
+end
+
+local function evil_glow_quad(cw, ch)
+  if type(love.graphics.newQuad) ~= "function" then return nil end
+  if _evil_glow_quad then
+    _evil_glow_quad:setViewport(0, 0, cw, ch, _evil_glow_canvas_w, _evil_glow_canvas_h)
+    return _evil_glow_quad
+  end
+  local ok, quad = pcall(love.graphics.newQuad, 0, 0, cw, ch, _evil_glow_canvas_w, _evil_glow_canvas_h)
+  if not ok then return nil end
+  _evil_glow_quad = quad
+  return quad
+end
+
+-- Setup runs inside the same pcall as the draw: a throw between binding the canvas and popping
+-- would leave the rest of the frame rendering into the glow canvas.
+local _glow_layer_args = {}
+local function _glow_layer_body()
+  local L = _glow_layer_args
+  love.graphics.origin()
+  love.graphics.setCanvas(L.canvas)
+  love.graphics.setScissor(0, 0, L.cw, L.ch)
+  love.graphics.setBlendMode("alpha", "alphamultiply")
+  love.graphics.clear(0, 0, 0, 0)
+  love.graphics.scale(L.eff_scale)
+  love.graphics.translate(-L.X0, -L.Y0)
+  love.graphics.setBlendMode(L.blend_mode, "alphamultiply")
+  L.draw_fn(L.ctx)
+end
+
+-- Composites back with a premultiplied blend so add-mode layers still add onto the screen.
+local function evil_glow_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, X0, Y0, blend_mode, draw_fn, ctx)
+  local prev_canvas = love.graphics.getCanvas()
+  local pr, pg, pb, pa = love.graphics.getColor()
+  local pmode, palpha = love.graphics.getBlendMode()
+  local plw = love.graphics.getLineWidth()
+  local psx, psy, psw, psh = love.graphics.getScissor()
+  local pshader = love.graphics.getShader()
+  love.graphics.push()
+  local L = _glow_layer_args
+  L.canvas, L.cw, L.ch, L.eff_scale = canvas, cw, ch, eff_scale
+  L.X0, L.Y0, L.blend_mode, L.draw_fn, L.ctx = X0, Y0, blend_mode, draw_fn, ctx
+  local ok = pcall(_glow_layer_body)
+  love.graphics.pop()
+  if psx then love.graphics.setScissor(psx, psy, psw, psh) else love.graphics.setScissor() end
+  -- getCanvas() returns the target without its attachment flags, and the base game binds its
+  -- canvas with a stencil buffer; restore that explicitly or the rest of the frame loses it.
+  if prev_canvas then
+    if not pcall(love.graphics.setCanvas, { prev_canvas, stencil = true }) then
+      love.graphics.setCanvas(prev_canvas)
+    end
+  else
+    love.graphics.setCanvas()
+  end
+  if ok then
+    love.graphics.push()
+    love.graphics.origin()
+    love.graphics.setBlendMode(blend_mode, "premultiplied")
+    love.graphics.setColor(1, 1, 1, 1)
+    local quad = evil_glow_quad(cw, ch)
+    if quad then
+      love.graphics.draw(canvas, quad, ox_screen, oy_screen)
+    else
+      love.graphics.draw(canvas, ox_screen, oy_screen)
+    end
+    love.graphics.pop()
+  end
+  love.graphics.setBlendMode(pmode, palpha)
+  love.graphics.setLineWidth(plw)
+  love.graphics.setColor(pr, pg, pb, pa)
+  love.graphics.setShader(pshader)
+  return ok
+end
+
+local function glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, X0, Y0, blend_mode, draw_fn, ctx)
+  -- A false return means draw_fn threw; retrying it here would throw again unguarded.
+  if canvas then
+    evil_glow_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, X0, Y0, blend_mode, draw_fn, ctx)
+    return
+  end
+  love.graphics.setBlendMode(blend_mode)
+  draw_fn(ctx)
+end
+
+local _glow_evil_ctx = {}
+
+local function glow_evil_scrim(c)
+  for i = 1, #EVIL_SCRIM do
+    local band = EVIL_SCRIM[i]
+    local thick = c.uu * (band[2] - band[1])
+    local mid = c.uu * (band[1] + band[2]) * 0.5
+    love.graphics.setColor(0, 0, 0, band[3] * c.a)
+    love.graphics.setLineWidth(thick)
+    love.graphics.rectangle("line", c.X0 - mid, c.Y0 - mid, c.BW + mid * 2, c.BH + mid * 2, c.rr + mid, c.rr + mid)
+  end
+  love.graphics.setColor(c.glow[1], c.glow[2], c.glow[3], (EVIL_A.wash + EVIL_A.wash_commit * c.commit01) * c.a)
+  love.graphics.rectangle("fill", c.X0, c.Y0, c.BW, c.BH, c.rr, c.rr)
+end
+
+local function glow_evil_pool(c)
+  local pool_h = c.H * 0.34
+  fill_vfade(c.X0, c.Y0 + c.BH - pool_h, c.BW, pool_h, c.ember[1], c.ember[2], c.ember[3],
+    (EVIL_A.pool + EVIL_A.pool_commit * c.commit01) * c.a)
+  if c.commit01 > 0 then
+    local bar_h = c.H * 0.05
+    local br = c.ember[1] + (c.hot[1] - c.ember[1]) * c.commit01
+    local bg = c.ember[2] + (c.hot[2] - c.ember[2]) * c.commit01
+    local bb = c.ember[3] + (c.hot[3] - c.ember[3]) * c.commit01
+    love.graphics.setColor(br, bg, bb, EVIL_A.bar_commit * c.commit01 * c.a)
+    love.graphics.rectangle("fill", c.X0, c.Y0 + c.BH - bar_h, c.BW, bar_h)
+  end
+  local by = c.Y0 + c.BH - c.uu * 1.5
+  Prims.ember_bloom(c.X0 + c.BW * 0.30, by, c.uu * 3.5, c.uu * 0.75, (c.now * 0.45) % 1, c.gold, c.a)
+  Prims.ember_bloom(c.X0 + c.BW * 0.72, by, c.uu * 3.5, c.uu * 0.75, (c.now * 0.45 + 0.53) % 1, c.gold, c.a)
+end
+
+local function glow_evil_border(c)
+  local mr = c.gold[1] + (c.ember[1] - c.gold[1]) * c.pulse * 0.6
+  local mg = c.gold[2] + (c.ember[2] - c.gold[2]) * c.pulse * 0.6
+  local mb = c.gold[3] + (c.ember[3] - c.gold[3]) * c.pulse * 0.6
+  love.graphics.setColor(mr, mg, mb,
+    (EVIL_A.border + EVIL_A.border_commit * c.commit01 + EVIL_A.border_pulse * c.pulse) * c.a)
+  love.graphics.setLineWidth(c.W * 0.030)
+  love.graphics.rectangle("line", c.X0, c.Y0, c.BW, c.BH)
+  local arm = c.W * 0.11
+  love.graphics.setColor(c.gold[1], c.gold[2], c.gold[3],
+    (EVIL_A.arms + EVIL_A.arms_commit * c.commit01 + EVIL_A.arms_pulse * c.pulse) * c.a)
+  love.graphics.setLineWidth(c.W * 0.028)
+  love.graphics.line(c.X0, c.Y0 + arm, c.X0, c.Y0, c.X0 + arm, c.Y0)
+  love.graphics.line(c.X0 + c.BW - arm, c.Y0, c.X0 + c.BW, c.Y0, c.X0 + c.BW, c.Y0 + arm)
+  love.graphics.line(c.X0, c.Y0 + c.BH - arm, c.X0, c.Y0 + c.BH, c.X0 + arm, c.Y0 + c.BH)
+  love.graphics.line(c.X0 + c.BW - arm, c.Y0 + c.BH, c.X0 + c.BW, c.Y0 + c.BH, c.X0 + c.BW, c.Y0 + c.BH - arm)
+end
+
+local function glow_evil_mark(c)
+  local bsc = 0.72 + 0.28 * c.commit01
+  local mx = c.W * 0.5
+  local mw2 = c.W * 0.065 * bsc
+  local mup = c.W * 0.18 * bsc * 0.82 * (1 + 0.4 * c.commit01)
+  local mdn = c.W * 0.18 * bsc * 0.18
+  love.graphics.setColor(c.gold[1], c.gold[2], c.gold[3], (EVIL_A.mark + EVIL_A.mark_commit * c.commit01) * c.a)
+  love.graphics.polygon("fill", mx - mw2, c.Y0, mx, c.Y0 - mup, mx + mw2, c.Y0, mx, c.Y0 + mdn)
+  love.graphics.setColor(c.hot[1], c.hot[2], c.hot[3], EVIL_A.mark_core_commit * c.commit01 * c.a)
+  love.graphics.polygon("fill", mx - mw2 * 0.46, c.Y0, mx, c.Y0 - mup * 0.52, mx + mw2 * 0.46, c.Y0, mx, c.Y0 + mdn * 0.53)
+end
+
 local function glow_evil(pl, a, W, H, X0, Y0, BW, BH, pulse, commit01, now)
   local ember, gold, hot, glow = pl.D_ORANGE, pl.D_GOLD, pl.D_WHITE, pl.GLOW
   local uu = W * 0.028
   local rr = W * 0.06
-  for i = 1, #EVIL_SCRIM do
-    local band = EVIL_SCRIM[i]
-    local thick = uu * (band[2] - band[1])
-    local mid = uu * (band[1] + band[2]) * 0.5
-    love.graphics.setColor(0, 0, 0, band[3] * a)
-    love.graphics.setLineWidth(thick)
-    love.graphics.rectangle("line", X0 - mid, Y0 - mid, BW + mid * 2, BH + mid * 2, rr + mid, rr + mid)
+
+  -- Scrim rings reach uu*4 outside the box and the mark's apex sits ~W*0.21 above it; the canvas
+  -- must cover that bleed or those layers get scissored away.
+  local bleed = W * 0.22
+  local GX0, GY0 = X0 - bleed, Y0 - bleed
+  local GBW, GBH = BW + bleed * 2, BH + bleed * 2
+
+  local eff_scale, ox_screen, oy_screen
+  do
+    local ok0, sx0, sy0 = pcall(love.graphics.transformPoint, 0, 0)
+    local ok1, sx1, sy1 = pcall(love.graphics.transformPoint, 1, 0)
+    -- The composite is an axis-aligned blit, so a rotated card has to take the direct path or
+    -- the glow lands unrotated and displaced.
+    local axis_aligned = ok0 and ok1 and type(sy0) == "number" and type(sy1) == "number"
+      and math.abs(sy1 - sy0) < 1e-4
+    if axis_aligned and type(sx0) == "number" and type(sx1) == "number" and sx1 - sx0 > 0 then
+      eff_scale = sx1 - sx0
+      local oko, oxp, oyp = pcall(love.graphics.transformPoint, GX0, GY0)
+      if oko and type(oxp) == "number" and type(oyp) == "number" then
+        ox_screen, oy_screen = oxp, oyp
+      else
+        eff_scale = nil
+      end
+    end
   end
-  love.graphics.setColor(glow[1], glow[2], glow[3], (EVIL_A.wash + EVIL_A.wash_commit * commit01) * a)
-  love.graphics.rectangle("fill", X0, Y0, BW, BH, rr, rr)
-  love.graphics.setBlendMode("add")
-  local pool_h = H * 0.34
-  fill_vfade(X0, Y0 + BH - pool_h, BW, pool_h, ember[1], ember[2], ember[3],
-    (EVIL_A.pool + EVIL_A.pool_commit * commit01) * a)
-  if commit01 > 0 then
-    local bar_h = H * 0.05
-    local br = ember[1] + (hot[1] - ember[1]) * commit01
-    local bg = ember[2] + (hot[2] - ember[2]) * commit01
-    local bb = ember[3] + (hot[3] - ember[3]) * commit01
-    love.graphics.setColor(br, bg, bb, EVIL_A.bar_commit * commit01 * a)
-    love.graphics.rectangle("fill", X0, Y0 + BH - bar_h, BW, bar_h)
+  local canvas, cw, ch
+  if eff_scale then
+    cw, ch = math.ceil(GBW * eff_scale), math.ceil(GBH * eff_scale)
+    if cw >= 1 and ch >= 1 and cw <= EVIL_GLOW_MAX_DIM and ch <= EVIL_GLOW_MAX_DIM then
+      canvas = evil_glow_canvas(cw, ch)
+    else
+      cw, ch = nil, nil
+    end
   end
-  local by = Y0 + BH - uu * 1.5
-  Prims.ember_bloom(X0 + BW * 0.30, by, uu * 3.5, uu * 0.75, (now * 0.45) % 1, gold, a)
-  Prims.ember_bloom(X0 + BW * 0.72, by, uu * 3.5, uu * 0.75, (now * 0.45 + 0.53) % 1, gold, a)
-  love.graphics.setBlendMode("alpha")
-  local mr = gold[1] + (ember[1] - gold[1]) * pulse * 0.6
-  local mg = gold[2] + (ember[2] - gold[2]) * pulse * 0.6
-  local mb = gold[3] + (ember[3] - gold[3]) * pulse * 0.6
-  love.graphics.setColor(mr, mg, mb,
-    (EVIL_A.border + EVIL_A.border_commit * commit01 + EVIL_A.border_pulse * pulse) * a)
-  love.graphics.setLineWidth(W * 0.030)
-  love.graphics.rectangle("line", X0, Y0, BW, BH)
-  local arm = W * 0.11
-  love.graphics.setColor(gold[1], gold[2], gold[3],
-    (EVIL_A.arms + EVIL_A.arms_commit * commit01 + EVIL_A.arms_pulse * pulse) * a)
-  love.graphics.setLineWidth(W * 0.028)
-  love.graphics.line(X0, Y0 + arm, X0, Y0, X0 + arm, Y0)
-  love.graphics.line(X0 + BW - arm, Y0, X0 + BW, Y0, X0 + BW, Y0 + arm)
-  love.graphics.line(X0, Y0 + BH - arm, X0, Y0 + BH, X0 + arm, Y0 + BH)
-  love.graphics.line(X0 + BW - arm, Y0 + BH, X0 + BW, Y0 + BH, X0 + BW, Y0 + BH - arm)
-  love.graphics.setBlendMode("add")
-  local bsc = 0.72 + 0.28 * commit01
-  local mx = W * 0.5
-  local mw2 = W * 0.065 * bsc
-  local mup = W * 0.18 * bsc * 0.82 * (1 + 0.4 * commit01)
-  local mdn = W * 0.18 * bsc * 0.18
-  love.graphics.setColor(gold[1], gold[2], gold[3], (EVIL_A.mark + EVIL_A.mark_commit * commit01) * a)
-  love.graphics.polygon("fill", mx - mw2, Y0, mx, Y0 - mup, mx + mw2, Y0, mx, Y0 + mdn)
-  love.graphics.setColor(hot[1], hot[2], hot[3], EVIL_A.mark_core_commit * commit01 * a)
-  love.graphics.polygon("fill", mx - mw2 * 0.46, Y0, mx, Y0 - mup * 0.52, mx + mw2 * 0.46, Y0, mx, Y0 + mdn * 0.53)
+
+  local c = _glow_evil_ctx
+  c.ember, c.gold, c.hot, c.glow = ember, gold, hot, glow
+  c.uu, c.rr, c.a, c.W, c.H, c.X0, c.Y0, c.BW, c.BH = uu, rr, a, W, H, X0, Y0, BW, BH
+  c.pulse, c.commit01, c.now = pulse, commit01, now
+
+  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "alpha", glow_evil_scrim, c)
+  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "add", glow_evil_pool, c)
+  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "alpha", glow_evil_border, c)
+  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "add", glow_evil_mark, c)
+
   love.graphics.setBlendMode("alpha")
 end
 
@@ -1005,6 +1209,7 @@ local function glow_step(now, lv, dt, active, win)
   return lv, smoothstep01(lv), smoothstep01((lv - 0.35) / 0.65)
 end
 
+local _installed_card_draw = nil
 local function hook_card_draw()
   if S.neuro_card_draw_hooked then return end
   if not ENABLE_AI_CARD_GLOW then
@@ -1012,6 +1217,11 @@ local function hook_card_draw()
     return
   end
   if not Card or not Card.draw then return end
+  if Card.draw == _installed_card_draw then
+    -- The wrapper is still installed; re-wrapping would stack another xpcall layer per card draw.
+    S.neuro_card_draw_hooked = true
+    return
+  end
   S.neuro_card_draw_hooked = true
   neuro_log("Card:draw overlay installed")
 
@@ -1091,6 +1301,7 @@ local function hook_card_draw()
       end
     end
   end
+  _installed_card_draw = Card.draw
 end
 
 local function card_sprite(card)

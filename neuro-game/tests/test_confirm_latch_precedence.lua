@@ -24,6 +24,10 @@ end
 local function indices_of(list)
   return table.concat(list or {}, ",")
 end
+local function pending_indices()
+  local pend = HandHandlers.pending()
+  return pend and pend.indices or nil
+end
 
 local d1, d2 = card("9","Hearts", true), card("9","Diamonds", true)
 local hand = { card("A","Spades"), card("K","Spades"), card("Q","Spades"), card("J","Spades"),
@@ -40,9 +44,10 @@ _G.G = {
 local res1, err1 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
 check("an all-debuffed selection draws the boss verdict",
   res1 == nil and ActionResult.normalize(err1).boss_verdict == true, tostring(err1))
-check("the verdict arms the legality slot and announces it",
-  G.NEURO.last_legality_reject == (d1.sort_id .. "," .. d2.sort_id)
-    and G.NEURO.last_confirm_armed == "legality", tostring(G.NEURO.last_confirm_armed))
+check("the verdict arms the single confirm slot for that selection",
+  G.NEURO.play_confirm ~= nil
+    and G.NEURO.play_confirm.signature == (d1.sort_id .. "," .. d2.sort_id),
+  tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 
 G.FUNCS.get_poker_hand_info = phi("Flush", flush)
 local res2, err2 = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
@@ -50,26 +55,23 @@ local msg2 = ActionResult.normalize(err2).message
 check("a different selection meets the general confirmation",
   res2 == nil and msg2:find("Committing Flush", 1, true) ~= nil
     and msg2:find("Any other selection gets its own confirmation first", 1, true) ~= nil, msg2)
-check("the boss verdict is still remembered in its own slot",
-  G.NEURO.last_legality_reject == (d1.sort_id .. "," .. d2.sort_id)
-    and G.NEURO.last_quality_reject ~= nil
-    and G.NEURO.last_confirm_armed == "quality", tostring(G.NEURO.last_confirm_armed))
+check("the new selection replaces the single slot outright -- no arbiter, no stale co-armed slot",
+  G.NEURO.play_confirm ~= nil
+    and G.NEURO.play_confirm.signature == HandHandlers.play_signature(flush),
+  tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
 check("the force announces the newest selection",
-  indices_of(HandHandlers.pending_confirm_indices()) == "1,2,3,4,5",
-  indices_of(HandHandlers.pending_confirm_indices()))
+  indices_of(pending_indices()) == "1,2,3,4,5", indices_of(pending_indices()))
 
 G.FUNCS.get_poker_hand_info = phi("Pair", { d1, d2 })
 local res3, err3 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
-check("the older slot no longer commits: that selection is confirmed again",
+check("returning to the abandoned selection re-confirms it",
   res3 == nil and ActionResult.is_error(err3), type(res3))
-check("the reconfirmed selection is the announced one",
-  G.NEURO.last_confirm_armed == "legality"
-    and indices_of(HandHandlers.pending_confirm_indices()) == "7,8",
-  indices_of(HandHandlers.pending_confirm_indices()))
+check("the reconfirmed selection is the one announced",
+  indices_of(pending_indices()) == "7,8", indices_of(pending_indices()))
 
 G.FUNCS.get_poker_hand_info = phi("Flush", flush)
 local res4, err4 = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
-check("the selection that lost the announcement is confirmed again too",
+check("bouncing back to the other selection re-confirms it too",
   res4 == nil and ActionResult.is_error(err4), type(res4))
 local res5 = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
 check("the announced selection commits on the identical resend", type(res5) == "function", type(res5))
@@ -78,15 +80,13 @@ G.NEURO = {}
 G.FUNCS.get_poker_hand_info = phi("Pair", { d1, d2 })
 local res6, err6 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
 local msg6 = ActionResult.normalize(err6).message
-check("a lone boss verdict is the only armed confirmation",
+check("a lone boss verdict arms the single slot",
   res6 == nil and ActionResult.normalize(err6).boss_verdict == true
-    and G.NEURO.last_confirm_armed == "legality" and G.NEURO.last_quality_reject == nil,
-  tostring(G.NEURO.last_confirm_armed))
-check("the verdict itself promises that the resend commits",
-  msg6:find("Resend the same indices to commit this play", 1, true) ~= nil, msg6)
+    and G.NEURO.play_confirm ~= nil, tostring(G.NEURO.play_confirm))
+check("the verdict itself promises that confirming commits",
+  msg6:find("commit it", 1, true) ~= nil, msg6)
 check("the force announces exactly that selection",
-  indices_of(HandHandlers.pending_confirm_indices()) == "7,8",
-  indices_of(HandHandlers.pending_confirm_indices()))
+  indices_of(pending_indices()) == "7,8", indices_of(pending_indices()))
 
 G.FUNCS.get_poker_hand_info = phi("Flush", flush)
 local res7, err7 = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
@@ -98,8 +98,7 @@ G.FUNCS.get_poker_hand_info = phi("Pair", { d1, d2 })
 HandHandlers.handle_play_hand({ indices = { 7, 8 } })
 local res8 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
 check("the announced verdict commits on the identical resend", type(res8) == "function", type(res8))
-check("committing clears both slots and the announcement",
-  G.NEURO.last_legality_reject == nil and G.NEURO.last_quality_reject == nil
-    and G.NEURO.last_confirm_armed == nil, tostring(G.NEURO.last_confirm_armed))
+check("committing clears the slot and the announcement",
+  G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
 
 done()

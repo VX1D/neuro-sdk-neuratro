@@ -137,28 +137,32 @@ local legality_section = CtxShop.legality_section
 
 local shop_section = CtxShop.shop_section
 
-local function append_frame_sections(sections, state_name)
+local function append_frame_sections(sections, state_name, split)
   local ok, GameRules = pcall(require, "context.game_rules")
   if not ok or type(GameRules) ~= "table" then return end
 
-  if type(GameRules.invariant_frame) == "function" then
-    local ok_f, txt = pcall(GameRules.invariant_frame)
-    if ok_f and type(txt) == "string" and txt ~= "" then
-      sections[#sections + 1] = owned_section("rule", "FRAME|" .. txt, "frame")
+  if split ~= "state" then
+    if type(GameRules.invariant_frame) == "function" then
+      local ok_f, txt = pcall(GameRules.invariant_frame)
+      if ok_f and type(txt) == "string" and txt ~= "" then
+        sections[#sections + 1] = owned_section("rule", "FRAME|" .. txt, "frame")
+      end
+    end
+
+    if type(GameRules.deck_reference) == "function" then
+      local ok_d, name, txt = pcall(GameRules.deck_reference)
+      if ok_d and type(name) == "string" and type(txt) == "string" and txt ~= "" then
+        sections[#sections + 1] = owned_section("rule", txt, name)
+      end
     end
   end
 
-  if type(GameRules.deck_reference) == "function" then
-    local ok_d, name, txt = pcall(GameRules.deck_reference)
-    if ok_d and type(name) == "string" and type(txt) == "string" and txt ~= "" then
-      sections[#sections + 1] = owned_section("rule", txt, name)
-    end
-  end
-
-  if type(GameRules.run_frame_text) == "function" then
-    local ok_t, txt = pcall(GameRules.run_frame_text, state_name)
-    if ok_t and type(txt) == "string" and txt ~= "" then
-      sections[#sections + 1] = owned_section("state", "RUN|" .. txt)
+  if split ~= "rule" then
+    if type(GameRules.run_frame_text) == "function" then
+      local ok_t, txt = pcall(GameRules.run_frame_text, state_name)
+      if ok_t and type(txt) == "string" and txt ~= "" then
+        sections[#sections + 1] = owned_section("state", "RUN|" .. txt)
+      end
     end
   end
 end
@@ -324,7 +328,7 @@ function ContextCompact.build(state_name, allowed_actions, opts)
   if split == "volatile" then split = "state" end
 
   local sections = {}
-  append_frame_sections(sections, state_name)
+  append_frame_sections(sections, state_name, split)
   sections[#sections + 1] = header_section(state_name)
   if state_name ~= "SHOP" and not StateKinds.is_menu_state(state_name) then
     sections[#sections + 1] = legality_section(state_name, action_set)
@@ -404,10 +408,26 @@ function ContextCompact.invalidate_cache()
   _ctx_cache_key = nil
 end
 
-function ContextCompact.rule_frames(state_name)
-  local list = ContextCompact.build(state_name, nil,
-    { split = "rule", no_cache = true, return_list = true, keyed = true })
-  return (type(list) == "table") and list or {}
+function ContextCompact.rule_frames(_state_name)
+  local ok, GameRules = pcall(require, "context.game_rules")
+  if not ok or type(GameRules) ~= "table" then return {} end
+
+  local out = {}
+  if type(GameRules.invariant_frame) == "function" then
+    local ok_f, txt = pcall(GameRules.invariant_frame)
+    if ok_f and type(txt) == "string" and txt ~= "" then
+      out[#out + 1] = { key = "frame", text = "FRAME|" .. txt }
+    end
+  end
+
+  if type(GameRules.deck_reference) == "function" then
+    local ok_d, name, txt = pcall(GameRules.deck_reference)
+    if ok_d and type(name) == "string" and type(txt) == "string" and txt ~= "" then
+      out[#out + 1] = { key = name, text = txt }
+    end
+  end
+
+  return out
 end
 
 return ContextCompact

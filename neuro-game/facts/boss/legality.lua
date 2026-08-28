@@ -120,7 +120,7 @@ local function resource_line()
   end
   local GameFacts = require("facts.game_facts")
   parts[#parts + 1] = string.format("%d hand(s), %d discard(s) left", GameFacts.hands_left(), GameFacts.discards_left())
-  return table.concat(parts, "; ") .. ". Resend the same indices to commit this play."
+  return table.concat(parts, "; ") .. "."
 end
 
 local function pillar_contrast(selected_cards)

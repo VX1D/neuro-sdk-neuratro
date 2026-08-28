@@ -96,7 +96,7 @@ do
       FUNCS = { get_poker_hand_info = function(sel) return "Flush", nil, { Flush = sel }, { sel[1], sel[2] }, nil end,
                 play_cards_from_highlighted = function() return true end },
       NEURO = { decision_serial = 10, state_enter_serial = 3, once_serials = {},
-                last_quality_reject = "1,2", last_quality_review_serial = 10, weak_fired_serial = 10 },
+                weak_fired_serial = 10 },
       jokers = { cards = {
         { sort_id = 901, ability = { set = "Joker", name = "A" }, sell_cost = 1,
           config = { center = { key = "j_a", set = "Joker" } } },
@@ -104,6 +104,11 @@ do
           config = { center = { key = "j_b", set = "Joker" } } },
       }, config = { card_limit = 5 } },
       play = nil,
+    }
+    _G.G.NEURO.play_confirm = {
+      signature = "1,2",
+      content = require("handlers.hand_handlers").play_content({ G.hand.cards[1], G.hand.cards[2] }),
+      indices = { 1, 2 }, decision_serial = 10, run_generation = 0,
     }
     require("core.transition_guard").reset()
     require("core.force_state").arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)

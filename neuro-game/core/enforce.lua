@@ -232,6 +232,7 @@ local function get_max_repeat(state_name, name)
   if state_name == "SELECTING_HAND" and (
     name == "play_hand"
     or name == "discard_hand"
+    or name == "confirm_play"
   ) then
     return 30
   end

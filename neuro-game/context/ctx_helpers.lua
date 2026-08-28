@@ -231,7 +231,11 @@ local function humanize_effect(s, strip_editions)
     end
   end
   local res = table.concat(out, ", "):gsub("%s+", " ")
-  res = res:gsub("%s*[,;·-]%s*$", ""):gsub("^%s*[,;·-]%s*", "")
+  res = res:gsub("%s*[,;·%-]+%s*$", "")
+  res = res:gsub("^%s*[,;·]+%s*", "")
+  if not res:match("^%-%d") then
+    res = res:gsub("^%s*%-+%s*", "")
+  end
   return (res:match("^%s*(.-)%s*$"))
 end
 
