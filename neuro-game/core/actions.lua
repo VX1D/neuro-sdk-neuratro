@@ -54,6 +54,11 @@ local function boss_plan_schema()
   }
 end
 
+local function confirm_hand_on()
+  local HH = Utils.lazy_require("handlers.hand_handlers")
+  return not (HH and HH.confirm_hand_on) or HH.confirm_hand_on()
+end
+
 -- A fresh schema object per call, not an in-schema conditional: SPECIFICATION.md warns those
 -- aren't reliably supported.
 local function confirm_play_schema()
@@ -145,7 +150,7 @@ local function build_param_actions()
       },
       required = { "area", "index" }
     }),
-    play_hand = action_def("play_hand", "Play {count:indices:hand card} as a poker hand. Committing takes two sends: the first play_hand returns a confirmation with the engine verdict and spends nothing, and a `confirm_play` with `answer:\"yes\"` commits it, using one hand (H) and scoring. Sending different indices instead starts a fresh confirmation for that selection. On your last hand with no discards left and at most one ready hand there is nothing to weigh, so the first send commits immediately unless the hand is one of the three lowest-ranking types or the boss blind has something to say about it. `indices` are the 1-indexed hand positions from Your hand. Judge the hand yourself from Your hand, the Hand levels, and the Ready/Close facts before playing. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
+    play_hand = action_def("play_hand", "Play {count:indices:hand card} as a poker hand. " .. (confirm_hand_on() and "Committing takes two sends: the first play_hand returns a confirmation with the engine verdict and spends nothing, and a `confirm_play` with `answer:\"yes\"` commits it, using one hand (H) and scoring. Sending different indices instead starts a fresh confirmation for that selection. On your last hand with no discards left and at most one ready hand there is nothing to weigh, so the first send commits immediately unless the hand is one of the three lowest-ranking types or the boss blind has something to say about it." or "This commits the selection on the first send, using one hand (H) and scoring.") .. " `indices` are the 1-indexed hand positions from Your hand. Judge the hand yourself from Your hand, the Hand levels, and the Ready/Close facts before playing. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
       type = "object",
       properties = {
         indices = {
@@ -492,6 +497,7 @@ VALIDATORS.play_hand = validate_play_or_discard
 VALIDATORS.discard_hand = validate_play_or_discard
 
 VALIDATORS.confirm_play = function()
+  if not confirm_hand_on() then return false end
   local HH = Utils.lazy_require("handlers.hand_handlers")
   if not (HH and type(HH.confirm_ready) == "function" and HH.confirm_ready()) then return false end
 end
@@ -744,6 +750,7 @@ local function caps_signature()
     names and table.concat(names, ",") or "-",
     (pend and pend.dominant_alt) and "1" or "0",
     require("core.config").bool("NEURO_CONFIRM_REASON_ALWAYS") and "1" or "0",
+    confirm_hand_on() and "1" or "0",
   }, "/")
 end
 

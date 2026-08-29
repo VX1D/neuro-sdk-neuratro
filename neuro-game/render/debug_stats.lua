@@ -29,6 +29,11 @@ local function PERF_LOG()
   return _tuning.bool("NEURO_PERF_LOG")
 end
 local PERF_LOG_CAP = 16 * 1024 * 1024
+local PERF_FLUSH_LINES = 4
+local PERF_PENDING_MAX = 64
+local PERF_FLUSH_S = 1.0
+local _perf_pending, _perf_pending_n, _perf_flush_at = {}, 0, 0
+local _perf_write_failed = false
 local _perf_bytes = 0
 local _perf_seeded = false
 
@@ -134,6 +139,23 @@ function M.setup()
   M.set_mode_name(Tuning.get("NEURO_DEBUG_OVERLAY"))
 end
 
+-- drawcalls and canvasswitches reset at the start of every frame, so they only carry a reading
+-- while the draw is still on the stack. The absolute counters can be read anywhere.
+M._draw_stats = { drawcalls = 0, canvasswitches = 0 }
+
+function M.wants_draw_stats()
+  return M._on or PERF_LOG()
+end
+
+function M.note_draw_stats()
+  if not (love and love.graphics and love.graphics.getStats) then return end
+  local ok, gs = pcall(love.graphics.getStats)
+  if not ok or type(gs) ~= "table" then return end
+  local d = M._draw_stats
+  d.drawcalls = gs.drawcalls or 0
+  d.canvasswitches = gs.canvasswitches or 0
+end
+
 function M.note_hud_ms(ms)
   local h = M._hud
   h.last_ms = ms
@@ -142,8 +164,41 @@ function M.note_hud_ms(ms)
   if h.n < h.cap then h.n = h.n + 1 end
 end
 
+local function perf_pending_clear()
+  for i = 1, _perf_pending_n do _perf_pending[i] = nil end
+  _perf_pending_n = 0
+end
+
+-- Shares the inline flush's clock: each retry concatenates the whole pending buffer.
+-- love.filesystem.append reports failure by return value, not by raising.
+local function flush_perf_pending(force, terminal)
+  if _perf_pending_n <= 0 or not (love and love.filesystem)
+    or type(love.filesystem.append) ~= "function" then
+    if _perf_pending_n >= PERF_PENDING_MAX then perf_pending_clear() end
+    return
+  end
+  local now = wall()
+  -- `force` only means "the batch is full", so a failing sink stays on the clock. A shutdown
+  -- flush has no later chance and bypasses it.
+  if not terminal and (not force or _perf_write_failed) and now < _perf_flush_at then return end
+  _perf_flush_at = now + PERF_FLUSH_S
+  local ok, wrote = pcall(love.filesystem.append, "neuro_perf.jsonl",
+    table.concat(_perf_pending, "", 1, _perf_pending_n))
+  _perf_write_failed = not (ok and wrote ~= false)
+  if not _perf_write_failed or _perf_pending_n >= PERF_PENDING_MAX then
+    perf_pending_clear()
+  end
+end
+
+function M.flush_perf()
+  return flush_perf_pending(true, true)
+end
+
 function M.sample(dt)
-  if not M._on and not PERF_LOG() then return end
+  local logging = PERF_LOG()
+  -- The overlay and the log are independent switches; the buffer drains whenever logging is off.
+  if not logging then flush_perf_pending() end
+  if not M._on and not logging then return end
   local fr = M._frame
   local ms = (dt or 0) * 1000
   fr.last_ms = ms
@@ -169,6 +224,17 @@ function M.sample(dt)
   fr.max_ms = mx
   fr.spikes = spikes
 
+  -- The mod's own draw cost, separated from the frame total, so a slow frame can be attributed.
+  local hd = M._hud
+  local hsum, hmx = 0, 0
+  for k = 1, hd.n do
+    local v = hd.hist[k] or 0
+    hsum = hsum + v
+    if v > hmx then hmx = v end
+  end
+  hd.avg_ms = hd.n > 0 and (hsum / hd.n) or 0
+  hd.max_ms = hmx
+
   local GI = G and G.I
   sl.moveable = tlen(GI and GI.MOVEABLE)
   sl.sprite = tlen(GI and GI.SPRITE)
@@ -189,7 +255,7 @@ function M.sample(dt)
     sl.ctr_prev[name] = val
   end
 
-  if PERF_LOG() and love and love.filesystem then
+  if logging and love and love.filesystem then
     if not _perf_seeded then
       _perf_seeded = true
       local info = love.filesystem.getInfo and love.filesystem.getInfo("neuro_perf.jsonl")
@@ -197,19 +263,36 @@ function M.sample(dt)
     end
     if _perf_bytes < PERF_LOG_CAP then
       local raw_ms = (love.timer and love.timer.getAverageDelta and love.timer.getAverageDelta() or 0) * 1000
+      -- lua_kb counts only the Lua heap; Mesh/Canvas/Image live in C and VRAM, so a leak there is
+      -- invisible without these.
+      local gs
+      if love.graphics and love.graphics.getStats then
+        local ok_gs, stats = pcall(love.graphics.getStats)
+        gs = ok_gs and type(stats) == "table" and stats or nil
+      end
       local gap = sl.last_sample_at and (now - sl.last_sample_at) or interval
       sl.last_sample_at = now
       local line = sf(
-        '{"t":%.1f,"fps":%d,"ms_avg":%.2f,"ms_max":%.2f,"spikes":%d,"dt_raw_ms":%.2f,"gap":%.2f,"moveable":%d,"move_rate":%.2f,"sprite":%d,"card":%d,"uibox":%d,"node":%d,"lua_kb":%.0f,"gc_rate":%.1f,"gamespeed":%.2f,"speedfactor":%.2f}\n',
+        '{"t":%.1f,"fps":%d,"ms_avg":%.2f,"ms_max":%.2f,"spikes":%d,"dt_raw_ms":%.2f,"gap":%.2f,"moveable":%d,"move_rate":%.2f,"sprite":%d,"card":%d,"uibox":%d,"node":%d,"lua_kb":%.0f,"gc_rate":%.1f,"hud_ms":%.2f,"hud_max":%.2f,"tex":%d,"canv":%d,"canvsw":%d,"draws":%d,"texmem_kb":%.0f,"gamespeed":%.2f,"speedfactor":%.2f}\n',
         wall(), cur_fps(), fr.avg_ms or 0, fr.max_ms or 0, fr.spikes or 0, raw_ms, gap, sl.moveable or 0, sl.move_rate or 0,
         sl.sprite or 0, sl.card or 0, sl.uibox or 0, sl.node or 0, sl.lua_kb or 0, sl.gc_rate or 0,
+        M._hud.avg_ms or 0, M._hud.max_ms or 0,
+        (gs and gs.images or 0) + (gs and gs.fonts or 0), gs and gs.canvases or 0,
+        M._draw_stats.canvasswitches, M._draw_stats.drawcalls,
+        (gs and gs.texturememory or 0) / 1024,
         (G and G.SETTINGS and tonumber(G.SETTINGS.GAMESPEED)) or 0,
         (G and tonumber(G.SPEEDFACTOR)) or 0)
       _perf_bytes = _perf_bytes + #line
       if _perf_bytes >= PERF_LOG_CAP then
         line = line .. '{"perf_log":"cap reached, logging stopped"}\n'
       end
-      pcall(love.filesystem.append, "neuro_perf.jsonl", line)
+      -- Batched: one write per four sampled frames.
+      _perf_pending_n = _perf_pending_n + 1
+      _perf_pending[_perf_pending_n] = line
+      if _perf_pending_n >= PERF_FLUSH_LINES or now >= _perf_flush_at
+        or _perf_bytes >= PERF_LOG_CAP then
+        flush_perf_pending(true)
+      end
 
     end
   end

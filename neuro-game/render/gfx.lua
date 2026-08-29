@@ -103,6 +103,8 @@ local function st_evict_lru()
   if v_s then
     local by_variant = st_map[v_fid]
     local by_text = by_variant[v_vkey]
+    local victim = by_text[v_s]
+    if victim and victim.text and victim.text.release then pcall(victim.text.release, victim.text) end
     by_text[v_s] = nil
     -- Clear the empty shells too, or st_map and by_variant grow unbounded while the leaf entries
     -- stay capped at ST_MAX.
@@ -129,14 +131,21 @@ local function st_entry(s, col, a, sh_a, off, outline, variant)
       and e.r == col[1] and e.g == col[2] and e.b == col[3] then
       return e
     end
-    return st_fill(e, s, col, a, sh_a, off, outline) and e or nil
+    if st_fill(e, s, col, a, sh_a, off, outline) then return e end
+    -- The refill cleared the Text before it threw; poison the descriptor or the fast path draws
+    -- an empty buffer.
+    e.r, e.g, e.b, e.a, e.sh = nil, nil, nil, nil, nil
+    return nil
   end
   local ok, text = pcall(lg.newText, f)
   if not ok or not text or type(text.add) ~= "function" or type(text.clear) ~= "function" then
     return nil
   end
   e = { text = text, used = st_clock }
-  if not st_fill(e, s, col, a, sh_a, off, outline) then return nil end
+  if not st_fill(e, s, col, a, sh_a, off, outline) then
+    if text.release then pcall(text.release, text) end
+    return nil
+  end
   if st_n >= ST_MAX then
     st_evict_lru()
   end
@@ -162,5 +171,18 @@ function gfx.shadow_text(txt, x, y, col, a, sh_a, off, outline, tint, variant)
   end
   print_shadow_text(txt, x, y, col, (a or 1) * tint, (sh_a or 1) * tint, off, outline)
 end
+
+function gfx.release_text_cache()
+  for _, by_variant in pairs(st_map) do
+    for _, by_text in pairs(by_variant) do
+      for _, e in pairs(by_text) do
+        if e and e.text and e.text.release then pcall(e.text.release, e.text) end
+      end
+    end
+  end
+  st_map, st_n = {}, 0
+end
+
+gfx._hot_reload_release = gfx.release_text_cache
 
 return gfx

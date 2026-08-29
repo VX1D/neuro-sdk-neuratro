@@ -55,13 +55,22 @@ local Config = require("core.config")
 local Json = require("util.neuro_json")
 local DS = require("render.debug_stats")
 
+-- One append can carry several batched records, so split before decoding.
+local function decoded_records(from)
+  local out = {}
+  for i = (from or 1), #fs_lines do
+    for chunk in tostring(fs_lines[i]):gmatch("[^\n]+") do
+      local ok, decoded = pcall(Json.decode, chunk)
+      if ok and type(decoded) == "table" then out[#out + 1] = decoded end
+    end
+  end
+  return out
+end
+
 local function counter_lines()
   local out = {}
-  for _, line in ipairs(fs_lines) do
-    local ok, decoded = pcall(Json.decode, (line:gsub("\n$", "")))
-    if ok and type(decoded) == "table" and type(decoded.counters) == "table" then
-      out[#out + 1] = decoded
-    end
+  for _, decoded in ipairs(decoded_records()) do
+    if type(decoded.counters) == "table" then out[#out + 1] = decoded end
   end
   return out
 end
@@ -89,9 +98,8 @@ Config.set("NEURO_PERF_LOG", "on")
 local before = #fs_lines
 DS.sample(0.016)
 local saw_perf_line = false
-for i = before + 1, #fs_lines do
-  local ok, decoded = pcall(Json.decode, (fs_lines[i]:gsub("\n$", "")))
-  if ok and type(decoded) == "table" and decoded.fps then saw_perf_line = true end
+for _, decoded in ipairs(decoded_records(before + 1)) do
+  if decoded.fps then saw_perf_line = true end
 end
 check("debug_stats still writes the frame-timing perf line when NEURO_PERF_LOG is on", saw_perf_line)
 

@@ -365,4 +365,55 @@ do
     ActionResult.normalize(weak_err).message)
 end
 
+do
+  local Config = require("core.config")
+  Config.set("NEURO_CONFIRM_HAND", "off")
+
+  local played = false
+  local a, b = card("9", "Hearts"), card("9", "Diamonds")
+  setup({ a, b }, phi("Pair"), { hands = 4, discards = 3 })
+  G.FUNCS.play_cards_from_highlighted = function() played = true end
+
+  local exec = HandHandlers.handle_play_hand({ indices = { 1, 2 } })
+  check("with confirmations off, play_hand commits on the first send",
+    type(exec) == "function", type(exec))
+  exec()
+  check("and it actually plays the selection", played == true)
+  check("no confirmation is armed", G.NEURO.play_confirm == nil,
+    tostring(G.NEURO.play_confirm))
+  check("confirm_play is not offered", Actions.is_action_valid("confirm_play") == false)
+  check("the rules text stays valid either way, pointing at the action description",
+    require("facts.token_legends").READABLE_STATE.SELECTING_HAND
+      :find("spends nothing until the commit", 1, true) ~= nil)
+
+  Config.set("NEURO_CONFIRM_HAND", "on")
+  setup({ a, b }, phi("Pair"), { hands = 4, discards = 3 })
+  local res = HandHandlers.handle_play_hand({ indices = { 1, 2 } })
+  check("turning it back on restores the confirmation", res == nil and G.NEURO.play_confirm ~= nil)
+end
+
+do
+  -- Flipping the toggle mid-decision must not leave an open confirmation the model cannot answer.
+  local Config = require("core.config")
+  Config.set("NEURO_CONFIRM_HAND", "on")
+  local a, b = card("9", "Hearts"), card("9", "Diamonds")
+  setup({ a, b }, phi("Pair"), { hands = 4, discards = 3 })
+  local _, err = HandHandlers.handle_play_hand({ indices = { 1, 2 } })
+  promote(HandHandlers.play_signature({ a, b }), HandHandlers.play_content({ a, b }),
+    { 1, 2 }, "Pair", ActionResult.normalize(err).message)
+  check("a confirmation is open", HandHandlers.pending() ~= nil)
+
+  Config.set("NEURO_CONFIRM_HAND", "off")
+  check("turning confirmations off retires the open one", HandHandlers.pending() == nil,
+    tostring(HandHandlers.pending()))
+  -- nil alone is any rejection; name the reason.
+  local retired_ok, retired_err = HandHandlers.handle_confirm_play({ answer = "yes" })
+  check("and confirm_play cannot commit it", retired_ok == nil, tostring(retired_ok))
+  local retired_msg = tostring(type(retired_err) == "table" and retired_err.message or retired_err)
+  check("rejected because nothing is armed, not for some unrelated reason",
+    retired_msg:find("No confirmation is open", 1, true) ~= nil, retired_msg)
+
+  Config.set("NEURO_CONFIRM_HAND", "on")
+end
+
 done()

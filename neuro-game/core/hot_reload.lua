@@ -255,6 +255,9 @@ local function apply(names)
     end
 
     if type(old) == "table" and type(new) == "table" then
+      -- The outgoing chunk's upvalues die with its functions: one call to free what they hold.
+      local release = rawget(old, "_hot_reload_release")
+      if type(release) == "function" then pcall(release) end
       map_pair(undo[#undo].snap, new, remap, 0, remap_seen)
       overwrite(old, new)
       setmetatable(old, getmetatable(new))

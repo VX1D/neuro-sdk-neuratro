@@ -87,18 +87,19 @@ local function corridor(ctx, sw, main_side, eff_px, pw_total, _now, _dt, cn)
   return ctx.center_cx, ctx.center_max_w
 end
 
+-- Returns the previous scissor as plain values; this runs every frame and a table here is garbage.
 local function push_clip(x, y, w, h)
-  if not (lg.setScissor and lg.getScissor) then return nil end
-  local prev = { lg.getScissor() }
+  if not (lg.setScissor and lg.getScissor) then return false end
+  local px, py, pw, ph = lg.getScissor()
   local cw, ch = math.max(0, w), math.max(0, h)
   if lg.intersectScissor then lg.intersectScissor(x, y, cw, ch)
   else lg.setScissor(x, y, cw, ch) end
-  return prev
+  return true, px, py, pw, ph
 end
 
-local function pop_clip(prev)
-  if not (lg.setScissor and prev) then return end
-  if prev[1] then lg.setScissor(prev[1], prev[2], prev[3], prev[4]) else lg.setScissor() end
+local function pop_clip(pushed, px, py, pw, ph)
+  if not (lg.setScissor and pushed) then return end
+  if px then lg.setScissor(px, py, pw, ph) else lg.setScissor() end
 end
 
 local function bind(ctx)

@@ -171,11 +171,16 @@ function Prims.draw_cached_tracked_text(batch, key, s, x, y, opts)
           if v.used < victim_used then victim_key, victim_used = k, v.used end
         end
         if victim_key then
+          local victim = cache[victim_key]
+          if victim and victim.text and victim.text.release then pcall(victim.text.release, victim.text) end
           cache[victim_key] = nil
           batch._text_blocks_n = batch._text_blocks_n - 1
         end
       end
       batch._text_blocks_n = (batch._text_blocks_n or 0) + 1
+    else
+      local prev = cache[key]
+      if prev and prev.text and prev.text.release then pcall(prev.text.release, prev.text) end
     end
     cache[key] = entry
   end
@@ -595,6 +600,19 @@ local PX_MESH_VARIANTS = 4
 local DECO_MESH_LIMIT = 32
 local px_mesh_supported
 local deco_mesh_cache = {}
+
+-- Composites arrive both as arrays and as named pairs and may hold false slots and non-mesh
+-- fields, so walk the whole table; a single mesh is userdata and carries release itself.
+local function release_deco_mesh(m)
+  if type(m) == "table" and not m.release then
+    for _, sub in pairs(m) do
+      local st = type(sub)
+      if (st == "userdata" or st == "table") and sub.release then pcall(sub.release, sub) end
+    end
+  elseif m and m.release then
+    pcall(m.release, m)
+  end
+end
 local deco_mesh_clock = 0
 
 local function append_mesh_rect(vertices, indices, x, y, w, h, r, g, b, a)
@@ -664,6 +682,10 @@ end
 
 local function px_variant_store(cache, mesh, r0, g0, b0, r1, g1, b1, r2, g2, b2)
   local slot = cache.next
+  local prev = cache[slot]
+  if prev and prev.mesh and prev.mesh ~= mesh and prev.mesh.release then
+    pcall(prev.mesh.release, prev.mesh)
+  end
   cache[slot] = {
     mesh = mesh,
     r0 = r0, g0 = g0, b0 = b0,
@@ -790,6 +812,9 @@ local function deco_mesh_put(kind, w, u, p0, p1, p2, p3, p4, p5, mesh)
     for i = 2, #deco_mesh_cache do
       if deco_mesh_cache[i].used < deco_mesh_cache[slot].used then slot = i end
     end
+    -- Free the GPU buffer now; the finalizer piles up live meshes under a stopped collector.
+    -- Safe because get/put stamp `used`: a held entry is the most recent, never the LRU minimum.
+    release_deco_mesh(deco_mesh_cache[slot].mesh)
   end
   deco_mesh_cache[slot] = {
     kind = kind, w = w, u = u,
@@ -891,6 +916,9 @@ local function bake_draw(canvas, dx, dy)
 end
 
 local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
+  -- At or below one step of 8-bit alpha nothing worth a draw call lands.
+  a = a or 1
+  if a <= 1 / 255 then return end
   local x0 = round(cx - pat.w * s / 2)
   local y0 = round(cy - pat.h * s / 2)
   if shadow then
@@ -1770,7 +1798,8 @@ function Prims.tag_string(x, y, w, u, r, g, b, a, mesh_stable)
       if mesh then deco_mesh_put("tag_string", w, u, nil, nil, nil, nil, nil, nil, mesh) end
     end
     if mesh then
-      set_color_if_changed(r, g, b, 0.85 * a)
+      -- The 0.85 is already in the vertex colour; the rectangle path below applies it instead.
+      set_color_if_changed(r, g, b, a)
       love.graphics.draw(mesh, x, y)
       return
     end
@@ -2207,6 +2236,19 @@ function Prims.heart_seal(cx, cy, r, pg, acc, a, pop)
   love.graphics.rectangle("fill", cx - hr, cy - hr, hr * 2, hr * 2, hr, hr)
   draw_px(HEART_SEAL_PX, cx, cy, s, pg, 0.95 * a, acc, WHITE_C, true)
   Prims.draw_sparkle(cx + s * 2, cy - s * 3, math.max(1, s * 1.5), WHITE_C, 0.7 * a)
+end
+
+-- The chunk's mesh and canvas caches live in locals; a reload replaces its functions.
+function Prims._hot_reload_release()
+  for i = 1, #deco_mesh_cache do
+    release_deco_mesh(deco_mesh_cache[i] and deco_mesh_cache[i].mesh)
+  end
+  deco_mesh_cache = {}
+  for i = 1, #bake_cache do
+    local c = bake_cache[i] and bake_cache[i].canvas
+    if c and c.release then pcall(c.release, c) end
+  end
+  bake_cache = {}
 end
 
 return Prims

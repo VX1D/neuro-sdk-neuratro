@@ -4748,18 +4748,30 @@ do
   end
 
   local Legends = require("facts.token_legends")
-  local play_desc = ""
-  for _, d in ipairs(A.get_action_definitions and A.get_action_definitions() or {}) do
-    if d.name == "play_hand" then play_desc = tostring(d.description or "") end
+  -- Read the live registered description: the source carries both branches of the wording.
+  local Config = require("core.config")
+  local function live_play_desc()
+    A.get_static_actions()
+    local d = require("core.action_registry").get("play_hand")
+    return tostring(d and d.description or "")
   end
-  if play_desc == "" then
-    play_desc = source_of("core/actions.lua"):match('action_def%("play_hand", "(.-)", %{') or ""
-  end
+
+  Config.set("NEURO_CONFIRM_HAND", "on")
+  local play_desc = live_play_desc()
   check("the play_hand contract states the two-send commit protocol",
     play_desc:find("two sends", 1, true) ~= nil
       and play_desc:find("confirm_play", 1, true) ~= nil
       and play_desc:find("is FINAL", 1, true) == nil,
     play_desc:sub(1, 120))
+
+  Config.set("NEURO_CONFIRM_HAND", "off")
+  local direct_desc = live_play_desc()
+  check("with confirmations off the contract states the single-send commit instead",
+    direct_desc:find("commits the selection on the first send", 1, true) ~= nil
+      and direct_desc:find("confirm_play", 1, true) == nil
+      and direct_desc:find("two sends", 1, true) == nil,
+    direct_desc:sub(1, 120))
+  Config.set("NEURO_CONFIRM_HAND", "on")
   check("the play_hand contract documents the single-send corner",
     play_desc:find("last hand", 1, true) ~= nil, play_desc:sub(1, 120))
 
@@ -4770,7 +4782,7 @@ do
     if fh then gloss = fh:read("*a") fh:close() end
   end
   check("the glossary teaches the commit protocol before the first play",
-    gloss:find("two sends", 1, true) ~= nil, "glossary missing the protocol")
+    gloss:find("spends nothing until the commit", 1, true) ~= nil, "glossary missing the protocol")
 
   local hh_body = source_of("handlers/hand_handlers.lua")
   check("the Cerulean Bell rejection does not claim the engine cannot execute the play",

@@ -3,7 +3,7 @@ rawset(_G, "NEURO_TEST", true)
 local check, done = require("tests.helpers").harness("ornament meshes")
 
 local function load_prims(mesh_enabled)
-  local state = { ops = {}, builds = 0, draws = 0, rects = 0, arcs = 0, circles = 0,
+  local state = { ops = {}, builds = 0, draws = 0, released = 0, rects = 0, arcs = 0, circles = 0,
     colour = { 1, 1, 1, 1 } }
   local gfx = {}
 
@@ -55,6 +55,7 @@ local function load_prims(mesh_enabled)
       local mesh = { vertices = vertices }
       function mesh:setVertexMap(indices) self.indices = indices end
       function mesh:getVertexCount() return #self.vertices end
+      function mesh:release() state.released = state.released + 1 end
       return mesh
     end
   end
@@ -240,6 +241,9 @@ do
   check("stable awning keys build two meshes apiece", state.builds == 66, state.builds)
   Prims.awning(0, 0, 101, 1, A, B, 1, true)
   check("curved decoration cache remains bounded to 32 LRU keys", state.builds == 68, state.builds)
+  -- Awning entries are composites of two meshes; the evicted pair has to be freed.
+  check("evicting a composite entry releases every mesh it held",
+    state.released >= 2, tostring(state.released))
 end
 
 done()

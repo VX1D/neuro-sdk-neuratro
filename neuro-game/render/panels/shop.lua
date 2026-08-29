@@ -135,6 +135,18 @@ local function hud_layout()
   return _hud
 end
 
+local function size_badges(metrics, content_w, rows, ln, card_line_h)
+  local sprite_h = card_line_h - ln(4)
+  metrics.badge_w = math.max(20, content_w - math.ceil(71 * (sprite_h / 95)) - ln(8))
+  for i = 1, #rows do
+    local r = rows[i]
+    if r.kind == "shopcard" and r.badges and #r.badges > 0 then
+      local cw = card_dimensions(r.card, sprite_h)
+      r.badge_w = math.max(20, content_w - (r.indent or 0) - (cw or 0) - ln(8))
+    end
+  end
+end
+
 local function draw_shop_panel(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
   local pg, bg, ACC, FR, FRD, DIM, WHITE, GOLD = th.pg, th.bg, th.ACC, th.FR, th.FRD, th.DIM, th.WHITE, th.GOLD
@@ -263,18 +275,7 @@ local function draw_shop_panel(ctx)
     lp_metrics.badge_gap = ln(2)
     lp_metrics.badge_unit = ln(1)
     -- measure_rows sizes row height from this, so it has to settle before that pass, not in draw.
-    local function size_badges(card_line_h)
-      local sprite_h = card_line_h - ln(4)
-      lp_metrics.badge_w = math.max(20, lp_content_w - math.ceil(71 * (sprite_h / 95)) - ln(8))
-      for i = 1, #shop_rows do
-        local r = shop_rows[i]
-        if r.kind == "shopcard" and r.badges and #r.badges > 0 then
-          local cw = card_dimensions(r.card, sprite_h)
-          r.badge_w = math.max(20, lp_content_w - (r.indent or 0) - (cw or 0) - ln(8))
-        end
-      end
-    end
-    size_badges(lp_card_line_h)
+    size_badges(lp_metrics, lp_content_w, shop_rows, ln, lp_card_line_h)
     local lp_data_h = ln(8) + measure_rows(shop_rows)
     local lp_title_h = ln(44)
     local lp_total_h = lp_title_h + lp_data_h
@@ -298,7 +299,7 @@ local function draw_shop_panel(ctx)
       lp_small_line_h = lp_metrics.small_line_h
       lp_card_line_h, lp_sep_h = lp_metrics.card_line_h, lp_metrics.sep_h
       lp_hdr_line_h = lp_metrics.header_line_h
-      size_badges(lp_card_line_h)
+      size_badges(lp_metrics, lp_content_w, shop_rows, ln, lp_card_line_h)
       lp_data_h = ln(8) + measure_rows(shop_rows)
       lp_total_h = lp_title_h + lp_data_h
       if lp_total_h > lp_avail_h then
@@ -504,7 +505,7 @@ local function draw_shop_panel(ctx)
     local lp_col = 1
     local lx = lp_x
     local lp_rows_y0 = lcy
-    local lp_clip = push_clip(lp_x + lp_dx - 2, lp_y,
+    local lc_on, lc_x, lc_y, lc_w, lc_h = push_clip(lp_x + lp_dx - 2, lp_y,
       lp_w_total + 4, math.max(0, math.min(lp_y + lp_total_h, sh) - lp_y))
     love.graphics.setFont(lp_font)
     for ri, r in ipairs(shop_rows) do
@@ -526,8 +527,11 @@ local function draw_shop_panel(ctx)
         row_a = 1 - Prims.smoothstep01(rt < 0 and 0 or (rt > 1 and 1 or rt))
       end
       local row_sa = leaving and (shop_in * row_a) or sa_rows
-      love.graphics.push()
-      love.graphics.translate(0, math.floor((1 - row_a) * ln(10)))
+      local row_shift = math.floor((1 - row_a) * ln(10))
+      if row_shift ~= 0 then
+        love.graphics.push()
+        love.graphics.translate(0, row_shift)
+      end
 
       if r.kind == "sep" then
         lcy = lcy + l_U
@@ -754,10 +758,10 @@ local function draw_shop_panel(ctx)
         love.graphics.setFont(lp_font)
         lcy = lcy + lp_small_line_h + 2
       end
-      love.graphics.pop()
+      if row_shift ~= 0 then love.graphics.pop() end
     end
     love.graphics.setFont(font)
-    pop_clip(lp_clip)
+    pop_clip(lc_on, lc_x, lc_y, lc_w, lc_h)
 
     if lp_pushed then love.graphics.pop() end
     end  -- lp_on_screen; the occupancy below is published either way

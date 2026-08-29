@@ -530,24 +530,39 @@ local function _step_force_widened(state_name)
   return widened
 end
 
-local _stall_sig, _stall_since = nil, nil
+-- NaN never equals itself, and this gate is the last-resort stall escape.
+local function same_field(a, b)
+  return a == b or (a ~= a and b ~= b)
+end
+
+local _stall_sent, _stall_acted, _stall_changed, _stall_gen, _stall_state
+local _stall_since = nil
+local function _stall_disarm()
+  _stall_sent, _stall_acted, _stall_changed, _stall_gen, _stall_state = nil, nil, nil, nil, nil
+  _stall_since = nil
+end
+
 local function _step_force_stall()
   if not (G.NEURO.enabled and G.NEURO.persona) or G.NEURO.llm_paused then
-    _stall_sig, _stall_since = nil, nil
+    _stall_disarm()
     return false
   end
   if force_window_is_open() or G.NEURO.force_inflight
     or require("core.action_receipt").has_active() or Staging.is_busy() then
-    _stall_sig, _stall_since = nil, nil
+    _stall_disarm()
     return false
   end
-  local sig = table.concat({
-    tostring(G.NEURO.force_sent_at),
-    tostring(G.NEURO.last_action_at), tostring(S.state_changed_at),
-    tostring(G.NEURO.run_generation), tostring(G.NEURO.state) }, "|")
+  -- Runs on every idle frame.
+  local sent, acted = G.NEURO.force_sent_at, G.NEURO.last_action_at
+  local changed, gen, state = S.state_changed_at, G.NEURO.run_generation, G.NEURO.state
   local now = Utils.gate_now("force_stall")
-  if sig ~= _stall_sig or _stall_since == nil or now < _stall_since then
-    _stall_sig, _stall_since = sig, now
+  if not (same_field(sent, _stall_sent) and same_field(acted, _stall_acted)
+    and same_field(changed, _stall_changed) and same_field(gen, _stall_gen)
+    and same_field(state, _stall_state))
+    or _stall_since == nil or now < _stall_since then
+    _stall_sent, _stall_acted, _stall_changed = sent, acted, changed
+    _stall_gen, _stall_state = gen, state
+    _stall_since = now
     return false
   end
   if (now - _stall_since) < Utils.gate_seconds("force_stall", "NEURO_FORCE_STALL") then return false end
@@ -838,7 +853,7 @@ function Orchestrator.reset_run_state()
   neuro_last_force_attempt_at = 0
   neuro_seen_action_at = 0
   neuro_cancel_quarantined = false
-  _stall_sig, _stall_since = nil, nil
+  _stall_disarm()
   _armed_window, _armed_legal = nil, nil
   _neuro_err_cd, _game_err_cd, _game_err_last_msg = 0, 0, nil
 end

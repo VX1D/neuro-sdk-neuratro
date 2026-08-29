@@ -74,4 +74,18 @@ do
     Delivery._delivered()["rule\1old"] == nil)
 end
 
+do
+  reset(function(_, _, _, r) r.status = "written"; return true, false, r end)
+  Delivery.rule("gloss:readable_common", "Glossary body.")
+  for i = 1, 2500 do
+    Delivery.rule("hint:k" .. i .. "@" .. i, "Hint body " .. i)
+  end
+  local remembered = 0
+  for _ in pairs(Delivery._delivered()) do remembered = remembered + 1 end
+  check("hint rules are capped, so delivery memory stops growing with the run",
+    remembered == 2049, tostring(remembered))
+  check("a fixed-key rule is never evicted, or the glossary would be sent to the model twice",
+    Delivery._delivered()["rule\1gloss:readable_common"] ~= nil)
+end
+
 done()

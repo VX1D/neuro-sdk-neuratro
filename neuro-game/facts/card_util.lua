@@ -626,13 +626,17 @@ local function card_modifier_desc(card)
   return table.concat(parts, "  ")
 end
 
+local _template_ability = setmetatable({}, { __mode = "k" })
+
 local function joker_template_ability(c)
   local key = center_key(c)
   local center = key and G and G.P_CENTERS and G.P_CENTERS[key]
   if not center then return {} end
   if type(center.ability) == "table" then return center.ability end
+  local built = _template_ability[center]
+  if built then return built end
   local cfg = type(center.config) == "table" and center.config or {}
-  return {
+  built = {
     x_mult = cfg.Xmult or cfg.x_mult or 1,
     h_mult = cfg.h_mult or 0,
     h_chips = cfg.h_chips or 0,
@@ -640,6 +644,8 @@ local function joker_template_ability(c)
     t_chips = cfg.t_chips or 0,
     extra = cfg.extra,
   }
+  _template_ability[center] = built
+  return built
 end
 
 local JOKER_FX_SPECS = {}
@@ -652,6 +658,8 @@ local function joker_registry()
   dynamic_jokers = dynamic_jokers or require("facts.dynamic_jokers")
   return dynamic_jokers
 end
+
+local _fx_parts = {}
 
 local function joker_fx(c)
   local center = c and c.config and c.config.center or {}
@@ -667,13 +675,14 @@ local function joker_fx(c)
     end
   end
   if type(ab.extra) == "table" then
-    local parts = {}
+    local parts, n = _fx_parts, 0
     for _, spec in ipairs(joker_registry().extra_specs(key)) do
       if NUMERIC_EFFECTS.read(ab, spec) == NUMERIC_EFFECTS.read(tb, spec) then
-        parts[#parts + 1] = NUMERIC_EFFECTS.label(ab, spec)
+        local label = NUMERIC_EFFECTS.label(ab, spec)
+        if label ~= nil then n = n + 1; parts[n] = label end
       end
     end
-    return table.concat(parts, "; ")
+    return table.concat(parts, "; ", 1, n)
   end
   return ""
 end

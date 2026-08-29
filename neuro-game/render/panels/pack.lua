@@ -241,6 +241,8 @@ local function picks_owed()
   return (G.GAME and G.GAME.pack_choices) or 0
 end
 
+local _hero_dims = {}
+
 local function draw_pack_panel(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
   local ACC, FRD, WHITE, CYAN, GOLD = th.ACC, th.FRD, th.WHITE, th.CYAN, th.GOLD
@@ -552,11 +554,14 @@ local function draw_pack_panel(ctx)
     local hero_dims
     if collapsing and snap then
       local n_win = math.min(math.max(#S.pack_winners, 1), snap.n_win)
-      local dims = {}
+      local dims = _hero_dims
       for i = 1, n_win do
         local ww, wh, wsx, wsy = card_dimensions(S.pack_winners[i] and S.pack_winners[i].card, snap.sp_h)
-        dims[i] = { w = ww, h = wh, sx = wsx, sy = wsy }
+        local d = dims[i]
+        if not d then d = {}; dims[i] = d end
+        d.w, d.h, d.sx, d.sy = ww, wh, wsx, wsy
       end
+      for i = #dims, n_win + 1, -1 do dims[i] = nil end
       hero_dims = dims
       local hsc = hero_cap_for(snap, n_win, HERO_SCALE, HERO_GAP, env_pad, dims)
       hero_hsc = hsc
@@ -627,7 +632,7 @@ local function draw_pack_panel(ctx)
     local top_y = ctx.center_top_y
     local exit_ty = -round(cn(SIZING.EXIT_LIFT) * panel_exit)
 
-    local clip0 = push_clip(env_x - cn(SIZING.CLIP_PAD), top_y + exit_ty - cn(SIZING.CLIP_PAD),
+    local c0_on, c0_x, c0_y, c0_w, c0_h = push_clip(env_x - cn(SIZING.CLIP_PAD), top_y + exit_ty - cn(SIZING.CLIP_PAD),
       env_w + 2 * cn(SIZING.CLIP_PAD), env_h + cn(SIZING.CLIP_TAIL))
     love.graphics.push()
     love.graphics.translate(0, exit_ty)
@@ -997,7 +1002,7 @@ local function draw_pack_panel(ctx)
       draw_collapse(snap)
     else
       local sx0 = env_x + math.floor((env_w - stage_w) / 2)
-      local clip = push_clip(env_x, top_y, env_w, env_h)
+      local cl_on, cl_x, cl_y, cl_w, cl_h = push_clip(env_x, top_y, env_w, env_h)
       for ci, dc in ipairs(display_cards) do
         local ca = dc.alpha
         local slide_y
@@ -1014,13 +1019,13 @@ local function draw_pack_panel(ctx)
         local slot_x = sx0 + (ci - 1) * (slot_w + slot_gap)
         draw_pack_slot(dc, slot_x, slot_y + slide_y, ca, appear_ef, scan01)
       end
-      pop_clip(clip)
+      pop_clip(cl_on, cl_x, cl_y, cl_w, cl_h)
     end
 
     if hk and hk.exit and panel_exit > 0 then hk.exit(hctx, g, panel_exit) end
 
     love.graphics.pop()
-    pop_clip(clip0)
+    pop_clip(c0_on, c0_x, c0_y, c0_w, c0_h)
 
     ctx.center_top_y = pk_base_top + env_h + cn(4)
   end

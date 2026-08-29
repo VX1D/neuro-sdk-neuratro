@@ -66,4 +66,23 @@ do
   check("dropping one leaves the other four queued", FactHints.pending_count() == 4)
 end
 
+do
+  -- core/context_delivery.lua caps rule memory on the "hint:" namespace, and nothing else ties
+  -- that prefix to the key this module mints.
+  local seen = {}
+  package.loaded["core.context_delivery"] = {
+    rule = function(key) seen[#seen + 1] = key; return true end,
+  }
+  local Utils = require("util.utils")
+  local can_send = Utils.can_send
+  Utils.can_send = function() return true end
+  local FactHints = fresh()
+  FactHints.once_per_run_hint("cap_probe", "text")
+  FactHints.flush_pending()
+  Utils.can_send = can_send
+  package.loaded["core.context_delivery"] = nil
+  check("a delivered hint carries the namespace the rule cap evicts on",
+    seen[1] ~= nil and seen[1]:sub(1, 5) == "hint:", tostring(seen[1]))
+end
+
 done()

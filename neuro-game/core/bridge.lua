@@ -7,6 +7,7 @@ local Utils = require("util.utils")
 
 local Bridge = {}
 Bridge.__index = Bridge
+local FORCE_ALIAS_HISTORY = 8   -- epochs of retired aliases kept for late answers
 local temp_write_seq = 0
 
 local function temp_path_for(path, owner)
@@ -636,6 +637,7 @@ function Bridge:send_startup()
     self._canonical_defs = {}
     self._force_alias_epoch = 0
     self._force_alias_to_canonical = {}
+    self._force_alias_epoch_names = {}
     self._registered_force_aliases = {}
     self._force_alias_retirement_pending = nil
     self.last_transition_at = Utils.gate_now("bridge_transition_cooldown")
@@ -1066,7 +1068,22 @@ function Bridge:force_actions(state, query, action_names, opts)
   self._registered_force_aliases = self._registered_force_aliases or {}
   for i = 1, #wire_names do self._registered_force_aliases[wire_names[i]] = true end
   self._force_alias_to_canonical = self._force_alias_to_canonical or {}
-  for canonical, alias in pairs(active) do self._force_alias_to_canonical[alias] = canonical end
+  self._force_alias_epoch_names = self._force_alias_epoch_names or {}
+  local epoch_names = {}
+  for canonical, alias in pairs(active) do
+    self._force_alias_to_canonical[alias] = canonical
+    epoch_names[#epoch_names + 1] = alias
+  end
+  self._force_alias_epoch_names[epoch] = epoch_names
+  -- A late answer can only name a recent force.
+  -- The counter advances on the early returns above, so the epoch keys have holes.
+  local retire_before = epoch - FORCE_ALIAS_HISTORY
+  for e, retired in pairs(self._force_alias_epoch_names) do
+    if e <= retire_before then
+      for i = 1, #retired do self._force_alias_to_canonical[retired[i]] = nil end
+      self._force_alias_epoch_names[e] = nil
+    end
+  end
   self._active_force_wire_by_canonical = active
   opts = opts or {}
   if G and G.NEURO then G.NEURO.force_generation = tonumber(G.NEURO.run_generation) end
@@ -1118,8 +1135,8 @@ function Bridge:send_action_result(id, success, message)
     return false
   end
   if not committed then return false, receipt end
+  if self._force_answer_ids then self._force_answer_ids[tostring(id)] = nil end
   if close_force then
-    self._force_answer_ids[tostring(id)] = nil
     local aliases = self._registered_force_aliases or {}
     for _, wire_name in pairs(self._active_force_wire_by_canonical or {}) do aliases[wire_name] = nil end
     self._force_open = nil

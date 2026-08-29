@@ -263,6 +263,23 @@ local function receipt_key_store(sc, sw, font, nfont, efont)
   k[10], k[11], k[12], k[13] = sw, font, nfont, efont
 end
 
+-- layout_full reads center_max_w, which eases in 16px buckets while a side panel slides in.
+local function full_key_stale(js, sw, center_max_w, font, nfont, efont)
+  local k = js._Lf_key
+  return k == nil
+    or k[1] ~= sw or k[2] ~= center_max_w
+    or k[3] ~= font or k[4] ~= nfont or k[5] ~= efont
+    or k[6] ~= js.card or k[7] ~= js.label or k[8] ~= js.merged
+end
+
+local function full_key_store(js, sw, center_max_w, font, nfont, efont)
+  local k = js._Lf_key
+  if not k then k = {}; js._Lf_key = k end
+  k[1], k[2] = sw, center_max_w
+  k[3], k[4], k[5] = font, nfont, efont
+  k[6], k[7], k[8] = js.card, js.label, js.merged
+end
+
 local function build_desc(card)
   if not card then return "" end
   local badges = modifier_badges(card)
@@ -505,7 +522,8 @@ local function draw_acquire(ctx)
   if paired and sc and js and not sc._morph_at and morph_at and now >= morph_at then
     sc._morph_at = morph_at
     sc._morph_d = tl.MORPH
-    sc._Lf = layout_full(ctx, { card = sc.card, label = js.label })
+    -- Carries merged, or this layout omits the chip the keyed rebuild below includes.
+    sc._Lf = layout_full(ctx, { card = sc.card, label = js.label, merged = js.merged })
     js._Lf = sc._Lf
     js._morphed = true
     js._fout = tl.OUT
@@ -564,7 +582,10 @@ local function draw_acquire(ctx)
   local w_override
   if mode == "full" then
     card = js.card
-    if not js._Lf then js._Lf = layout_full(ctx, js) end
+    if not js._Lf or full_key_stale(js, me.sw, ctx.center_max_w, font, nfont, efont) then
+      js._Lf = layout_full(ctx, js)
+      full_key_store(js, me.sw, ctx.center_max_w, font, nfont, efont)
+    end
     Lf = js._Lf
   else
     card = sc.card
@@ -799,7 +820,7 @@ local function draw_acquire(ctx)
 
   if Lf and caf > 0 then
     local rise = round((1 - caf) * cn(6))
-    local clip = H.push_clip(g.x, g.y, g.w, g.h)
+    local cl_on, cl_x, cl_y, cl_w, cl_h = H.push_clip(g.x, g.y, g.w, g.h)
     if Lf.badge_layout and Lf.badge_layout.height > 0 then
       draw_modifier_badges(Lf.badge_layout, g.text_x, g.badges_y + rise, a * caf, th, pin_mo(mo))
     end
@@ -808,7 +829,7 @@ local function draw_acquire(ctx)
       dr.draw_desc_lines(Lf.desc_lines, Lf.n_desc, g.text_x, g.desc_y + rise,
         Lf.sfh + 1, a * caf, small_f)
     end
-    H.pop_clip(clip)
+    H.pop_clip(cl_on, cl_x, cl_y, cl_w, cl_h)
   end
 
   if sc and car > 0 then

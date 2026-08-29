@@ -47,13 +47,19 @@ end
 
 local function add(out, kind, text, key, fx)
   if type(text) == "string" and text ~= "" then
-    out[#out + 1] = { kind = kind, text = text, key = key,
-      fx = (type(fx) == "string" and fx ~= "") and fx or nil }
+    local n = out.n + 1
+    local b = out[n]
+    if not b then b = {}; out[n] = b end
+    b.kind, b.text, b.key = kind, text, key
+    b.fx = (type(fx) == "string" and fx ~= "") and fx or nil
+    out.n = n
   end
 end
 
-local function build_badges(card, enhancement)
-  local out = {}
+-- Filled into a reusable list: the revalidate pass rebuilds every card on a timer and throws the
+-- result away whenever nothing moved.
+local function build_badges(card, enhancement, out)
+  out.n = 0
   local ability = card.ability or {}
 
   if ability.eternal then
@@ -80,6 +86,18 @@ local function build_badges(card, enhancement)
   local enh_fx = enhancement and CardUtil.enhancement_fx_short(enhancement) or ""
   add(out, "enhancement", enh_name, enhancement, enh_fx)
 
+  for i = #out, out.n + 1, -1 do out[i] = nil end
+  return out
+end
+
+local _badge_probe = { n = 0 }
+
+local function copy_badges(src)
+  local out = {}
+  for i = 1, #src do
+    local b = src[i]
+    out[i] = { kind = b.kind, text = b.text, key = b.key, fx = b.fx }
+  end
   return out
 end
 
@@ -148,13 +166,13 @@ function M.collect(card)
     or now - cached.checked_at >= COLLECT_REVALIDATE_S
   if inputs_match and not due then return cached.badges end
 
-  local badges = build_badges(card, enhancement)
-  if inputs_match and same_badges(cached.badges, badges) then
+  local probe = build_badges(card, enhancement, _badge_probe)
+  if inputs_match and same_badges(cached.badges, probe) then
     cached.checked_at = now
     return cached.badges
   end
 
-  badges = versioned(badges)
+  local badges = versioned(copy_badges(probe))
   cached = cached or {}
   cached.center = center
   cached.ability = ability

@@ -506,7 +506,7 @@ local function rebuild_rows()
         kind = "row",
         di = i,
         d = d,
-        label = d.label,
+        label = d.parent and ("  " .. d.label) or d.label,
         value = v,
         unit = unit,
         def = d.readonly and "" or (fmt_value(d, d.default) .. (d.unit or "")),
@@ -786,13 +786,20 @@ local function checkbox_on(v)
   return v == true or tostring(v):lower() == "on"
 end
 
+local function parent_off(d)
+  if not (d and d.parent) then return false end
+  local raw = Tuning.get_raw(d.parent)
+  if raw == nil then return false end
+  return not checkbox_on(raw)
+end
+
 local function static_value(d)
-  return d.readonly or d.panel == false or d.kind == "string"
+  return d.readonly or d.panel == false or d.kind == "string" or parent_off(d)
 end
 
 local function page1_adjust(i, dir, mult, now)
   local d = active_defs()[i]
-  if not d or d.readonly or d.panel == false then return end
+  if not d or d.readonly or d.panel == false or parent_off(d) then return end
   if d.values then
     local cur, idx = Tuning.get_raw(d.key), 1
     for k = 1, #d.values do
@@ -977,11 +984,13 @@ local function page1_key(key, now)
       reset_place_key(sel, now)
     elseif it and it.kind == "row" then
       local d = active_defs()[it.di]
-      Tuning.reset(d.key)
-      apply_live(d)
-      vflash_at = now
-      vflash_row = it.di
-      rows_dirty = true
+      if not parent_off(d) then
+        Tuning.reset(d.key)
+        apply_live(d)
+        vflash_at = now
+        vflash_row = it.di
+        rows_dirty = true
+      end
     end
   end
 end
@@ -1361,6 +1370,7 @@ local DESCS = {
   NEURO_SELFTEST_FILTER = "Only run self-test cases matching this text",
   NEURO_SMALL_REGRESSION = "Run the fixed LLM task battery at boot (small regression check)",
   NEURO_CRASH_GUARDS = "Drop throwing deferred events + guard nil-deref UI callbacks (prevents fast-play hardlocks)",
+  NEURO_CONFIRM_HAND = "Require a confirmation before a hand is played; turn off to let play_hand commit on the first send",
   NEURO_CONFIRM_REASON_ALWAYS = "Require a reason on every confirm_play yes, not just when a stronger ready hand is being passed over; turn off for the lighter-friction yes/no-only behavior",
 }
 
@@ -2546,7 +2556,9 @@ local function draw_desc(V)
         dtxt = DESCS[it.d.key] or "No description available"
         hint = DESCS["EXAMPLE_" .. it.d.key] or ("Config key: " .. it.d.key)
         local current = tostring(it.value or "") .. tostring(it.unit or "")
-        if it.d.readonly then
+        if parent_off(it.d) then
+          meta = "Current: " .. current .. "  |  disabled by " .. tostring(it.d.parent)
+        elseif it.d.readonly then
           meta = "Current: " .. current .. "  |  read-only"
         else
           meta = "Current: " .. current .. "  |  Default: " .. tostring(it.def)
