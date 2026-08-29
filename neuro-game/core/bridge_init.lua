@@ -120,6 +120,8 @@ local function setup_text_input()
     local normalized = G.NEURO.egg_input:lower():gsub("%s+", ""):gsub("%-", "")
     if normalized == "neuro" or normalized == "neurosama" then
       local now = neuro_now()
+      local prev = G.NEURO.egg and G.NEURO.egg.img
+      if prev and prev ~= false and prev.release then pcall(prev.release, prev) end
       G.NEURO.egg = {
         expires_at = now + 3,
         text = "Nuero is a cutest little cookie"
@@ -355,6 +357,7 @@ local function hook_love_quit()
         if type(G.NEURO._outbox_flush) == "function" then G.NEURO:_outbox_flush() end
       end)
       pcall(function() require("util.metrics").flush(true) end)
+      pcall(function() require("render.debug_stats").flush_perf() end)
       pcall(function()
         if type(G.NEURO.unregister_all) == "function" then
           G.NEURO:unregister_all()

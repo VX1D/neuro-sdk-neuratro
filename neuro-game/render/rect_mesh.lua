@@ -68,9 +68,21 @@ function RectMesh.put(kind, p1, p2, p3, p4, p5, p6, mesh)
     for n = 2, #cache do
       if cache[n].used < cache[slot].used then slot = n end
     end
+    -- Safe because get/put stamp `used`: a held entry is the most recent, never the LRU minimum.
+    local victim = cache[slot].mesh
+    if victim and victim.release then pcall(victim.release, victim) end
   end
   cache[slot] = { kind = kind, p1 = p1, p2 = p2, p3 = p3, p4 = p4, p5 = p5, p6 = p6,
     mesh = mesh, used = clock }
+end
+
+-- The chunk's mesh cache lives in a local, so a reload would strand it.
+function RectMesh._hot_reload_release()
+  for i = 1, #cache do
+    local m = cache[i] and cache[i].mesh
+    if m and m.release then pcall(m.release, m) end
+  end
+  cache = {}
 end
 
 return RectMesh

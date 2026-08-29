@@ -493,6 +493,11 @@ local function scan_joker_losses(now)
   for sid, until_at in pairs(removal_expected) do
     if until_at <= now then removal_expected[sid] = nil end
   end
+  -- Only claim_expected is weak-keyed. Apart from a consumed claim the sid half shrinks here,
+  -- which the earlier returns can skip; reset_run_state bounds it per run.
+  for sid, until_at in pairs(claim_expected_sid) do
+    if until_at <= now then claim_expected_sid[sid] = nil end
+  end
 end
 
 local showcase_deadline = nil

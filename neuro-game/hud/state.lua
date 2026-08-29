@@ -97,6 +97,9 @@ local function new_state()
     voucher_order = {},
     voucher_anim = {},
     voucher_wrap = {},
+    -- Not weak-keyed: each value holds its own key and LuaJIT has no ephemerons. Bounded by the
+    -- centre roster and cleared below.
+    center_wrap = {},
     voucher_fx = {},
     voucher_seg = {},
     voucher_seg_fit = {},
@@ -125,18 +128,75 @@ end
 local S = new_state()
 S.new_state = new_state
 
+-- Both cache swaps below replace whole tables; the LOVE objects inside hold GPU buffers until a
+-- finalizer runs.
+-- Fields that survive a run reset and a dev-harness swap: the two callers must not drift apart.
+S.PERSISTENT_KEYS = {
+  PERSISTENT_KEYS = true,
+  new_state = true, invalidate_caches = true,
+  release_text_caches = true, on_release_text_caches = true, text_cache_releasers = true,
+  panel_emote_cache = true, neuro_logo = true,
+}
+
+-- Modules that own their own Text caches register here; state.lua cannot require them back.
+-- Keyed, not appended: hud.state is hot-reload-protected while its registrants are not, so a
+-- reload re-runs their module body.
+S.text_cache_releasers = S.text_cache_releasers or {}
+
+function S.on_release_text_caches(key, fn)
+  S.text_cache_releasers[key] = fn
+end
+
+function S.release_text_caches()
+  for _, fn in pairs(S.text_cache_releasers) do pcall(fn) end
+  if type(S.desc_text) == "table" then
+    for _, v in pairs(S.desc_text) do
+      if v and v ~= false and v.release then pcall(v.release, v) end
+    end
+    -- A destroyed handle must never stay reachable.
+    S.desc_text, S.desc_text_keys = {}, {}
+  end
+  if type(S._text_blocks) == "table" then
+    for _, e in pairs(S._text_blocks) do
+      if type(e) == "table" and e.text and e.text.release then pcall(e.text.release, e.text) end
+    end
+    S._text_blocks, S._text_blocks_n = {}, 0
+  end
+end
+
 function S.invalidate_caches()
   TextColors.invalidate()
+  S.release_text_caches()
   S.panel_font, S.panel_font_small = nil, nil
   S.wrap_cache, S.wrap_cache_keys = {}, {}
   S.desc_text, S.desc_text_keys = {}, {}
   S._text_blocks, S._text_blocks_n = {}, 0
+  local Cards = package.loaded["hud.cards"]
+  if Cards and Cards.release_quad_cache then Cards.release_quad_cache(S.quad_cache) end
   S.quad_cache, S.quad_cache_n = {}, 0
   S.desc_cache, S.desc_cache_n = {}, -1
   S.cons_cache, S.cons_cache_n = {}, -1
+  -- The emote records hold an Image and a Quad array, and the footer keeps a record for its
+  -- cross-fade; that reference goes before the Images.
+  if S.ov then S.ov.footer_last_emote, S.ov.footer_prev_emote = nil, nil end
+  if type(S.panel_emote_cache) == "table" then
+    for _, e in pairs(S.panel_emote_cache) do
+      if type(e) == "table" then
+        if e.img and e.img.release then pcall(e.img.release, e.img) end
+        if type(e.quads) == "table" then
+          for i = 1, #e.quads do
+            local q = e.quads[i]
+            if q and q.release then pcall(q.release, q) end
+          end
+        end
+      end
+    end
+  end
   S.panel_emote_cache, S.panel_emote_attempts = {}, {}
+  if S.neuro_logo and S.neuro_logo.release then pcall(S.neuro_logo.release, S.neuro_logo) end
   S.neuro_logo, S.neuro_logo_attempts = nil, 0
   S.voucher_wrap, S.voucher_fx = {}, {}
+  S.center_wrap = {}
   S.voucher_seg, S.voucher_seg_fit = {}, {}
   S.ov.trunc, S.ov.trunc_keys = {}, {}
   S.ov.panel, S.ov.shop, S.ov.pack = {}, {}, {}

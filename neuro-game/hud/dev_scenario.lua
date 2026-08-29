@@ -18,6 +18,13 @@ local _clock = { REAL = 0, TOTAL = 0 }
 local _clock_live = nil
 local _clk_real0, _clk_show0 = 0, 0
 
+local function drop_egg()
+  local egg = G and G.NEURO and G.NEURO.egg
+  local img = egg and egg.img
+  if img and img ~= false and img.release then pcall(img.release, img) end
+  if G and G.NEURO then G.NEURO.egg = nil end
+end
+
 local function real_now()
   local t = _clock_live or (G and G.TIMERS)
   return (t and t.REAL) or 0
@@ -71,7 +78,7 @@ local N_KEYS = {
   "last_action_name", "recent_actions", "dev_footer",
 }
 
-local SWAP_KEEP = { new_state = true, invalidate_caches = true }
+local SWAP_KEEP = S.PERSISTENT_KEYS
 local reset_hud = require("core.neuro_lifecycle").reset_hud_state
 
 local _gstore, _nstore, _hud = nil, nil, nil
@@ -382,7 +389,7 @@ local function build()
   G.NEURO.ai_highlighted = {}
   G.NEURO.ai_glow = {}
   G.NEURO.login_anim = nil
-  G.NEURO.egg = nil
+  drop_egg()
   G.NEURO.reserved_dollars = o.reserved or 0
   G.NEURO.purchase_showcase_queue = nil
   G.NEURO.force_sent_at = nil
@@ -488,7 +495,7 @@ local function restart_take(take_i)
   Showcase.reset_run_state()
   G.NEURO.purchase_showcase_queue = nil
   G.NEURO.login_anim = nil
-  G.NEURO.egg = nil
+  drop_egg()
   G.GAME.pack_choices = nil
   G.pack_cards = StateKinds.is_pack_state(G.NEURO.state or "") and _world.pack or nil
   reset_pack_anim()
@@ -813,7 +820,10 @@ EVENTS.login = {
 
 EVENTS.cookie = {
   span = 4.6,
-  fire = function(_, n) G.NEURO.egg = { text = "dev harness cookie", expires_at = n + 4 } end,
+  fire = function(_, n)
+    drop_egg()
+    G.NEURO.egg = { text = "dev harness cookie", expires_at = n + 4 }
+  end,
 }
 
 local function set_state(st)
@@ -1358,6 +1368,20 @@ function DevScenario.set(on)
     if _gstore and G and G.NEURO then
       swap_all()
       Showcase.reset_run_state()
+      -- S is the harness state in this window, and the nil-out below is the only thing that
+      -- discards it. Its Image caches are shared through SWAP_KEEP; the rest is freed here.
+      if S.release_text_caches then S.release_text_caches() end
+      local Cards = package.loaded["hud.cards"]
+      if Cards and Cards.release_quad_cache then Cards.release_quad_cache(S.quad_cache) end
+      S.quad_cache, S.quad_cache_n = {}, 0
+      -- The emote cache is shared while its retry budget is not, so a harness give-up must not
+      -- outlive it against a counter back at zero.
+      if type(S.panel_emote_cache) == "table" then
+        for name, emote in pairs(S.panel_emote_cache) do
+          if emote == false then S.panel_emote_cache[name] = nil end
+        end
+      end
+      drop_egg()
       swap_all()
     end
     DevScenario.active = false

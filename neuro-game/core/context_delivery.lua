@@ -4,12 +4,16 @@ local Metrics = require("util.metrics")
 
 local MAX_ATTEMPTS = 12
 local TRANSIENT_MEMORY_MAX = 512
+local RULE_MEMORY_MAX = 2048
+local HINT_RULE_PREFIX = "hint:"
 
 local pending = {}
 local delivered = {}
 local delivered_text = {}
 local transient_order = {}
 local transient_count = 0
+local rule_order = {}
+local rule_count = 0
 local transport_epoch = 0
 local seq = 0
 
@@ -66,21 +70,33 @@ local function forget_text(text)
   delivered_text[text] = (n > 0) and n or nil
 end
 
-local function remember(entry)
-  delivered[entry.identity] = entry.text
-  delivered_text[entry.text] = (delivered_text[entry.text] or 0) + 1
-  if entry.kind == "rule" then return end
-  transient_order[#transient_order + 1] = entry.identity
-  transient_count = transient_count + 1
-  while transient_count > TRANSIENT_MEMORY_MAX do
-    local oldest = table.remove(transient_order, 1)
-    transient_count = transient_count - 1
+local function trim(order, count, limit)
+  while count > limit do
+    local oldest = table.remove(order, 1)
+    count = count - 1
     if oldest then
       local text = delivered[oldest]
       delivered[oldest] = nil
       if text ~= nil then forget_text(text) end
     end
   end
+  return count
+end
+
+local function remember(entry)
+  delivered[entry.identity] = entry.text
+  delivered_text[entry.text] = (delivered_text[entry.text] or 0) + 1
+  if entry.kind == "rule" then
+    -- Only hints mint a fresh identity per emission. Glossary and permanent-rule keys are fixed
+    -- and must stay remembered; evicting one resends the whole glossary.
+    if entry.key:sub(1, #HINT_RULE_PREFIX) == HINT_RULE_PREFIX then
+      rule_order[#rule_order + 1] = entry.identity
+      rule_count = trim(rule_order, rule_count + 1, RULE_MEMORY_MAX)
+    end
+    return
+  end
+  transient_order[#transient_order + 1] = entry.identity
+  transient_count = trim(transient_order, transient_count + 1, TRANSIENT_MEMORY_MAX)
 end
 
 local function commit(entry, receipt)
@@ -268,6 +284,8 @@ function M.reset_transport()
   delivered_text = {}
   transient_order = {}
   transient_count = 0
+  rule_order = {}
+  rule_count = 0
 end
 
 local function delivered_view() return delivered end

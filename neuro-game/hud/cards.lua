@@ -5,6 +5,8 @@ Cards._mini_fallback = 0
 Cards._badge_icon_missing = 0
 
 local QUAD_CACHE_MAX = 512
+-- quad_bucket nests ns/prefix/x/y/px/py before the leaf record.
+local QUAD_CACHE_DEPTH = 6
 local _diag_logged = {}
 function Cards.diag_once(key, message)
   if _diag_logged[key] then return false end
@@ -863,110 +865,6 @@ local function glow_alpha(a, attack, lift01)
   return shop_attack01(a, attack_gain(lift01))
 end
 
-local EVIL_GLOW_MAX_DIM = 2048
-local _evil_glow_canvas = nil
-local _evil_glow_canvas_w, _evil_glow_canvas_h = 0, 0
-local _evil_glow_canvas_ok = nil
-local _evil_glow_quad = nil
-
-local function evil_glow_canvas(w, h)
-  if _evil_glow_canvas_ok == false then return nil end
-  if type(love.graphics.newCanvas) ~= "function" then _evil_glow_canvas_ok = false; return nil end
-  if not (_evil_glow_canvas and _evil_glow_canvas_w >= w and _evil_glow_canvas_h >= h) then
-    local nw = math.max(w, _evil_glow_canvas_w, 128)
-    local nh = math.max(h, _evil_glow_canvas_h, 128)
-    local ok, canvas = pcall(love.graphics.newCanvas, nw, nh)
-    if not ok or not canvas then _evil_glow_canvas_ok = false; return nil end
-    if _evil_glow_canvas and _evil_glow_canvas.release then pcall(_evil_glow_canvas.release, _evil_glow_canvas) end
-    _evil_glow_canvas, _evil_glow_canvas_w, _evil_glow_canvas_h = canvas, nw, nh
-    _evil_glow_quad = nil
-  end
-  _evil_glow_canvas_ok = true
-  return _evil_glow_canvas
-end
-
-local function evil_glow_quad(cw, ch)
-  if type(love.graphics.newQuad) ~= "function" then return nil end
-  if _evil_glow_quad then
-    _evil_glow_quad:setViewport(0, 0, cw, ch, _evil_glow_canvas_w, _evil_glow_canvas_h)
-    return _evil_glow_quad
-  end
-  local ok, quad = pcall(love.graphics.newQuad, 0, 0, cw, ch, _evil_glow_canvas_w, _evil_glow_canvas_h)
-  if not ok then return nil end
-  _evil_glow_quad = quad
-  return quad
-end
-
--- Setup runs inside the same pcall as the draw: a throw between binding the canvas and popping
--- would leave the rest of the frame rendering into the glow canvas.
-local _glow_layer_args = {}
-local function _glow_layer_body()
-  local L = _glow_layer_args
-  love.graphics.origin()
-  love.graphics.setCanvas(L.canvas)
-  love.graphics.setScissor(0, 0, L.cw, L.ch)
-  love.graphics.setBlendMode("alpha", "alphamultiply")
-  love.graphics.clear(0, 0, 0, 0)
-  love.graphics.scale(L.eff_scale)
-  love.graphics.translate(-L.X0, -L.Y0)
-  love.graphics.setBlendMode(L.blend_mode, "alphamultiply")
-  L.draw_fn(L.ctx)
-end
-
--- Composites back with a premultiplied blend so add-mode layers still add onto the screen.
-local function evil_glow_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, X0, Y0, blend_mode, draw_fn, ctx)
-  local prev_canvas = love.graphics.getCanvas()
-  local pr, pg, pb, pa = love.graphics.getColor()
-  local pmode, palpha = love.graphics.getBlendMode()
-  local plw = love.graphics.getLineWidth()
-  local psx, psy, psw, psh = love.graphics.getScissor()
-  local pshader = love.graphics.getShader()
-  love.graphics.push()
-  local L = _glow_layer_args
-  L.canvas, L.cw, L.ch, L.eff_scale = canvas, cw, ch, eff_scale
-  L.X0, L.Y0, L.blend_mode, L.draw_fn, L.ctx = X0, Y0, blend_mode, draw_fn, ctx
-  local ok = pcall(_glow_layer_body)
-  love.graphics.pop()
-  if psx then love.graphics.setScissor(psx, psy, psw, psh) else love.graphics.setScissor() end
-  -- getCanvas() returns the target without its attachment flags, and the base game binds its
-  -- canvas with a stencil buffer; restore that explicitly or the rest of the frame loses it.
-  if prev_canvas then
-    if not pcall(love.graphics.setCanvas, { prev_canvas, stencil = true }) then
-      love.graphics.setCanvas(prev_canvas)
-    end
-  else
-    love.graphics.setCanvas()
-  end
-  if ok then
-    love.graphics.push()
-    love.graphics.origin()
-    love.graphics.setBlendMode(blend_mode, "premultiplied")
-    love.graphics.setColor(1, 1, 1, 1)
-    local quad = evil_glow_quad(cw, ch)
-    if quad then
-      love.graphics.draw(canvas, quad, ox_screen, oy_screen)
-    else
-      love.graphics.draw(canvas, ox_screen, oy_screen)
-    end
-    love.graphics.pop()
-  end
-  love.graphics.setBlendMode(pmode, palpha)
-  love.graphics.setLineWidth(plw)
-  love.graphics.setColor(pr, pg, pb, pa)
-  love.graphics.setShader(pshader)
-  return ok
-end
-
-local function glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, X0, Y0, blend_mode, draw_fn, ctx)
-  -- A false return means draw_fn threw; retrying it here would throw again unguarded.
-  if canvas then
-    evil_glow_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, X0, Y0, blend_mode, draw_fn, ctx)
-    return
-  end
-  love.graphics.setBlendMode(blend_mode)
-  draw_fn(ctx)
-end
-
 local _glow_evil_ctx = {}
 
 local function glow_evil_scrim(c)
@@ -1029,54 +927,28 @@ local function glow_evil_mark(c)
   love.graphics.polygon("fill", mx - mw2 * 0.46, c.Y0, mx, c.Y0 - mup * 0.52, mx + mw2 * 0.46, c.Y0, mx, c.Y0 + mdn * 0.53)
 end
 
+local GLOW_EVIL_LAYERS = {
+  { mode = "alpha", fn = glow_evil_scrim },
+  { mode = "add",   fn = glow_evil_pool },
+  { mode = "alpha", fn = glow_evil_border },
+  { mode = "add",   fn = glow_evil_mark },
+}
+
 local function glow_evil(pl, a, W, H, X0, Y0, BW, BH, pulse, commit01, now)
   local ember, gold, hot, glow = pl.D_ORANGE, pl.D_GOLD, pl.D_WHITE, pl.GLOW
   local uu = W * 0.028
   local rr = W * 0.06
-
-  -- Scrim rings reach uu*4 outside the box and the mark's apex sits ~W*0.21 above it; the canvas
-  -- must cover that bleed or those layers get scissored away.
-  local bleed = W * 0.22
-  local GX0, GY0 = X0 - bleed, Y0 - bleed
-  local GBW, GBH = BW + bleed * 2, BH + bleed * 2
-
-  local eff_scale, ox_screen, oy_screen
-  do
-    local ok0, sx0, sy0 = pcall(love.graphics.transformPoint, 0, 0)
-    local ok1, sx1, sy1 = pcall(love.graphics.transformPoint, 1, 0)
-    -- The composite is an axis-aligned blit, so a rotated card has to take the direct path or
-    -- the glow lands unrotated and displaced.
-    local axis_aligned = ok0 and ok1 and type(sy0) == "number" and type(sy1) == "number"
-      and math.abs(sy1 - sy0) < 1e-4
-    if axis_aligned and type(sx0) == "number" and type(sx1) == "number" and sx1 - sx0 > 0 then
-      eff_scale = sx1 - sx0
-      local oko, oxp, oyp = pcall(love.graphics.transformPoint, GX0, GY0)
-      if oko and type(oxp) == "number" and type(oyp) == "number" then
-        ox_screen, oy_screen = oxp, oyp
-      else
-        eff_scale = nil
-      end
-    end
-  end
-  local canvas, cw, ch
-  if eff_scale then
-    cw, ch = math.ceil(GBW * eff_scale), math.ceil(GBH * eff_scale)
-    if cw >= 1 and ch >= 1 and cw <= EVIL_GLOW_MAX_DIM and ch <= EVIL_GLOW_MAX_DIM then
-      canvas = evil_glow_canvas(cw, ch)
-    else
-      cw, ch = nil, nil
-    end
-  end
 
   local c = _glow_evil_ctx
   c.ember, c.gold, c.hot, c.glow = ember, gold, hot, glow
   c.uu, c.rr, c.a, c.W, c.H, c.X0, c.Y0, c.BW, c.BH = uu, rr, a, W, H, X0, Y0, BW, BH
   c.pulse, c.commit01, c.now = pulse, commit01, now
 
-  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "alpha", glow_evil_scrim, c)
-  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "add", glow_evil_pool, c)
-  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "alpha", glow_evil_border, c)
-  glow_evil_run_layer(canvas, cw, ch, eff_scale, ox_screen, oy_screen, GX0, GY0, "add", glow_evil_mark, c)
+  for i = 1, 4 do
+    local L = GLOW_EVIL_LAYERS[i]
+    love.graphics.setBlendMode(L.mode)
+    L.fn(c)
+  end
 
   love.graphics.setBlendMode("alpha")
 end
@@ -1340,7 +1212,21 @@ Cards.card_display_name = card_display_name
 Cards.card_description = Utils.card_description
 Cards.draw_card_mini = draw_card_mini
 Cards.draw_mini_fallback = draw_mini_fallback
+-- Only the explicit teardowns free quads: the overflow flush in cached_quad can fire while a
+-- caller still holds a quad from earlier in the same frame.
+function Cards.release_quad_cache(t, depth)
+  depth = depth or QUAD_CACHE_DEPTH
+  if type(t) ~= "table" then return end
+  if depth == 0 then
+    local q = t.quad
+    if q and q.release then pcall(q.release, q) end
+    return
+  end
+  for _, sub in pairs(t) do Cards.release_quad_cache(sub, depth - 1) end
+end
+
 function Cards.clear_quad_cache()
+  Cards.release_quad_cache(S.quad_cache)
   S.quad_cache = {}
   S.quad_cache_n = 0
 end

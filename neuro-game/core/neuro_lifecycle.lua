@@ -128,13 +128,10 @@ LifecycleRegistry.register_hook("run", "showcase", function()
 end, 70)
 -- Loaded assets are filename-keyed with no per-run state, so they survive a run. Retry budgets
 -- and `false` give-up markers must not, or a transient early-boot failure becomes permanent.
-local HUD_STATE_KEEP = {
-  new_state = true, invalidate_caches = true,
-  panel_emote_cache = true,
-  neuro_logo = true,
-}
 function M.reset_hud_state()
   local S = require("hud.state")
+  local HUD_STATE_KEEP = S.PERSISTENT_KEYS
+  if S.release_text_caches then S.release_text_caches() end
   local fresh = S.new_state()
   for k in pairs(S) do
     if not HUD_STATE_KEEP[k] and fresh[k] == nil then S[k] = nil end

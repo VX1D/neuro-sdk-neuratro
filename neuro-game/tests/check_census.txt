@@ -54,7 +54,7 @@ badge_chip	105		117
 draw_budget	28		32
 text_batch	8		9
 text_block	6		7
-ornament_mesh	21		24
+ornament_mesh	22		25
 divider_ogive	7		8
 canvas_bake	44		49
 persona_hand	11		13
@@ -200,12 +200,12 @@ settle_defer	24		27
 router_latch	12		14
 silence_paths	26		29
 rules_gate	13		15
-play_guard	84		94
+play_guard	84		92
 play_size	39		44
 adv_limits	57		64
 hand_identity	8		9
 confirm_compose	16		18
-confirm_tool	33		37
+confirm_tool	50		56
 weak_final	13		15
 latch_prec	13		15
 loop_escape	90		100
@@ -262,7 +262,7 @@ slot_buffer	4		5
 plan_direct	2		3
 buy_name	8		9
 setup_deck	6		7
-hint_key_shapes	16		18
+hint_key_shapes	17		19
 round_unit	3		4
 fact_owner	6		7
 shop_afford	9		11
@@ -315,10 +315,10 @@ emit_scan	2700	over [0-9]+ sequences	3000
 stale_scan	2700	stale-scan: .*[0-9]+ states	3000
 correction_scan	51333	over [0-9]+ corrections	57037
 offer_scan	2369	offer-scan: .*[0-9]+ states	2633
-deadexport	948	[0-9]+ exports scanned	1054
+deadexport	953	[0-9]+ exports scanned	1059
 deadexp_scope	16		18
 hint_registry	14		16
-context_delivery	9		11
+context_delivery	11		13
 correction_ch	29		33
 guard_confirm	43		48
 confirm_turn	13		15
@@ -391,4 +391,4 @@ deck_commit	12		12
 retained_scope	9		11
 boss_reveal	14		14
 count_agree	6		6
-harness_hyg	16		18
+harness_hyg	16		17

@@ -11,23 +11,33 @@ local function badge_version(badges)
   return type(badges) == "table" and badges._v or nil
 end
 
+local BADGE_WIDTHS_MAX = 32
+
 function Rows.badge_layout(key, badges, font, w, gap, max_rows)
   local version = badge_version(badges)
   if key == nil or version == nil then
     return ModifierBadges.layout(badges, font, w, gap, max_rows)
   end
   local per = _badge_cache[key]
-  if not per then per = {}; _badge_cache[key] = per end
+  if not per then per = { n = 0 }; _badge_cache[key] = per end
   local e = per[w]
   if e and e.font == font and e.gap == gap and e.max_rows == max_rows
     and e.version == version then
     return e.layout
   end
   local layout = ModifierBadges.layout(badges, font, w, gap, max_rows)
-  per[w] = {
-    font = font, gap = gap, max_rows = max_rows,
-    version = version, layout = layout,
-  }
+  if not e then
+    -- Nothing enforces whole widths here, so bound the set against an eased one.
+    if per.n >= BADGE_WIDTHS_MAX then
+      per = { n = 0 }
+      _badge_cache[key] = per
+    end
+    e = {}
+    per[w] = e
+    per.n = per.n + 1
+  end
+  e.font, e.gap, e.max_rows = font, gap, max_rows
+  e.version, e.layout = version, layout
   return layout
 end
 

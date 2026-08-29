@@ -216,8 +216,15 @@ local function pending_matches(selected_cards)
     and pc.content == play_content(selected_cards)
 end
 
+local function confirm_hand_on()
+  local ok, on = pcall(function() return require("core.config").bool("NEURO_CONFIRM_HAND") end)
+  return not ok or on
+end
+M.confirm_hand_on = confirm_hand_on
+
 local function play_confirm_reject(selected_cards, indices)
   if G and G.NEURO and G.NEURO.selftest_active then return nil end
+  if not confirm_hand_on() then return nil end
   if pending_matches(selected_cards) then return nil end
 
   local ok_leg, Legality = pcall(require, "facts.boss.legality")
@@ -610,6 +617,7 @@ local function handle_discard_hand(data)
 end
 
 local function pending_play_confirm()
+  if not confirm_hand_on() then return nil end
   local n = G and G.NEURO
   local pc = n and n.play_confirm
   if not pc then return nil end

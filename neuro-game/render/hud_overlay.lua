@@ -167,15 +167,25 @@ local function evict_tail(keys, limit, remove_one, map)
   return tail
 end
 
+local function release_text(v)
+  if v and v ~= false and v.release then pcall(v.release, v) end
+end
+
 local function drop_key(map, k)
+  release_text(map[k])
   map[k] = nil
 end
+
+-- Assigned once _desc_id_cache exists: evicting a wrapped-lines array can drop the last strong
+-- reference to a weak key there, so free its Texts explicitly.
+local drop_lines_bucket
 
 local function drop_key3(map, k)
   local f, w, t = k[1], k[2], k[3]
   local bw = map[f]
   local bt = bw and bw[w]
   if bt then
+    if drop_lines_bucket then drop_lines_bucket(bt[t]) end
     bt[t] = nil
     if next(bt) == nil then
       bw[w] = nil
@@ -243,17 +253,14 @@ local function trunc(s, max_w, f)
 end
 
 local function wrapped_lines(text, max_w, f)
-  local out = {}
-  if not text or text == "" then return out end
+  if not text or text == "" then return {} end
   f = f or F.font
-  if not f or not max_w or max_w <= 0 then
-    out[1] = tostring(text)
-    return out
-  end
+  if not f or not max_w or max_w <= 0 then return { tostring(text) } end
   local fid = font_cache_id(f)
   local key_text = tostring(text)
   local cached = cache_get3(S.wrap_cache, fid, max_w, key_text)
   if cached then return cached end
+  local out = {}
   local ok, _, lines = pcall(f.getWrap, f, key_text, max_w)
   if not ok then site_fail("font_wrap") end
   if ok and type(lines) == "table" and #lines > 0 then
@@ -319,6 +326,64 @@ local _desc_one = {}
 local _desc_id_cache = setmetatable({}, { __mode = "k" })
 local _desc_id_n = 0
 
+-- Interned once per (font, step, count); the concat runs on every drawn description block.
+local DESC_SUBKEY_MAX = 256
+local _desc_subkeys, _desc_subkeys_n = {}, 0
+local function desc_subkey(f, step, count)
+  local fid = font_cache_id(f)
+  -- Every step in use is an integral font height; an eased one grows this and NaN is no key.
+  if step ~= step then return fid .. "\0" .. tostring(step) .. "\0" .. count end
+  if _desc_subkeys_n >= DESC_SUBKEY_MAX then
+    _desc_subkeys, _desc_subkeys_n = {}, 0
+  end
+  local by_step = _desc_subkeys[fid]
+  if not by_step then by_step = {}; _desc_subkeys[fid] = by_step end
+  local by_count = by_step[step]
+  if not by_count then by_count = {}; by_step[step] = by_count end
+  local k = by_count[count]
+  if not k then
+    k = fid .. "\0" .. step .. "\0" .. count
+    by_count[count] = k
+    _desc_subkeys_n = _desc_subkeys_n + 1
+  end
+  return k
+end
+
+drop_lines_bucket = function(lines)
+  if type(lines) ~= "table" then return end
+  local per = _desc_id_cache[lines]
+  if not per then return end
+  for _, v in pairs(per) do release_text(v) end
+  _desc_id_cache[lines] = nil
+end
+
+local function release_desc_id_cache()
+  for _, sub in pairs(_desc_id_cache) do
+    for _, v in pairs(sub) do release_text(v) end
+  end
+end
+
+if S.on_release_text_caches then
+  -- A reload swaps this chunk and replaces the entry below; drain the outgoing releaser first.
+  local outgoing = S.text_cache_releasers and S.text_cache_releasers["hud_overlay"]
+  if outgoing then pcall(outgoing) end
+  S.on_release_text_caches("hud_overlay", function()
+    release_desc_id_cache()
+    _desc_id_cache = setmetatable({}, { __mode = "k" })
+    _desc_id_n = 0
+    _desc_subkeys, _desc_subkeys_n = {}, 0
+    local Gfx = require("render.gfx")
+    if Gfx.release_text_cache then Gfx.release_text_cache() end
+    local vb = VOUCHER_CTX._text_blocks
+    if type(vb) == "table" then
+      for _, e in pairs(vb) do
+        if type(e) == "table" and e.text and e.text.release then pcall(e.text.release, e.text) end
+      end
+      VOUCHER_CTX._text_blocks, VOUCHER_CTX._text_blocks_n = nil, 0
+    end
+  end)
+end
+
 local function desc_pal_check(pal)
   local changed = false
   for i = 1, #DESC_PAL_KEYS do
@@ -331,8 +396,11 @@ local function desc_pal_check(pal)
     end
   end
   if changed then
+    for _, v in pairs(S.desc_text) do release_text(v) end
     S.desc_text, S.desc_text_keys = {}, {}
+    release_desc_id_cache()
     _desc_id_cache = setmetatable({}, { __mode = "k" })
+    _desc_id_n = 0
   end
 end
 
@@ -386,7 +454,7 @@ local function draw_desc_lines(lines, count, x, y, step, alpha, f)
       -- lines is wrapped_lines' own memoized table, so its identity alone is a valid cache key.
       local per = _desc_id_cache[lines]
       if not per then per = {}; _desc_id_cache[lines] = per end
-      local subkey = font_cache_id(f) .. "\0" .. step .. "\0" .. count
+      local subkey = desc_subkey(f, step, count)
       hit = per[subkey]
       if hit == nil then
         if _desc_id_n >= DESC_TEXT_MAX then
@@ -398,6 +466,7 @@ local function draw_desc_lines(lines, count, x, y, step, alpha, f)
           end
           _desc_id_n = live
           if live >= DESC_TEXT_MAX then
+            release_desc_id_cache()
             _desc_id_cache = setmetatable({}, { __mode = "k" })
             _desc_id_n = 0
             per = {}
@@ -508,38 +577,69 @@ local function cn(v)
   return r < 1 and 1 or r
 end
 
+-- The row emitters live at module scope over these; build_panel_rows runs on a 0.3s safety net.
+local _prows, _srows
+local GOLD, CYAN, RED, WHITE, DIM, ORANGE
+
+local function hdr(color, text)      _prows[#_prows+1] = Rows.header(color, text) end
+local function row(color, text)      _prows[#_prows+1] = Rows.line(color, text) end
+local function sep()                 _prows[#_prows+1] = Rows.sep() end
+
+local function desc_cycle(cards, which)
+  local hidden = 0
+  for _, card in ipairs(cards) do
+    if CardUtil.is_face_down(card) then hidden = hidden + 1 end
+  end
+  if hidden == 0 then
+    if #cards > 0 then _prows[#_prows+1] = Rows.carousel(cards, which) end
+    return
+  end
+  if hidden >= #cards then
+    row(DIM, "Cards are face-down (hidden)")
+    return
+  end
+  -- Rows.carousel keeps this list, so it cannot come from a shared scratch.
+  local visible = {}
+  for _, card in ipairs(cards) do
+    if not CardUtil.is_face_down(card) then visible[#visible+1] = card end
+  end
+  _prows[#_prows+1] = Rows.carousel(visible, which)
+  row(DIM, hidden .. " face-down (hidden)")
+end
+
+local function tag_last(key, val)
+  local r = _prows[#_prows]
+  if r then r.key = key; r.flash_val = tostring(val) end
+end
+
+local function pick_desc_color(text)
+  local t = (text or ""):lower()
+  if t:find("mult")                          then return RED    end
+  if t:find("chip")                          then return CYAN   end
+  if t:find("%$") or t:find("gold") or t:find("money") then return GOLD end
+  if t:find("hand") or t:find("discard")     then return WHITE  end
+  return ORANGE
+end
+
+local function shdr(color, text)  _srows[#_srows+1] = Rows.header(color, text) end
+local function ssub(color, text)  _srows[#_srows+1] = Rows.note(color, text) end
+local function sdesc(color, text) _srows[#_srows+1] = Rows.descwrap(color, text) end
+local function ssep()             _srows[#_srows+1] = Rows.sep() end
+local function scard(color, name, card, cost, afford, badges)
+  _srows[#_srows+1] = Rows.shopcard(color, name, card, cost, afford, nil, badges)
+end
+
+local SHOP_AREAS = {
+  { tag = "Jokers",   label = "shop_jokers" },
+  { tag = "Vouchers", label = "shop_vouchers" },
+  { tag = "Packs",    label = "shop_booster" },
+}
+
 local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg)
-  local GOLD, CYAN, RED, WHITE, DIM, ORANGE =
+  _prows, _srows = panel_rows, shop_rows
+  GOLD, CYAN, RED, WHITE, DIM, ORANGE =
     colors.D_GOLD, colors.D_CYAN,
     colors.D_RED, colors.D_WHITE, colors.D_DIM, colors.D_ORANGE
-
-  local function hdr(color, text)      panel_rows[#panel_rows+1] = Rows.header(color, text) end
-  local function row(color, text)      panel_rows[#panel_rows+1] = Rows.line(color, text) end
-  local function sep()                 panel_rows[#panel_rows+1] = Rows.sep() end
-  local function desc_cycle(cards, which)
-    local hidden = 0
-    for _, card in ipairs(cards) do
-      if CardUtil.is_face_down(card) then hidden = hidden + 1 end
-    end
-    if hidden == 0 then
-      if #cards > 0 then panel_rows[#panel_rows+1] = Rows.carousel(cards, which) end
-      return
-    end
-    if hidden >= #cards then
-      row(DIM, "Cards are face-down (hidden)")
-      return
-    end
-    local visible = {}
-    for _, card in ipairs(cards) do
-      if not CardUtil.is_face_down(card) then visible[#visible+1] = card end
-    end
-    panel_rows[#panel_rows+1] = Rows.carousel(visible, which)
-    row(DIM, hidden .. " face-down (hidden)")
-  end
-  local function tag_last(key, val)
-    local r = panel_rows[#panel_rows]
-    if r then r.key = key; r.flash_val = tostring(val) end
-  end
 
   local in_run = G.STAGE == (G.STAGES and G.STAGES.RUN)
   if in_run and G.GAME then
@@ -585,30 +685,11 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
     panel_rows[#panel_rows + 1] = Rows.emptyslots(climit, "cons")
   end
 
-  local function pick_desc_color(text)
-    local t = (text or ""):lower()
-    if t:find("mult")                          then return RED    end
-    if t:find("chip")                          then return CYAN   end
-    if t:find("%$") or t:find("gold") or t:find("money") then return GOLD end
-    if t:find("hand") or t:find("discard")     then return WHITE  end
-    return ORANGE
-  end
-
   if sn == "SHOP" then
-    local function shdr(color, text)        shop_rows[#shop_rows+1] = Rows.header(color, text) end
-    local function ssub(color, text)        shop_rows[#shop_rows+1] = Rows.note(color, text) end
-    local function sdesc(color, text)       shop_rows[#shop_rows+1] = Rows.descwrap(color, text) end
-    local function ssep()                   shop_rows[#shop_rows+1] = Rows.sep() end
-    local function scard(color, name, card, cost, afford, badges)
-      shop_rows[#shop_rows+1] = Rows.shopcard(color, name, card, cost, afford, nil, badges)
-    end
-
     local spendable = CtxEconomy.spendable()
-    local shop_areas = {
-      {area = G.shop_jokers,   tag = "Jokers",   label = "shop_jokers"},
-      {area = G.shop_vouchers, tag = "Vouchers", label = "shop_vouchers"},
-      {area = G.shop_booster,  tag = "Packs",    label = "shop_booster"},
-    }
+    SHOP_AREAS[1].area, SHOP_AREAS[2].area, SHOP_AREAS[3].area =
+      G.shop_jokers, G.shop_vouchers, G.shop_booster
+    local shop_areas = SHOP_AREAS
     for _, sa in ipairs(shop_areas) do
       if sa.area and sa.area.cards and #sa.area.cards > 0 then
         ssep()
@@ -670,6 +751,9 @@ local function build_panel_rows(sn, panel_rows, shop_rows, pack_rows, colors, pg
       }
     end
   end
+  -- Released with the row handles so a module-scope table does not pin the shop's CardAreas.
+  SHOP_AREAS[1].area, SHOP_AREAS[2].area, SHOP_AREAS[3].area = nil, nil, nil
+  _prows, _srows = nil, nil
 end
 
 local draw_shop_panel = require("render.panels.shop").draw
@@ -943,8 +1027,17 @@ local function draw_neuro_indicator()
     S.ov.footer_last_emote = footer_is_emote and footer_emote or nil
     S.ov.footer_last_quip = quip_display
     S.ov.footer_last_legend = footer_legend
-    S.ov.footer_last_legend_meta = footer_legend_entry
-      and { entry = footer_legend_entry, n = footer_legend_n, i = footer_legend_i } or nil
+    if footer_legend_entry then
+      -- The cross-fade holds the previous table, so reuse only when nothing in it moved.
+      local meta = S.ov.footer_last_legend_meta
+      if not meta or meta.entry ~= footer_legend_entry
+        or meta.n ~= footer_legend_n or meta.i ~= footer_legend_i then
+        meta = { entry = footer_legend_entry, n = footer_legend_n, i = footer_legend_i }
+      end
+      S.ov.footer_last_legend_meta = meta
+    else
+      S.ov.footer_last_legend_meta = nil
+    end
     local footer_fade = smoothstep01(math.min(1, (now - (S.ov.footer_at or now)) / 0.25))
 
     local total_h = title_h + data_h + footer_h
@@ -1119,6 +1212,8 @@ local function draw_neuro_cookie()
     return
   end
   if neuro_now() > G.NEURO.egg.expires_at then
+    local img = G.NEURO.egg.img
+    if img and img ~= false and img.release then pcall(img.release, img) end
     G.NEURO.egg = nil
     return
   end
@@ -1155,6 +1250,9 @@ function HUD.draw_indicator()
   if t0 then
     if DebugStats.note_hud_ms then
       DebugStats.note_hud_ms((love.timer.getTime() - t0) * 1000)
+    end
+    if DebugStats.note_draw_stats and DebugStats.wants_draw_stats() then
+      DebugStats.note_draw_stats()
     end
   end
   return a, b

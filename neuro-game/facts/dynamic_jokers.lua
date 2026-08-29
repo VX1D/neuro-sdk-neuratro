@@ -278,9 +278,16 @@ local FX_SHAPE = {
   xchips = { op = "x", unit = " Chips", skip = 1 },
 }
 
+local _extra_specs_memo = {}
+
 function M.extra_specs(key)
+  if key == nil then return {} end
+  local rows = ROWS[key]
+  local memo = _extra_specs_memo[key]
+  -- ROWS is exported and mutable, so the memo is only valid while it still describes the same rows.
+  if memo and memo.rows == rows then return memo.specs end
   local out = {}
-  for _, row in ipairs(ROWS[key] or {}) do
+  for _, row in ipairs(rows or {}) do
     local shape = FX_SHAPE[row.kind]
     if shape and type(row.from) == "string" and not row.ceiling_from then
       local nest, field = row.from:match("^(extra)%.([%w_]+)$")
@@ -290,6 +297,7 @@ function M.extra_specs(key)
       end
     end
   end
+  _extra_specs_memo[key] = { rows = rows, specs = out }
   return out
 end
 

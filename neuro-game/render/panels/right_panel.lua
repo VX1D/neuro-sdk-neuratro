@@ -38,6 +38,7 @@ local GLITCH_C = { 0.12, 0.80, 0.90 }
 local PLAIN_WHITE = { 1, 1, 1 }
 
 local _ctr_txt = {}
+local _FRAME_OPTS = { quiet = true }
 local function counter_text(i, n)
   local per = _ctr_txt[n]
   if not per then per = {}; _ctr_txt[n] = per end
@@ -79,7 +80,8 @@ local function draw_rp_frame(ctx)
   end
   local re01 = round_eval_flash(now)
   love.graphics.setFont(rfont)
-  H.persona_frame(th, mo, p_x, p_y, pw_total, total_h, rn(1), { sh = rp_sh, rad = rn(9), title_h = title_h, quiet = true })
+  _FRAME_OPTS.sh, _FRAME_OPTS.rad, _FRAME_OPTS.title_h = rp_sh, rn(9), title_h
+  H.persona_frame(th, mo, p_x, p_y, pw_total, total_h, rn(1), _FRAME_OPTS)
   if persona_neuro then
     Prims.valance(p_x, p_y + rn(1), pw_total, rn(1), ACC, pg, 0.9, true)
     for si = 1, 5 do
@@ -224,8 +226,10 @@ local function draw_rp_header(ctx)
     local lw = tracked_width(state_label, TRACK_SM, sl_font)
     local dot_x = tx + lw + r_U + rn(2)
     local dot_gap, dot_r = rn(6), rn(3) / 2
-    caps_label(state_label, tx, sl_y, ACC, 0.82 + 0.12 * quant_alpha(breathe), TRACK_SM, sl_font, 0.32, rn(1),
-      nil, S, "rp_state_label", sl_in)
+    -- Breathe rides the tint, which the text cache does not compare. The shadow is tinted with
+    -- the glyphs and fades with them.
+    caps_label(state_label, tx, sl_y, ACC, 1, TRACK_SM, sl_font, 0.32, rn(1),
+      nil, S, "rp_state_label", (0.82 + 0.12 * quant_alpha(breathe)) * sl_in)
     if persona_evil then
       local fsz = rn(3)
       for di = 0, 2 do
@@ -447,7 +451,9 @@ local function draw_desc_carousel(P)
       love.graphics.setFont(rfont_small)
       local slot_txt = counter_text(cy_slot + 1, n)
       local stw = counter_w(slot_txt, sf)
-      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 0.78 + 0.10 * quant_alpha(pulse), 0.30, rn(1))
+      -- The breathe rides the tint, which the text cache does not compare; in the alpha it would
+      -- rewrite the vertex buffer on every quantised step. The shadow is tinted and fades too.
+      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 1, 0.30, rn(1), false, 0.78 + 0.10 * quant_alpha(pulse))
 
       local strip_h = badge_layout.height
       local desc_lines = (#lns > 0)
@@ -550,7 +556,7 @@ local function draw_rp_rows(ctx)
     local rows_y0 = cy
     local row_sdx = S.right_panel_slide_frac > 0
       and round((me.main_slide_dir or 1) * (pw_total + 20) * S.right_panel_slide_frac) or 0
-    local rows_clip = push_clip(p_x + row_sdx - 2, p_y,
+    local rc_on, rc_x, rc_y, rc_w, rc_h = push_clip(p_x + row_sdx - 2, p_y,
       pw_total + 4, math.max(0, math.min(clip_y, sh) - p_y))
     for c = 2, (me.n_cols_used or n_cols) do
       set_col(FRD, 0.90)
@@ -722,7 +728,12 @@ local function draw_rp_rows(ctx)
         local sy = cy + rn(2)
         local mini_w = 0
         if r.center then
-          local wcard = { config = { center = r.center } }
+          -- Reused per center: a fresh table every frame would miss the card dimension cache.
+          local wcard = S.center_wrap[r.center]
+          if not wcard then
+            wcard = { config = { center = r.center } }
+            S.center_wrap[r.center] = wcard
+          end
           love.graphics.setColor(0, 0, 0, 0.45)
           love.graphics.rectangle("fill", sx - 1, sy - 1, sprite_h * 0.72 + 2, sprite_h + 2)
           mini_w = draw_card_mini(wcard, sx, sy, sprite_h) or 0
@@ -772,7 +783,7 @@ local function draw_rp_rows(ctx)
       end
     end
     love.graphics.setFont(font)
-    pop_clip(rows_clip)
+    pop_clip(rc_on, rc_x, rc_y, rc_w, rc_h)
   end
 end
 
