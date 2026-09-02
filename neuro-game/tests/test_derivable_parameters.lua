@@ -50,7 +50,7 @@ end
 
 do
   blind_board()
-  local text = ContextReadable.build("BLIND_SELECT", { "select_blind", "skip_blind", "set_plan" }) or ""
+  local text = ContextReadable.build("BLIND_SELECT", { "select_blind", "skip_blind", "record_plan" }) or ""
   local missing, leaked = {}, {}
   for name, hd in pairs(HANDS) do
     local present = text:find(name, 1, true) ~= nil
@@ -98,7 +98,7 @@ do
     #rejected == 0, table.concat(rejected, ", "))
 
   blind_board()
-  local text = ContextReadable.build("BLIND_SELECT", { "select_blind", "skip_blind", "set_plan" }) or ""
+  local text = ContextReadable.build("BLIND_SELECT", { "select_blind", "skip_blind", "record_plan" }) or ""
   local advertised = advertised_focus_values(text) or {}
   local refused = {}
   for _, name in ipairs(advertised) do
@@ -146,16 +146,16 @@ do
 
   local blind = {}
   for _, state in ipairs({ "SPLASH", "MENU", "RUN_SETUP", "GAME_OVER", "BLIND_SELECT" }) do
-    local offers = Actions.get_state_action_set(state)["change_selected_back"] == true
+    local offers = Actions.get_state_action_set(state)["select_deck"] == true
     if offers then
       menu_board()
-      local text = ContextReadable.build(state, { "setup_run", "change_selected_back" }) or ""
+      local text = ContextReadable.build(state, { "open_run_setup", "select_deck" }) or ""
       if not (text:find("key b_blue", 1, true) and text:find("key b_yellow", 1, true)) then
         blind[#blind + 1] = state
       end
     end
   end
-  check("every state that registers change_selected_back also lists the deck keys",
+  check("every state that registers select_deck also lists the deck keys",
     #blind == 0, table.concat(blind, ", "))
 end
 

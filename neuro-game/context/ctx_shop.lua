@@ -20,8 +20,8 @@ local REQUIREMENT_ACTIONS = {
   { "buy", "buy_from_shop" },
   { "reroll", "reroll_shop" },
   { "sell", "sell_card" },
-  { "use", "use_card" },
-  { "leave", "toggle_shop" },
+  { "use", "use_consumable" },
+  { "leave", "leave_shop" },
 }
 local PLAN_FIELD_ORDER = { "hand", "build", "money" }
 local ACTION_PHRASE = {
@@ -69,7 +69,7 @@ local function legality_section(state_name, action_set)
       return not not (ok_a and A and A.is_action_valid and A.is_action_valid(name))
     end
     local can_sell = available("sell_card")
-    local can_use = available("use_card") or available("use_directional_card")
+    local can_use = available("use_consumable") or available("use_directional_consumable")
 
     local cheapest, can_buy_any = CtxEconomy.cheapest_buyable(spendable)
 
@@ -95,8 +95,8 @@ local function legality_section(state_name, action_set)
       local ok_a, A = pcall(require, "core.actions")
       return not not (ok_a and A and A.is_action_valid and A.is_action_valid(name))
     end
-    local has_deck_switch = avail("change_selected_back")
-    local can_start = avail("start_setup_run") or avail("start_challenge_run") or avail("setup_run")
+    local has_deck_switch = avail("select_deck")
+    local can_start = avail("start_run") or avail("start_challenge_run") or avail("open_run_setup")
     return string.format("Legality: can start run: %s; can switch deck: %s.", yn(can_start), yn(has_deck_switch))
   end
 

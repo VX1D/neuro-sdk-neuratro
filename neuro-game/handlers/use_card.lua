@@ -16,16 +16,33 @@ local add_area_highlight = GameActions.add_area_highlight
 local mock_UIBox = GameActions.mock_UIBox
 local can_take_pack_card = CardUtil.can_take_pack_card
 
+local function canonical_action(area, directional)
+  local from_pack = area == "booster_pack" or area == "pack_cards"
+  if directional then
+    return from_pack and "choose_directional_pack_card" or "use_directional_consumable"
+  end
+  return from_pack and "choose_pack_card" or "use_consumable"
+end
+
 local function handle_use_card(data)
   local area, card, err = validate_area_card(data)
   if err then return ActionResult.reject("TARGET_UNAVAILABLE", err) end
   local face_down = CardUtil.is_face_down(card)
   local card_name = face_down and "face-down card" or Utils.real_name_or(card)
   local name_err = not face_down and CardArea.check_target_name(card, data.name, data.index, data.area) or nil
+  if name_err and type(data.name) == "string" and data.name ~= "" then
+    local relocated, index = CardArea.find_card_by_name(area, data.name)
+    if relocated and index then
+      data.index, card, name_err = index, relocated, nil
+      face_down = CardUtil.is_face_down(card)
+      card_name = face_down and "face-down card" or Utils.real_name_or(card)
+    end
+  end
   if name_err then return ActionResult.reject("STALE_TARGET", name_err) end
   if require("facts.target_contracts").get(card) and not data._directional_contract then
     return ActionResult.reject("INVALID_SELECTION",
-      "This card has directional targets; use use_directional_card so source and destination are explicit.")
+      "This card has directional targets; use " .. canonical_action(data.area, true)
+        .. " so source and destination are explicit.")
   end
 
   local function queue_pick_showcase(tag, shown_cost, levels)
@@ -49,7 +66,7 @@ local function handle_use_card(data)
     Showcase.enqueue_refusal({ code = "NO_SLOT", card = card, name = card_name,
       action_id = data._action_id })
     return ActionResult.reject("NO_SLOT",
-      string.format("Cannot pick '%s': %s slots are full. Use skip_booster or sell a %s first.", card_name, slot, slot))
+      string.format("Cannot pick '%s': %s slots are full. Use skip_pack or sell a %s first.", card_name, slot, slot))
   end
 
   local has_hand_indices = data.hand_indices and type(data.hand_indices) == "table" and #data.hand_indices > 0
@@ -230,12 +247,13 @@ local function handle_use_card(data)
     if data._action_id == nil then return "Used: " .. card_name end
     return ActionReceipt.create({
       id = tostring(data._action_id or ("use:" .. Utils.now())),
-      name = data._action_name or "use_card",
+      name = data._action_name or canonical_action(data.area, data._directional_contract),
       run_generation = G and G.NEURO and G.NEURO.run_generation,
       deadline = ActionReceipt.now()
         + math.max(4, (pack_pick_delay or Utils.gate_seconds("pack_pick_block", "NEURO_PACK_PICK_DELAY")) + 1),
       timeout_outcome = "ambiguous",
-      correction = "The accepted " .. (data._action_name or "use_card") .. " outcome could not be verified. Inspect the consumable, pack, hand, and resulting state before choosing again.",
+      correction = "The accepted " .. (data._action_name or canonical_action(data.area, data._directional_contract))
+        .. " outcome could not be verified. Inspect the consumable, pack, hand, and resulting state before choosing again.",
       applied_message = "Used: " .. card_name,
       debug = { area = data.area, index = data.index, card = card_name, from_pack = from_pack },
       probe = function()

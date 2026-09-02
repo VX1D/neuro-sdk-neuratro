@@ -4,6 +4,7 @@ local Actions = require("core.actions")
 local StateKinds = require("core.state_kinds")
 local ForceState = require("core.force_state")
 local TransitionGuard = require("core.transition_guard")
+local Utils = require("util.utils")
 
 local function index_range(count)
   count = tonumber(count) or 0
@@ -48,6 +49,10 @@ local function repeat_pressured()
 end
 
 local function pending_gate_note(names)
+  local HandTx = Utils.lazy_require("core.hand_transaction")
+  if HandTx and HandTx.blocks_mutating_actions and HandTx.blocks_mutating_actions() then
+    return ""
+  end
   local ok_dw, DecisionWindow = pcall(require, "core.decision_window")
   if not ok_dw or not DecisionWindow or not DecisionWindow.would_reject then return "" end
   local pressured = repeat_pressured()
@@ -80,15 +85,15 @@ local function menu_action_tree_query(offered)
   offered = offered or {}
   local parts = {
     "Action tree:",
-    "MENU -> setup_run (opens run setup screen to choose deck, stake, seed).",
-    "MENU -> change_selected_back (pick a deck by key).",
-    "MENU -> change_stake (adjust stake).",
+    "MENU -> open_run_setup (opens run setup screen to choose deck, stake, seed).",
+    "MENU -> select_deck (pick a deck by key).",
+    "MENU -> select_stake (adjust stake).",
   }
   if Actions.is_action_valid("copy_seed") then
     parts[#parts + 1] = "MENU -> copy_seed (copy the current seed)."
   end
-  if offered.change_challenge_description then
-    parts[#parts + 1] = "MENU -> change_challenge_description then start_challenge_run (only when challenges are listed)."
+  if offered.select_challenge then
+    parts[#parts + 1] = "MENU -> select_challenge then start_challenge_run (only when challenges are listed)."
   end
   return table.concat(parts, " ")
 end

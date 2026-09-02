@@ -19,17 +19,17 @@ end
 
 local function build()
   local force_actions, can, can_now = ForceHelpers.collect_actions(
-    { "buy_from_shop", "sell_card", "reroll_shop", "use_card", "use_directional_card", "toggle_shop" })
+    { "buy_from_shop", "sell_card", "reroll_shop", "use_consumable", "use_directional_consumable", "leave_shop" })
 
   if Actions.is_action_valid("set_joker_order") then
     force_actions[#force_actions + 1] = "set_joker_order"
     can.set_joker_order = true
   end
-  if Actions.is_action_valid("set_plan") then
-    force_actions[#force_actions + 1] = "set_plan"
+  if Actions.is_action_valid("record_plan") then
+    force_actions[#force_actions + 1] = "record_plan"
   end
-  if Actions.is_action_valid("set_joker_intents") then
-    force_actions[#force_actions + 1] = "set_joker_intents"
+  if Actions.is_action_valid("record_joker_roles") then
+    force_actions[#force_actions + 1] = "record_joker_roles"
   end
   if #force_actions == 0 then
     return nil
@@ -37,8 +37,8 @@ local function build()
   local PlanGate = require("core.plan_gate")
   local buy_locked = PlanGate.buy_locked()
   local plan_revision = PlanGate.shop_needs_revision()
-  if Actions.is_action_valid("set_plan") then can.set_plan = true end
-  if Actions.is_action_valid("set_joker_intents") then can.set_joker_intents = true end
+  if Actions.is_action_valid("record_plan") then can.record_plan = true end
+  if Actions.is_action_valid("record_joker_roles") then can.record_joker_roles = true end
 
   local js = CardUtil.joker_slot_status()
   local joker_slot_warn = ""
@@ -133,7 +133,7 @@ local function build()
     end
     if #needs > 0 then
       shop_target_fact = "Targeting consumables here: " .. table.concat(needs, "; ")
-        .. " -- a targeting consumable is bought first, then applied with use_card and hand_indices. "
+        .. " -- a targeting consumable is bought first, then applied with use_consumable and hand_indices. "
     end
   end
 
@@ -264,12 +264,12 @@ local function build()
     local rendered = collapsed_prompt("sell_card")
     if rendered ~= "" then move_bits[#move_bits + 1] = rendered end
   end
-  if can_now.use_card then
-    local rendered = candidate_prompt("use_card")
+  if can_now.use_consumable then
+    local rendered = candidate_prompt("use_consumable")
     if rendered ~= "" then move_bits[#move_bits + 1] = rendered end
   end
-  if can_now.use_directional_card then
-    move_bits[#move_bits + 1] = ActionRegistry.prompt("use_directional_card")
+  if can_now.use_directional_consumable then
+    move_bits[#move_bits + 1] = ActionRegistry.prompt("use_directional_consumable")
   end
   do
     -- Fail open, as force_router.lua:175 does: an unreadable count must not silently withdraw the
@@ -282,17 +282,17 @@ local function build()
       print("[neuro-game] Could not count untagged jokers for the shop move line: "
         .. tostring(untagged))
     end
-    if Actions.is_action_valid("set_joker_intents")
-        and (not ok_tags or (tonumber(untagged) or 0) > 0) and not can.toggle_shop then
+    if Actions.is_action_valid("record_joker_roles")
+        and (not ok_tags or (tonumber(untagged) or 0) > 0) and not can.leave_shop then
       local ok_prose, prose = pcall(require("core.enforce").untagged_joker_prose)
-      move_bits[#move_bits + 1] = ActionRegistry.prompt("set_joker_intents")
+      move_bits[#move_bits + 1] = ActionRegistry.prompt("record_joker_roles")
         .. ' records what a joker is for'
         .. ((ok_prose and prose) and ('. ' .. prose) or '')
-        .. '. toggle_shop is off the list until every joker has one'
+        .. '. leave_shop is off the list until every joker has one'
     end
   end
-  if can_now.toggle_shop then
-    local exit_bit = render_payload("toggle_shop", payload_with_requirements("toggle_shop", {}))
+  if can_now.leave_shop then
+    local exit_bit = render_payload("leave_shop", payload_with_requirements("leave_shop", {}))
       .. ' to leave the shop, carrying whatever is left in the bank into the next cash-out'
     if PlanGate.joker_order_required() then
       exit_bit = exit_bit .. ' -- ' .. PlanGate.joker_order_prose()
@@ -308,7 +308,7 @@ local function build()
     if can.sell_card and G.jokers and G.jokers.cards and #G.jokers.cards > 0 then
       range_bits[#range_bits + 1] = "jokers " .. ForceHelpers.index_range(#G.jokers.cards)
     end
-    if (can.sell_card or can.use_card or can.use_directional_card)
+    if (can.sell_card or can.use_consumable or can.use_directional_consumable)
       and G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0 then
       range_bits[#range_bits + 1] = "consumeables " .. ForceHelpers.index_range(#G.consumeables.cards)
     end

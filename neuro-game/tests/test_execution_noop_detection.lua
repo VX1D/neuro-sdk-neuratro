@@ -9,6 +9,7 @@ local Execution = require("core.action_execution")
 local Receipt = require("core.action_receipt")
 local Shop = require("handlers.shop_handlers")
 local Hand = require("handlers.hand_handlers")
+local Config = require("core.config")
 local Use = require("handlers.use_card")
 
 local function card(id, set)
@@ -68,12 +69,12 @@ local async_cases = {
   { "reroll_boss", {}, function() G.GAME.round_resets.boss_rerolled = false end },
   { "reroll_shop", {}, function() G.shop = {}; G.NEURO.state = "SHOP" end },
   { "select_blind", { blind = "small" }, function() G.NEURO.state = "BLIND_SELECT" end },
-  { "setup_run", {}, function() G.OVERLAY_MENU = nil end },
+  { "open_run_setup", {}, function() G.OVERLAY_MENU = nil end },
   { "skip_blind", {}, function() G.GAME.blind_on_deck = "Small" end },
-  { "skip_booster", {}, function() G.pack_cards = { cards = {} }; G.GAME.pack_choices = 1 end },
+  { "skip_pack", {}, function() G.pack_cards = { cards = {} }; G.GAME.pack_choices = 1 end },
   { "start_challenge_run", {}, function() G.NEURO.state = "MENU" end },
-  { "start_setup_run", {}, function() G.NEURO.state = "MENU" end },
-  { "toggle_shop", {}, function() G.shop = {}; G.NEURO.state = "SHOP" end },
+  { "start_run", {}, function() G.NEURO.state = "MENU" end },
+  { "leave_shop", {}, function() G.shop = {}; G.NEURO.state = "SHOP" end },
 }
 
 for i, spec in ipairs(async_cases) do
@@ -92,7 +93,7 @@ end
 
 do
   base("MENU")
-  local result = Execution.wrap("start_setup_run", { _action_id = "generation-success" }, function() end)()
+  local result = Execution.wrap("start_run", { _action_id = "generation-success" }, function() end)()
   Receipt.transition(result, "acknowledged")
   Receipt.transition(result, "executing")
   Receipt.transition(result, "verifying")
@@ -103,13 +104,13 @@ end
 
 local sync_cases = {
   { "choose_persona", { persona = "evil" } },
-  { "change_stake", { to_key = 2 } },
-  { "change_selected_back", { back = "b_blue" } },
-  { "change_challenge_description", { id = "new" } },
+  { "select_stake", { to_key = 2 } },
+  { "select_deck", { back = "b_blue" } },
+  { "select_challenge", { id = "new" } },
   { "paste_seed", { seed = "NEW123" } },
   { "toggle_seeded_run", {} },
-  { "set_plan", {} },
-  { "set_joker_intents", { intents = { { index = 1, tag = "CORE" } } } },
+  { "record_plan", {} },
+  { "record_joker_roles", { intents = { { index = 1, tag = "CORE" } } } },
   { "set_joker_order", { from_index = 1, to_index = 2 } },
   { "copy_seed", {} },
 }
@@ -158,6 +159,7 @@ local function hand_noop(action)
     return false
   end
   if action == "play" then
+    Config.set("NEURO_CONFIRM_HAND", "off")
     G.NEURO.play_confirm = {
       signature = Hand.play_signature({ G.hand.cards[1] }),
       content = Hand.play_content({ G.hand.cards[1] }),
@@ -167,7 +169,9 @@ local function hand_noop(action)
     }
   end
   local handler = action == "play" and Hand.handle_play_hand or Hand.handle_discard_hand
-  return handler({ indices = { 1 }, _action_id = action .. "-false" })()
+  local result = handler({ indices = { 1 }, _action_id = action .. "-false" })()
+  if action == "play" then Config.set("NEURO_CONFIRM_HAND", "on") end
+  return result
 end
 
 for _, action in ipairs({ "play", "discard" }) do
@@ -182,7 +186,7 @@ do
   target.can_use_consumeable = function() return false end
   G.consumeables.cards = { target }
   local _, result = Use.handle_use_card({ area = "consumeables", index = 1, _action_id = "use-refused" })
-  check("use_card check_use refusal is rejected before execution",
+  check("use_consumable check_use refusal is rejected before execution",
     type(result) == "table" and result.reason_code == "PRECONDITION_FAILED")
 end
 

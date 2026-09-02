@@ -6,6 +6,14 @@ local UseCard = require("handlers.use_card")
 local Utils = require("util.utils")
 
 local M = {}
+local function ordinary_action(area)
+  return area == "booster_pack" and "choose_pack_card" or "use_consumable"
+end
+
+local function directional_action(area)
+  return area == "booster_pack" and "choose_directional_pack_card" or "use_directional_consumable"
+end
+
 function M.handle(data)
   local _, card, err = CardArea.validate_area_card(data)
   if err then return ActionResult.reject("TARGET_UNAVAILABLE", err) end
@@ -21,7 +29,8 @@ function M.handle(data)
   end
   local contract = Contracts.get(card)
   if not contract or contract.mode ~= "ordered_pair" then
-    return ActionResult.reject("INVALID_SELECTION", "This card has no registered directional target contract; use use_card.")
+    return ActionResult.reject("INVALID_SELECTION",
+      "This card has no registered directional target contract; use " .. ordinary_action(data.area) .. ".")
   end
   local left, right = data.left_index, data.right_index
   if type(left) ~= "number" or left % 1 ~= 0 or type(right) ~= "number" or right % 1 ~= 0 then
@@ -34,7 +43,7 @@ function M.handle(data)
   for k, v in pairs(data) do translated[k] = v end
   translated.hand_indices = { left, right }
   translated._directional_contract = true
-  translated._action_name = "use_directional_card"
+  translated._action_name = directional_action(data.area)
   return UseCard.handle_use_card(translated)
 end
 return M

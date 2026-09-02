@@ -320,7 +320,6 @@ run deliv_bound   "$LUAJIT" tests/test_force_delivery_bound.lua
 run decision_delta "$LUAJIT" tests/test_decision_delta.lua
 run context_lifetime "$LUAJIT" tests/test_context_lifetime_sdk.lua
 run reg_gate      "$LUAJIT" tests/test_registration_gate.lua
-run confirm_rb    "$LUAJIT" tests/test_confirm_rollback.lua
 run resv_owner    "$LUAJIT" tests/test_reservation_ownership.lua
 run tport_reset   "$LUAJIT" tests/test_transport_reset_release.lua
 run provider_err  "$LUAJIT" tests/test_provider_error_surfacing.lua
@@ -388,8 +387,9 @@ run adv_limits    "$LUAJIT" tests/test_advertised_limits.lua
 run hand_identity "$LUAJIT" tests/test_hand_commit_identity.lua
 run confirm_compose "$LUAJIT" tests/test_confirm_play_compose.lua
 run confirm_tool  "$LUAJIT" tests/test_confirm_play_tool.lua
+run hand_tx_arch  "$LUAJIT" tests/test_hand_transaction_architecture.lua
+run context_review "$LUAJIT" tests/test_context_review_architecture.lua
 run weak_final    "$LUAJIT" tests/test_forced_play_weak_pause.lua
-run latch_prec    "$LUAJIT" tests/test_confirm_latch_precedence.lua
 run loop_escape   "$LUAJIT" tests/test_loop_escape.lua
 run press_scope   "$LUAJIT" tests/test_repeat_pressure_scope.lua
 run gate_pressure "$LUAJIT" tests/test_gate_pressure_agreement.lua
@@ -426,12 +426,9 @@ run round_eval_earn "$LUAJIT" tests/test_round_eval_earnings.lua
 run filter_edge_cases "$LUAJIT" tests/test_filter_edge_cases.lua
 run contained_ty  "$LUAJIT" tests/test_contained_types.lua
 run plan_cont     "$LUAJIT" tests/test_plan_continuity.lua
-run sell_guard    "$LUAJIT" tests/test_sell_guardrail.lua
-run pack_sell     "$LUAJIT" tests/test_pack_sell_gate.lua
 run joker_intent   "$LUAJIT" tests/test_joker_intents.lua
 run ctx_prune     "$LUAJIT" tests/test_context_pruning.lua
 run voucher_deliv "$LUAJIT" tests/test_voucher_delivery.lua
-run voucher_confirm "$LUAJIT" tests/test_voucher_confirm.lua
 run stable_epoch  "$LUAJIT" tests/test_stable_epoch.lua
 run stable_live   "$LUAJIT" tests/test_stable_live_values.lua
 run inline_accum  "$LUAJIT" tests/test_inline_accumulator_stability.lua
@@ -513,7 +510,6 @@ run deadexp_scope  "$LUAJIT" tests/test_deadexport_scope.lua
 run hint_registry "$LUAJIT" tests/test_hint_registry.lua
 run context_delivery "$LUAJIT" tests/test_context_delivery.lua
 run correction_ch "$LUAJIT" tests/test_correction_channel.lua
-run guard_confirm "$LUAJIT" tests/test_guarded_confirmation_restate.lua
 run confirm_turn  "$LUAJIT" tests/test_confirm_turn_payload.lua
 run retry_budget  "$LUAJIT" tests/test_force_retry_budget.lua
 run result_oblig  "$LUAJIT" tests/test_result_delivery_obligation.lua

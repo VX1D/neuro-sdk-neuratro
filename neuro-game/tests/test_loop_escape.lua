@@ -10,8 +10,32 @@ local Actions = require("core.actions")
 local Dispatcher = require("core.dispatcher")
 local FS = require("core.force_state")
 local ForceHelpers = require("force.force_helpers")
+local HandTx = require("core.hand_transaction")
+local ConfirmationEvidence = require("core.confirmation_evidence")
+local HandHandlers = require("handlers.hand_handlers")
 
 local play_card = require("tests.helpers").play_card
+
+local function open_hand_transaction(indices, promote, rendered)
+  HandTx.invalidate(nil, "test_replace")
+  local cards = {}
+  for i, index in ipairs(indices) do cards[i] = G.hand.cards[index] end
+  local tx = assert(HandTx.create({
+    signature = HandHandlers.play_signature(cards),
+    content = HandHandlers.play_content(cards),
+    indices = indices,
+    context_revision = HandTx.context_revision(),
+    hand_type = "Pair",
+  }))
+  if promote then
+    local candidate = ConfirmationEvidence.candidate(tx.signature, tx.content,
+      indices, "Pair", tx.id, tx.context_revision)
+    assert(ConfirmationEvidence.stage(candidate, rendered or "Committing Pair.",
+      { status = "written" }))
+    assert(ConfirmationEvidence.step_delivery())
+  end
+  return tx
+end
 
 local function selecting_hand_env(t)
   G.TIMERS.REAL = t
@@ -230,9 +254,8 @@ do
   check("and it is the only frame -- no permanent context follows it",
     #b.log == 1, trace)
   local correction = G.NEURO.last_failed_correction
-  check("the correction is on the ephemeral force channel instead",
-    type(correction) == "string" and correction ~= ""
-      and ForceHelpers.failed_action_warning():find(correction, 1, true) ~= nil,
+  check("strict resolution acknowledgements do not manufacture a failure correction",
+    correction == nil and ForceHelpers.failed_action_warning() == "",
     tostring(correction) .. " || " .. ForceHelpers.failed_action_warning())
 end
 
@@ -301,6 +324,7 @@ do
   local b = armed_bridge()
   b.send_action_result = function(_self, _id, _ok, _msg, reason)
     codes[#codes + 1] = tostring(reason)
+    return true, { status = "written" }
   end
   require("core.tx_cache").reset()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
@@ -310,11 +334,11 @@ do
     data = { id = "rc-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   check("the first selection arms a confirmation",
     codes[1] == "CONFIRMATION_REQUIRED", tostring(codes[1]))
-  check("the latch is armed", G.NEURO.play_confirm ~= nil)
+  check("the latch is armed", HandTx.current() ~= nil)
 
   Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 2 }, b)
   check("reconnect drops the pending confirmation",
-    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
+    HandTx.current() == nil, tostring(HandTx.current()))
 
   arm_force()
   Dispatcher.handle_message({ command = "action",
@@ -327,36 +351,36 @@ do
   selecting_hand_env(700)
   G.NEURO = { enabled = true, decision_serial = 9 }
   local HH = require("handlers.hand_handlers")
-  G.NEURO.play_confirm = { signature = "1,2", content = "c12", indices = { 1, 2 },
-    decision_serial = 9, run_generation = 0 }
+  open_hand_transaction({ 1, 2 }, true, "Committing Pair A.")
   local first_pend = HH.pending()
   local first = first_pend and first_pend.indices
   check("the armed selection is announced",
     first and table.concat(first, ",") == "1,2", first and table.concat(first, ",") or "nil")
 
-  G.NEURO.play_confirm = { signature = "3,4", content = "c34", indices = { 3, 4 },
-    decision_serial = 9, run_generation = 0 }
+  local _, replace_error = HH.handle_play_hand({ indices = { 3, 4 } })
   local newest_pend = HH.pending()
   local newest = newest_pend and newest_pend.indices
-  check("arming a different selection replaces the announcement outright -- one slot, not two",
-    newest and table.concat(newest, ",") == "3,4", newest and table.concat(newest, ",") or "nil")
+  check("strict resolution prevents a different selection replacing the announcement",
+    replace_error and replace_error.reason_code == "POLICY_ACKNOWLEDGED"
+      and newest and table.concat(newest, ",") == "1,2",
+    newest and table.concat(newest, ",") or "nil")
 end
 
 do
   selecting_hand_env(800)
   G.NEURO = { enabled = true, decision_serial = 3, transport_session = 1,
     dispatcher = Dispatcher, actions = Actions }
-  G.NEURO.play_confirm = { signature = "1,2", content = "c12", indices = { 1, 2 },
-    decision_serial = 3, run_generation = 0 }
-  G.NEURO.last_sell_reject = "sell:0:7"
+  open_hand_transaction({ 1, 2 }, false)
+  G.NEURO.context_reviews = { sell_joker = { kind = "sell_joker", phase = "reviewed",
+    context_key = "stale", run_generation = 0, state_enter_serial = 0 } }
   local b = armed_bridge()
   b.send_action_result = function() end
 
   Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 1 }, b)
   check("an unchanged transport_session still drops the play_hand confirmation",
-    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
-  check("it drops the pending sell confirmation too",
-    G.NEURO.last_sell_reject == nil, tostring(G.NEURO.last_sell_reject))
+    HandTx.current() == nil, tostring(HandTx.current()))
+  check("it drops pending soft reviews too",
+    G.NEURO.context_reviews == nil, tostring(G.NEURO.context_reviews))
 end
 
 do
@@ -396,26 +420,33 @@ do
   selecting_hand_env(1100)
   G.NEURO = { enabled = true, decision_serial = 4, transport_session = 1,
     dispatcher = Dispatcher, actions = Actions }
-  G.NEURO.last_sell_reject = "x"
-  G.NEURO.play_confirm = "x"
+  G.NEURO.context_reviews = { sell_joker = { kind = "sell_joker", phase = "reviewed" } }
+  open_hand_transaction({ 1, 2 }, false)
   G.NEURO.weak_fired_serial = 4
   require("core.neuro_lifecycle").clear_pending_confirm()
   local leftover = {}
-  for _, field in ipairs({ "play_confirm", "weak_fired_serial", "last_sell_reject" }) do
+  for _, field in ipairs({ "weak_fired_serial", "context_reviews" }) do
     if G.NEURO[field] ~= nil then leftover[#leftover + 1] = field end
   end
   check("clear_pending_confirm leaves no confirmation field behind",
-    #leftover == 0, table.concat(leftover, ", "))
+    #leftover == 0 and HandTx.current() == nil, table.concat(leftover, ", "))
 end
 
 do
   local SH = require("handlers.shop_handlers")
-  _G.G.NEURO = { enabled = true, state_enter_serial = 5 }
+  _G.G.NEURO = { enabled = true, state = "SHOP", state_enter_serial = 5,
+    run_generation = 1, shop_visit_epoch = 1 }
+  _G.G.GAME = { dollars = 10, used_vouchers = {} }
+  _G.G.STATES = { SHOP = 1 }
+  _G.G.STATE = 1
   _G.G.jokers = { cards = { { sort_id = 77, ability = { set = "Joker", name = "Bull" },
     config = { center = { name = "Bull" } } } }, config = { card_limit = 5 } }
   check("no sell confirmation means no line", SH.pending_sell_card_name() == nil)
 
-  G.NEURO.last_sell_reject = "sell:5:77"
+  local _, review = SH.handle_sell_card({ area = "jokers", index = 1, name = "Bull" })
+  local CR = require("core.context_review")
+  CR.stage(review.context_review_candidate, { status = "written" })
+  CR.step_delivery()
   check("an armed sell confirmation names the joker",
     SH.pending_sell_card_name() ~= nil, tostring(SH.pending_sell_card_name()))
 
@@ -449,9 +480,7 @@ do
   selecting_hand_env(1300)
   G.NEURO = { enabled = true, decision_serial = 7 }
   local HH = require("handlers.hand_handlers")
-  local sel = { G.hand.cards[1], G.hand.cards[2], G.hand.cards[3] }
-  G.NEURO.play_confirm = { signature = HH.play_signature(sel), content = HH.play_content(sel),
-    indices = { 1, 2, 3 }, decision_serial = 7, run_generation = 0 }
+  open_hand_transaction({ 1, 2, 3 }, true, "Committing three cards.")
   check("the full latched hand is announced",
     #((HH.pending() or {}).indices or {}) == 3)
 
@@ -465,10 +494,10 @@ do
   G.NEURO = { enabled = true, decision_serial = 7, weak_fired_serial = 7 }
   local HH = require("handlers.hand_handlers")
   local sel = { G.hand.cards[1], G.hand.cards[2] }
-  G.NEURO.play_confirm = { signature = HH.play_signature(sel), content = HH.play_content(sel),
-    indices = { 1, 2 }, decision_serial = 7, run_generation = 0 }
-  check("an unchanged resend still commits",
-    HH.play_confirm_reject(sel, { 1, 2 }) == nil)
+  open_hand_transaction({ 1, 2 }, false)
+  local unchanged, unchanged_classes = HH.play_confirm_reject(sel, { 1, 2 })
+  check("an unchanged resend does not commit",
+    unchanged ~= nil and unchanged_classes and unchanged_classes.pending_repeat == true)
 
   G.hand.cards[1].base.value = "King"
   G.hand.cards[1].base.suit = "Clubs"
@@ -491,15 +520,15 @@ do
     STATES = { BUFFOON_PACK = 9 }, STATE = 9, TIMERS = { REAL = 100 } }
   local DW = require("core.decision_window")
   DW.reset_field("pack_review")
-  local note = ForceHelpers.pending_gate_note({ "use_card", "skip_booster" })
+  local note = ForceHelpers.pending_gate_note({ "choose_pack_card", "skip_pack" })
   check("an armed window is announced before she bounces off it",
-    note:find("use_card", 1, true) ~= nil and note:find("confirmation", 1, true) ~= nil, note)
+    note:find("choose_pack_card", 1, true) ~= nil and note:find("confirmation", 1, true) ~= nil, note)
 
-  DW.evaluate("use_card", nil)
-  DW.acknowledge("use_card")
+  DW.evaluate("choose_pack_card", nil)
+  DW.acknowledge("choose_pack_card")
   check("once acknowledged it stops being announced",
-    ForceHelpers.pending_gate_note({ "use_card" }) == "",
-    ForceHelpers.pending_gate_note({ "use_card" }))
+    ForceHelpers.pending_gate_note({ "choose_pack_card" }) == "",
+    ForceHelpers.pending_gate_note({ "choose_pack_card" }))
 end
 
 do
@@ -515,15 +544,15 @@ do
     hand = { cards = {}, config = { card_limit = 8 } }, deck = { cards = {} } }
   local untagged = require("facts.card_util").untagged_joker_count()
   check("the fixture really is a shop with an untagged joker", untagged > 0, tostring(untagged))
-  check("toggle_shop is withheld until tagging is done",
-    require("core.actions").is_action_valid("toggle_shop") == false)
+  check("leave_shop is withheld until tagging is done",
+    require("core.actions").is_action_valid("leave_shop") == false)
   local ok_r, routed = pcall(require("force.force_router").get_force_for_state, "SHOP")
   check("a force is still produced instead of silence",
     ok_r and routed ~= nil and routed.actions ~= nil, tostring(ok_r) .. " " .. tostring(routed))
   local names = {}
   for _, n in ipairs((routed and routed.actions) or {}) do names[#names + 1] = n end
   check("and it offers the action that actually unblocks the shop",
-    table.concat(names, ","):find("set_joker_intents", 1, true) ~= nil, table.concat(names, ","))
+    table.concat(names, ","):find("record_joker_roles", 1, true) ~= nil, table.concat(names, ","))
 end
 
 do
@@ -545,11 +574,11 @@ do
     blocked_over("play_hand", function(i)
       return (i % 2 == 0) and '{"indices":[1,2]}' or '{"indices":[2,1]}' end) > 0)
   check("reordered hand_indices are one selection",
-    blocked_over("use_card", function(i)
+    blocked_over("choose_pack_card", function(i)
       return (i % 2 == 0) and '{"area":"consumeables","index":1,"hand_indices":[1,2]}'
         or '{"area":"consumeables","index":1,"hand_indices":[2,1]}' end) > 0)
   check("reordered intents are one tagging",
-    blocked_over("set_joker_intents", function(i)
+    blocked_over("record_joker_roles", function(i)
       return (i % 2 == 0) and '{"intents":[{"index":1,"tag":"CORE"},{"index":2,"tag":"HOLD"}]}'
         or '{"intents":[{"index":2,"tag":"HOLD"},{"index":1,"tag":"CORE"}]}' end) > 0)
   check("a repeated unparseable payload is capped like any other repeat",
@@ -611,8 +640,7 @@ do
   require("tests.helpers").stage_registered(nil, { "play_hand" })
   G.NEURO.force_inflight = false
   FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
-  G.NEURO.play_confirm = { signature = "1,2", content = require("handlers.hand_handlers").play_content(
-    { G.hand.cards[1], G.hand.cards[2] }), indices = { 1, 2 }, decision_serial = 5, run_generation = 0 }
+  open_hand_transaction({ 1, 2 }, true, "Committing Pair.")
 
   G.NEURO.llm_paused = true
   Dispatcher.route_message({ command = "action",
@@ -694,14 +722,10 @@ end
 do
   selecting_hand_env(2100)
   G.NEURO = { enabled = true, decision_serial = 4, run_generation = 1 }
-  G.NEURO.play_confirm = { signature = "old", content = "old", indices = { 1 } }
+  open_hand_transaction({ 1 }, false)
   require("core.neuro_lifecycle").reset_run_state()
-  local leftover = {}
-  for _, f in ipairs({ "play_confirm" }) do
-    if G.NEURO[f] ~= nil then leftover[#leftover + 1] = f end
-  end
   check("a new run inherits no confirmation state from the old one",
-    #leftover == 0, table.concat(leftover, ", "))
+    HandTx.current() == nil, tostring(HandTx.current()))
 end
 
 do
@@ -790,19 +814,18 @@ do
   selecting_hand_env(2600)
   G.NEURO = { enabled = true, decision_serial = 5, once_serials = {}, state_enter_serial = 1 }
   G.GAME.blind = { chips = 300, debuff = {}, config = { blind = {} } }
-  G.NEURO.play_confirm = { signature = "1,2", content = require("handlers.hand_handlers").play_content(
-    { G.hand.cards[1], G.hand.cards[2] }), indices = { 1, 2 }, decision_serial = 5, run_generation = 0 }
+  local HH = require("handlers.hand_handlers")
+  local GOLDEN = "Committing Pair -- Call resolve_play with transaction_id and answer yes to commit this play."
+  open_hand_transaction({ 1, 2 }, true, GOLDEN)
 
   local pending = require("handlers.hand_handlers").pending()
   check("the confirmation the sentence describes is actually open",
     type(pending) == "table" and table.concat(pending.indices, ",") == "1,2", tostring(pending))
 
   local q = (require("force.force_selecting_hand").build() or {}).query or ""
-  local GOLDEN = "A play_hand confirmation is open for indices [1,2];"
-    .. " any other selection gets its own confirmation first. "
   check("the force states the open confirmation verbatim", q:find(GOLDEN, 1, true) ~= nil, q)
 
-  G.NEURO.play_confirm = nil
+  HandTx.invalidate(nil, "test_clear")
   local q2 = (require("force.force_selecting_hand").build() or {}).query or ""
   check("the force really was rebuilt after the latch was cleared",
     q2:find("State: SELECTING_HAND.", 1, true) ~= nil, q2)

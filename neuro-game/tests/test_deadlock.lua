@@ -630,7 +630,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "SHOP", desc = "$0 nothing to sell (toggle_shop must survive)",
+  { state = "SHOP", desc = "$0 nothing to sell (leave_shop must survive)",
     mock = function()
       local g = base_game()
       g.dollars = 0
@@ -732,7 +732,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "SHOP", desc = "Everything blocked except toggle_shop",
+  { state = "SHOP", desc = "Everything blocked except leave_shop",
     mock = function()
       local g = base_game()
       g.dollars = 0
@@ -936,7 +936,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "GAME_OVER", desc = "No overlay (setup_run must work)", no_force = true,
+  { state = "GAME_OVER", desc = "No overlay (open_run_setup must work)", no_force = true,
     mock = function()
       return {
         GAME = base_game(),
@@ -1014,8 +1014,8 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "MENU", desc = "gameover_hold leaked past GAME_OVER: MENU must still force setup_run (the hang)",
-    require_actions = { "setup_run" },
+  { state = "MENU", desc = "gameover_hold leaked past GAME_OVER: MENU must still force open_run_setup (the hang)",
+    require_actions = { "open_run_setup" },
     mock = function()
       return {
         GAME = base_game(),
@@ -1376,7 +1376,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "SELECTING_HAND", desc = "Has consumable but hand is empty", require_actions = { "use_card" },
+  { state = "SELECTING_HAND", desc = "Has consumable but hand is empty", require_actions = { "use_consumable" },
     mock = function()
       local con = make_card({ ability = { set = "Planet", name = "Jupiter", consumeable = { hand_type = "Flush" } } })
       return {
@@ -1913,7 +1913,7 @@ local SCENARIOS = {
     end,
   },
 
-  { state = "SELECTING_HAND", desc = "Has jokers + consumable, 0 hands, 0 discards", require_actions = { "use_card" },
+  { state = "SELECTING_HAND", desc = "Has jokers + consumable, 0 hands, 0 discards", require_actions = { "use_consumable" },
     mock = function()
       local g = base_game()
       g.current_round.hands_left = 0
@@ -1933,7 +1933,7 @@ local SCENARIOS = {
   },
 
   { state = "SELECTING_HAND", desc = "Empty hand AND empty deck, consumable held",
-    require_actions = { "use_card" },
+    require_actions = { "use_consumable" },
     mock = function()
       local con = make_card({ ability = { set = "Planet", name = "Jupiter", consumeable = { hand_type = "Flush" } } })
       return {

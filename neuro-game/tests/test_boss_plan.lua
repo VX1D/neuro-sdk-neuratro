@@ -156,13 +156,13 @@ do
   end
   check("select_blind advertises plan.boss_plan, because that is where the rule is stated",
     plan_props("select_blind").boss_plan ~= nil)
-  for _, name in ipairs({ "buy_from_shop", "sell_card", "use_card", "reroll_shop", "toggle_shop" }) do
+  for _, name in ipairs({ "buy_from_shop", "sell_card", "use_consumable", "reroll_shop", "leave_shop" }) do
     check(name .. " no longer advertises plan.boss_plan", plan_props(name).boss_plan == nil)
   end
-  local set_plan = Registry.get("set_plan")
-  check("set_plan no longer advertises boss_plan", set_plan.schema.properties.boss_plan == nil)
-  check("set_plan description no longer mentions boss_plan",
-    set_plan.description:find("boss_plan", 1, true) == nil, set_plan.description)
+  local record_plan = Registry.get("record_plan")
+  check("record_plan no longer advertises boss_plan", record_plan.schema.properties.boss_plan == nil)
+  check("record_plan description no longer mentions boss_plan",
+    record_plan.description:find("boss_plan", 1, true) == nil, record_plan.description)
   for _, name in ipairs({ "play_hand", "discard_hand" }) do
     local props = plan_props(name)
     check(name .. " still advertises plan.boss_plan",
@@ -261,7 +261,7 @@ do
     NEURO = { once_serials = {}, plan = nil }, jokers = { cards = {} }, consumeables = { cards = {} },
   }
   local scope_before = PlanGate.current_boss_scope()
-  local commit = PlanHandlers.handle_set_plan({ boss_plan = "Hearts score 0, do not build on Hearts" })
+  local commit = PlanHandlers.handle_record_plan({ boss_plan = "Hearts score 0, do not build on Hearts" })
   check("a boss rule stated at blind select prepares", type(commit) == "function")
 
   G.GAME.round_resets.blind_states.Boss = "Current"
@@ -285,7 +285,7 @@ do
         blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_head" } } },
     NEURO = { once_serials = {}, plan = nil }, jokers = { cards = {} }, consumeables = { cards = {} },
   }
-  local commit = PlanHandlers.handle_set_plan({ boss_plan = "should not stick" })
+  local commit = PlanHandlers.handle_record_plan({ boss_plan = "should not stick" })
   if type(commit) == "function" then commit() end
   check("selecting a non-boss blind does not write a boss rule",
     not (G.NEURO.plan and G.NEURO.plan.boss), G.NEURO.plan and tostring(G.NEURO.plan.boss))

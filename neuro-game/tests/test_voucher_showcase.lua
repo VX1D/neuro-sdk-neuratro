@@ -106,7 +106,12 @@ local function redeem(card, key)
     end
     return true
   end
-  ShopHandlers.handle_buy_from_shop({ area = "shop_vouchers", index = 1 })
+  local _, review = ShopHandlers.handle_buy_from_shop({ area = "shop_vouchers", index = 1 })
+  local CR = require("core.context_review")
+  if review and review.context_review_candidate then
+    CR.stage(review.context_review_candidate, { status = "written" })
+    CR.step_delivery()
+  end
   local exec = ShopHandlers.handle_buy_from_shop({ area = "shop_vouchers", index = 1 })
   if type(exec) ~= "function" then return nil, tostring(exec) end
   exec()

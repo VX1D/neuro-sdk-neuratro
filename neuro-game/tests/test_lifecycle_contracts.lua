@@ -45,13 +45,13 @@ local bridge = {
 }
 do
   local FS = require("core.force_state")
-  FS.arm(G.NEURO.state or "SHOP", { "set_plan" }, { set_plan = true }, 0)
+  FS.arm(G.NEURO.state or "SHOP", { "record_plan" }, { record_plan = true }, 0)
   FS.mark_sent(0)
   G.NEURO.force_generation = 4
 end
 Dispatcher.route_message({
   command = "action",
-  data = { id = "stale", name = "set_plan", data = {} },
+  data = { id = "stale", name = "record_plan", data = {} },
 }, bridge)
 check("generation: stale inbound action is rejected before dispatch",
   #results == 1 and results[1].code == "STALE_GENERATION",
@@ -61,7 +61,7 @@ check("generation: a rejection does not re-arm the force",
 G.NEURO.force_generation = G.NEURO.run_generation
 Dispatcher.route_message({
   command = "action",
-  data = { id = "current", name = "set_plan", data = {} },
+  data = { id = "current", name = "record_plan", data = {} },
 }, bridge)
 check("generation: an answer to an offer asked in the current generation passes the gate",
   #results == 2 and results[2].code ~= "STALE_GENERATION", results[2] and results[2].code)
@@ -91,7 +91,7 @@ check("lifecycle: run reset preserves settled action ids for transport redeliver
 local replayed = {}
 Dispatcher.route_message({
   command = "action", run_generation = G.NEURO.run_generation,
-  data = { id = "run-reset-id", name = "set_plan", data = {} },
+  data = { id = "run-reset-id", name = "record_plan", data = {} },
 }, {
   send_action_result = function(_, id, ok, message)
     replayed[#replayed + 1] = { id = id, ok = ok, message = message }
@@ -130,7 +130,7 @@ do
 end
 
 local PlanGate = require("core.plan_gate")
-local PlanHandler = require("handlers.plan_handlers").handle_set_plan
+local PlanHandler = require("handlers.plan_handlers").handle_record_plan
 G.STATE = states.SHOP
 G.NEURO.economy_epoch = 0
 G.NEURO.shop_visit_epoch = 0

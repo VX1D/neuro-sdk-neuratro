@@ -133,8 +133,8 @@ do
   local shop = Actions.get_state_action_set("SHOP")
   local re = Actions.get_state_action_set("ROUND_EVAL")
 
-  check("set_plan stays registered in ROUND_EVAL, so she can still revise the plan there",
-    re.set_plan == true)
+  check("record_plan stays registered in ROUND_EVAL, so she can still revise the plan there",
+    re.record_plan == true)
   check("but the ROUND_EVAL force offers cash_out alone", (function()
     local overlay = G.OVERLAY_MENU
     G.OVERLAY_MENU = nil
@@ -145,9 +145,9 @@ do
       table.concat(force.actions, ",")
   end)())
 
-  check("set_joker_intents is not registered in SELECTING_HAND", sh.set_joker_intents ~= true)
-  check("set_joker_intents stays registered in SHOP, where it is offered",
-    shop.set_joker_intents == true)
+  check("record_joker_roles is not registered in SELECTING_HAND", sh.record_joker_roles ~= true)
+  check("record_joker_roles stays registered in SHOP, where it is offered",
+    shop.record_joker_roles == true)
 
   local REMOVED = { "help", "quick_status", "full_game_context", "shop_context", "owned_vouchers",
     "round_history", "scoring_explanation", "consumables_info", "blind_info", "hand_levels_info",
@@ -163,6 +163,19 @@ do
     tostring(#Registry.definitions()))
   check("no removed information action is registered in any state",
     #resurrected == 0, table.concat(resurrected, ", "))
+
+  local RETIRED_ACTIONS = {
+    "confirm_play", "use_card", "use_directional_card", "toggle_shop", "skip_booster",
+    "setup_run", "start_setup_run", "change_selected_back", "change_stake",
+    "change_challenge_description", "set_joker_intents", "set_plan",
+  }
+  local retired_set, retired_found = {}, {}
+  for _, name in ipairs(RETIRED_ACTIONS) do retired_set[name] = true end
+  for _, definition in ipairs(Registry.definitions()) do
+    if retired_set[definition.name] then retired_found[#retired_found + 1] = definition.name end
+  end
+  check("no retired action alias survives in the model registry",
+    #retired_found == 0, table.concat(retired_found, ", "))
   check("cash_out stays the progress action of ROUND_EVAL", re.cash_out == true)
 end
 

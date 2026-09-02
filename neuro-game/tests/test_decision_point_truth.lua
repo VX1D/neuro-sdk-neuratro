@@ -66,7 +66,7 @@ end
 
 do
   shop_G()
-  with_valid({ buy_from_shop = true, sell_card = true, toggle_shop = true }, function()
+  with_valid({ buy_from_shop = true, sell_card = true, leave_shop = true }, function()
     local q = shop_query()
     check("the slot-blocked shop rows are named where the decision is made",
       q:find("Your cash covers shop_jokers 1-2", 1, true) ~= nil, q)
@@ -104,7 +104,7 @@ do
         min_highlighted = 1 } },
       config = { center = { key = "c_fool", set = "Tarot", name = "The Fool",
         loc_txt = { name = "The Fool", text = { "Its rule" } } } } } }
-  with_valid({ buy_from_shop = true, sell_card = true, toggle_shop = true }, function()
+  with_valid({ buy_from_shop = true, sell_card = true, leave_shop = true }, function()
     local q = shop_query()
     check("with no consumable for sale the consumable-slot rule is not restated",
       q:find("Buying a tarot/planet/spectral card TO KEEP", 1, true) == nil, q)
@@ -124,7 +124,7 @@ do
       ability = { name = "Pluto", set = "Planet", consumeable = { max_highlighted = 0 } },
       config = { center = { key = "c_pluto", set = "Planet", name = "Pluto",
         loc_txt = { name = "Pluto", text = { "Its rule" } } } } } }
-  with_valid({ buy_from_shop = true, sell_card = true, toggle_shop = true }, function()
+  with_valid({ buy_from_shop = true, sell_card = true, leave_shop = true }, function()
     local q = shop_query()
     check("with a consumable pack in stock the rule IS stated",
       q:find("Buying a tarot/planet/spectral card TO KEEP", 1, true) ~= nil, q)
@@ -138,24 +138,24 @@ do
       ability = { name = "Pluto", set = "Planet", consumeable = { max_highlighted = 0 } },
       config = { center = { key = "c_pluto", set = "Planet", name = "Pluto",
         loc_txt = { name = "Pluto", text = { "Its rule" } } } } } }
-  with_valid({ buy_from_shop = true, sell_card = true, toggle_shop = true }, function()
+  with_valid({ buy_from_shop = true, sell_card = true, leave_shop = true }, function()
     local q = shop_query()
     local tail = q:match("Your move:(.*)") or ""
     local n = select(2, tail:gsub("sell_card|", ""))
-    check("the sell offer is one line, not one per sellable index (6 here before)",
-      n == 1, n .. " :: " .. tail)
+    check("every visible sell target is an explicit identity-bearing candidate",
+      n == 6, n .. " :: " .. tail)
     check("and it still renders as an offer the ORPHAN scan can read",
       tail:find("sell_card|{", 1, true) ~= nil, tail)
-    check("the collapsed line names both sellable areas, because both are on offer",
-      tail:find('"area":<"jokers"/"consumeables">', 1, true) ~= nil
-        or tail:find('"area":<"jokers"|"consumeables">', 1, true) ~= nil, tail)
+    check("the explicit candidates cover both sellable areas",
+      tail:find('"area":"jokers"', 1, true) ~= nil
+        and tail:find('"area":"consumeables"', 1, true) ~= nil, tail)
   end)
 end
 
 do
   shop_G()
   G.consumeables.cards = {}
-  with_valid({ buy_from_shop = true, sell_card = true, toggle_shop = true }, function()
+  with_valid({ buy_from_shop = true, sell_card = true, leave_shop = true }, function()
     local tail = (shop_query():match("Your move:(.*)") or "")
     check("with nothing but jokers to sell the area is bound, not offered as a choice",
       tail:find('sell_card|{"area":"jokers"', 1, true) ~= nil, tail)

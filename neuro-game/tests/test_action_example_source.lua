@@ -12,7 +12,7 @@ local DIRS = { "force", "context", "handlers", "facts", "core", "util" }
 
 local PINNED = {
   ["force/force_pack.lua"] = {
-    ['use_card|{"area":"booster_pack","index":%d,"hand_indices":[<%s>]}'] = true,
+    ['choose_pack_card|{"area":"booster_pack","index":%d,"hand_indices":[<%s>]}'] = true,
   },
   ["force/menu_flow.lua"] = {
     ['paste_seed|{"seed":"ABC123XY"}'] = true,
@@ -166,7 +166,7 @@ for path, payloads in pairs(PINNED) do
 end
 
 do
-  local REGRESSION = 'local s = \'use_card|{"area":"consumeables","index":N,"hand_indices":[N,...]}\''
+  local REGRESSION = 'local s = \'use_consumable|{"area":"consumeables","index":N,"hand_indices":[N,...]}\''
   local hits = scan(REGRESSION)
   check("the removed literal is still extracted", #hits == 1, tostring(#hits))
   if hits[1] then
@@ -177,8 +177,8 @@ do
       notation_violation(hits[1].payload) ~= nil, hits[1].payload)
   end
   check("a registry render passes the same notation check",
-    notation_violation((Registry.prompt("use_card"):gsub("^use_card|", ""))) == nil,
-    Registry.prompt("use_card"))
+    notation_violation((Registry.prompt("use_consumable"):gsub("^use_consumable|", ""))) == nil,
+    Registry.prompt("use_consumable"))
 end
 
 done()

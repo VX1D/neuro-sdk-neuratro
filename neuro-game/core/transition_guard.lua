@@ -2,12 +2,15 @@ local Guard = {}
 local Utils = require("util.utils")
 local gate_now = Utils.gate_now
 
-local STOP_USE_GATED = { use_card = true, use_directional_card = true, skip_booster = true }
+local STOP_USE_GATED = {
+  use_consumable = true, use_directional_consumable = true,
+  choose_pack_card = true, choose_directional_pack_card = true, skip_pack = true,
+}
 -- select_blind reuses skip_blind's lock as a heuristic delay, giving a skipped tag's reward time
 -- to resolve on G.E_MANAGER.
-local LOCK = { toggle_shop = "toggle_shop", reroll_shop = "shop_reroll", skip_blind = "skip_blind",
+local LOCK = { leave_shop = "leave_shop", reroll_shop = "shop_reroll", skip_blind = "skip_blind",
   select_blind = "skip_blind" }
-local LATCH = { cash_out = 1.0, select_blind = 0.8, reroll_boss = 0.5, skip_booster = 0.8 }
+local LATCH = { cash_out = 1.0, select_blind = 0.8, reroll_boss = 0.5, skip_pack = 0.8 }
 
 local last = {}
 local BUSY_TAIL = "Wait a moment, then choose again."

@@ -65,8 +65,8 @@ for _, set in ipairs({ { 4 }, { 4, 5 }, { 2, 4, 5 }, {}, { 1, 2, 3, 4, 5 } }) do
 end
 
 shop({ 4 })
-local ok, msg = Enforce.pre_action(nil, "toggle_shop")
-check("a late toggle_shop is still refused", ok == false)
+local ok, msg = Enforce.pre_action(nil, "leave_shop")
+check("a late leave_shop is still refused", ok == false)
 check("the refusal names the index that holds the gate",
   type(msg) == "string" and msg:find("Jokers that carry no tag: 4", 1, true) ~= nil, tostring(msg))
 check("the refusal never states a bare count the model can read as an index",
@@ -101,7 +101,7 @@ do
   G.NEURO.dispatcher = Dispatcher
   G.NEURO.actions = Actions
   G.NEURO.send_context = function() return true end
-  require("tests.helpers").stage_registered("SHOP", { "toggle_shop" })
+  require("tests.helpers").stage_registered("SHOP", { "leave_shop" })
   G.NEURO.force_inflight = false
 
   local b = { results = {} }
@@ -114,9 +114,9 @@ do
   b.is_transition_cooldown = function() return false end
 
   Dispatcher.route_message({ command = "action",
-    data = { id = "utj-1", name = "toggle_shop", data = "{}" } }, b)
+    data = { id = "utj-1", name = "leave_shop", data = "{}" } }, b)
 
-  check("the gated toggle_shop is refused on the wire",
+  check("the gated leave_shop is refused on the wire",
     #b.results > 0 and b.results[#b.results].ok == false,
     b.results[#b.results] and tostring(b.results[#b.results].reason) or "none")
   check("the correction channel itself carries the cause, not the generic state sentence",
@@ -131,7 +131,7 @@ do
   check("the next force carries the actionable cause, not only 'not available in this state'",
     warning:find("Jokers that carry no tag: 4", 1, true) ~= nil, warning)
   check("and it names the way out",
-    warning:find("set_joker_intents", 1, true) ~= nil, warning)
+    warning:find("record_joker_roles", 1, true) ~= nil, warning)
 end
 
 done()

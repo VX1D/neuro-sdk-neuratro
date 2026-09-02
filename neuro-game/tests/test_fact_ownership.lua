@@ -66,7 +66,7 @@ end
 local BLIND = { name = "BLIND_SELECT", build = FBS.build, board = blind_board,
   valid = function(n) return n == "select_blind" or n == "skip_blind" end }
 local SHOP = { name = "SHOP", build = FS.build, board = shop_board,
-  valid = function(n) return n == "toggle_shop" or n == "buy_from_shop"
+  valid = function(n) return n == "leave_shop" or n == "buy_from_shop"
     or n == "set_joker_order" or n == "sell_card" end }
 
 local function authored(w, o)

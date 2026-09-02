@@ -41,8 +41,12 @@ do
       if card == e.config.ref_table then table.remove(G.jokers.cards, i) break end
     end
   end
-  G.NEURO.last_sell_reject = "sell:0:Green Joker"
   arm_sell_plan()
+  local _, review = D.get_action_handler("sell_card")({ area = "jokers", index = 1,
+    name = "Green Joker" })
+  local CR = require("core.context_review")
+  CR.stage(review.context_review_candidate, { status = "written" })
+  CR.step_delivery()
   local results, contexts = {}, {}
   local bridge = {
     send_action_result = function(_, id, ok, msg) results[#results + 1] = { ok = ok, msg = msg } end,
@@ -50,7 +54,7 @@ do
   }
   require("tests.helpers").stage_registered(nil, { "sell_card" })
   D.route_message({ command = "action",
-    data = { id = "sr-1", name = "sell_card", data = '{"area":"jokers","index":1}' } }, bridge)
+    data = { id = "sr-1", name = "sell_card", data = '{"area":"jokers","index":1,"name":"Green Joker"}' } }, bridge)
   pump(contexts)
   check("sell result is neutral before execution",
     results[1] and results[1].ok == true and results[1].msg == nil, results[1] and results[1].msg)
@@ -61,13 +65,17 @@ end
 do
   G.TIMERS.REAL = G.TIMERS.REAL + 30  -- clear the inter-action cooldown
   G.jokers = { cards = { jk("Lusty Joker") }, config = { card_limit = 5 } }
-  G.NEURO.last_sell_reject = "sell:0:Lusty Joker"
+  arm_sell_plan()
+  local _, review = D.get_action_handler("sell_card")({ area = "jokers", index = 1,
+    name = "Lusty Joker" })
+  local CR = require("core.context_review")
+  CR.stage(review.context_review_candidate, { status = "written" })
+  CR.step_delivery()
   G.FUNCS.sell_card = function(e)
     for i, card in ipairs(G.jokers.cards) do
       if card == e.config.ref_table then table.remove(G.jokers.cards, i) break end
     end
   end
-  arm_sell_plan()
   local results, contexts = {}, {}
   local bridge = {
     send_action_result = function(_, id, ok, msg) results[#results + 1] = { ok = ok, msg = msg } end,
@@ -75,7 +83,7 @@ do
   }
   require("tests.helpers").stage_registered(nil, { "sell_card" })
   D.route_message({ command = "action",
-    data = { id = "sr-2", name = "sell_card", data = '{"area":"jokers","index":1}' } }, bridge)
+    data = { id = "sr-2", name = "sell_card", data = '{"area":"jokers","index":1,"name":"Lusty Joker"}' } }, bridge)
   pump(contexts)
   check("last-joker result is neutral before execution",
     results[1] and results[1].ok == true and results[1].msg == nil, results[1] and results[1].msg)

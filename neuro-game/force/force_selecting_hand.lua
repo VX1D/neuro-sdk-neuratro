@@ -10,12 +10,42 @@ local DebuffFacts = require("facts.debuff_facts")
 local BossLegality = require("facts.boss.legality")
 local ContextReadable = require("context.context_readable")
 local ActionRegistry = require("core.action_registry")
+local HandTx = require("core.hand_transaction")
 local CtxHelpers = require("context.ctx_helpers")
 local PlanGate = require("core.plan_gate")
 local blueprint_chain_hint = FactHints.blueprint_chain_hint
 local failed_action_warning = ForceHelpers.failed_action_warning
 
 local RULE_IDS = { "exact", "boss_min", "target", "discard", "pace" }
+
+local function copy_list(list)
+  local out = {}
+  for i, value in ipairs(list or {}) do out[i] = value end
+  return out
+end
+
+local function declined_choice_note(record)
+  if type(record) ~= "table" then return "" end
+  local indices = table.concat(record.indices or {}, ",")
+  local hand_type = record.hand_type and tostring(record.hand_type) or "unknown hand type"
+  local out = string.format(
+    "You declined transaction %s: indices [%s] = %s. ",
+    tostring(record.transaction_id or "?"), indices, hand_type)
+  if record.dominant_alt and #record.dominant_alt > 0 then
+    out = out .. "At that review, stronger hands already Ready were: "
+      .. table.concat(record.dominant_alt, ", ") .. ". "
+  end
+  if record.reason then
+    out = out .. "Your own stated reason for no was: \"" .. record.reason
+      .. "\". Act on that reason now. "
+  else
+    out = out .. "You supplied no reason, so re-evaluate from the complete current context below. "
+  end
+  return out
+    .. "If you wanted a redraw, call discard_hand now with the exact throwaway indices; no did not draw anything. "
+    .. "If you wanted another Ready hand, call play_hand now with that hand's exact listed indices. "
+    .. "Any play_hand now is final and commits immediately without another review. "
+end
 
 local function boss_state_note()
   local blind = G.GAME and G.GAME.blind
@@ -41,13 +71,20 @@ local function build()
   local can_play = Actions.is_action_valid("play_hand")
   local can_discard = Actions.is_action_valid("discard_hand")
   local can_sell = Actions.is_action_valid("sell_card")
+  HandTx.context_revision()
+  local final_play = HandTx.final_play_required()
+
+  if HandTx.mode() == "publishing" then return nil end
 
   local confirming = false
   local pending_confirm = ""
   do
-    local ok_pc, pend = pcall(require("handlers.hand_handlers").pending)
-    if ok_pc and pend then
+    local HH = require("handlers.hand_handlers")
+    local ok_pc, pend = pcall(HH.pending)
+    local ok_ready, ready = pcall(HH.confirm_ready)
+    if ok_pc and ok_ready and ready and pend then
       confirming = true
+      local tx = HandTx.current()
       if pend.rendered_verdict then
         local mismatch = ""
         local p = G and G.NEURO and G.NEURO.plan
@@ -61,11 +98,12 @@ local function build()
             "Your declared primary hand is %s; the pending confirmed selection is %s. ",
             tostring(focus.primary), tostring(pend.hand_type))
         end
-        pending_confirm = mismatch .. pend.rendered_verdict .. " "
+        pending_confirm = mismatch .. pend.rendered_verdict
+          .. string.format(" This is hand transaction %d. While it is open, use only resolve_play with transaction_id %d and answer yes or no; no other hand decision is available. ", tx.id, tx.id)
       else
         pending_confirm = string.format(
-          "A play_hand confirmation is open for indices [%s]; any other selection gets its own confirmation first. ",
-          table.concat(pend.indices, ","))
+          "A play_hand confirmation is open for indices [%s] as transaction %d. Yes commits these cards. No changes nothing and spends this hand's one review; then discard_hand redraws or the next play_hand commits immediately. While this transaction is open, only resolve_play is valid. ",
+          table.concat(pend.indices, ","), tx.id, tx.id)
       end
     end
   end
@@ -73,10 +111,10 @@ local function build()
   local raw_structure = HandFacts.summary()
   local ready_n = count_semicolon_items(raw_structure, "Ready")
   local structure = ContextReadable.structure_prose(raw_structure)
-  local bp_chain = (not confirming) and blueprint_chain_hint() or ""
+  local bp_chain = (not confirming) and blueprint_chain_hint(final_play) or ""
 
   local consumable_hint = ""
-  if (not confirming) and Actions.is_action_valid("use_card") and G.consumeables and G.consumeables.cards then
+  if (not confirming) and Actions.is_action_valid("use_consumable") and G.consumeables and G.consumeables.cards then
     local any_needs, any_usable_nt = false, false
     for _, c in ipairs(G.consumeables.cards) do
       local _, mh = CardUtil.consumable_target_range(c)
@@ -89,11 +127,11 @@ local function build()
     local parts = {}
     if any_needs then
       parts[#parts + 1] = "To use a targeting consumable (the consumables list shows how many cards each one needs): "
-        .. ActionRegistry.example("use_card", { area = "consumeables" }, { "area", "index", "hand_indices" }) .. "."
+        .. ActionRegistry.example("use_consumable", { area = "consumeables" }, { "area", "index", "hand_indices" }) .. "."
     end
     if any_usable_nt then
       parts[#parts + 1] = "To use a consumable that needs no target: "
-        .. ActionRegistry.example("use_card", { area = "consumeables" }) .. "."
+        .. ActionRegistry.example("use_consumable", { area = "consumeables" }) .. "."
     end
     if #parts > 0 then
       consumable_hint = FactHints.emit("consumable_slots", table.concat(parts, " ") .. " ")
@@ -152,9 +190,9 @@ local function build()
   end
   local rules_text = ""
   if not confirming then
-    rules_text = (GameFacts.round() ~= nil)
-      and FactHints.emit("sh_rules_core", numbered(clause))
-      or numbered(clause)
+    rules_text = (final_play or GameFacts.round() == nil)
+      and numbered(clause)
+      or FactHints.emit("sh_rules_core", numbered(clause))
   end
   if (not confirming) and rules_text == "" then
     rules_text = FactHints.emit("sh_rules_brief", numbered(brief))
@@ -237,13 +275,15 @@ local function build()
   end
 
   local function teaching(text) return (not confirming) and text or "" end
+  local decline_note = final_play and declined_choice_note(HandTx.decline_context()) or ""
 
   local query = "State: SELECTING_HAND. "
     .. failed_action_warning()
+    .. decline_note
     .. pending_confirm
     .. pending_guarded
     .. ForceHelpers.repeat_pressure_note()
-    .. move_cue
+    .. teaching(move_cue)
     .. structure
     .. teaching(banner_lead)
     .. teaching(discard_lead)
@@ -254,7 +294,7 @@ local function build()
   query = query .. teaching(FactHints.plan_note("hand"))
   query = query .. teaching(splash_note)
 
-  if (not confirming) and Actions.is_action_valid("use_card") then
+  if (not confirming) and Actions.is_action_valid("use_consumable") then
     local has_planet = false
     if G.consumeables and G.consumeables.cards then
       for _, c in ipairs(G.consumeables.cards) do
@@ -273,6 +313,36 @@ local function build()
 
   local hand_actions = {}
   local commit_opts = {}
+
+  if confirming then
+    local tx = HandTx.current()
+    local id = tx and tx.id or (pending_confirm:match("transaction (%d+)") or "?")
+    local yes_example = tx and ActionRegistry.render("resolve_play", {
+      transaction_id = tx.id, answer = "yes",
+    }) or ActionRegistry.prompt("resolve_play")
+    local no_example = tx and ActionRegistry.example("resolve_play", {
+      transaction_id = tx.id, answer = "no",
+    }, { "transaction_id", "answer", "reason" }) or ActionRegistry.prompt("resolve_play")
+    local resolution_query = "State: SELECTING_HAND. "
+      .. failed_action_warning()
+      .. pending_confirm
+      .. structure
+      .. debuff_lead
+      .. "Hand card indices: " .. ForceHelpers.index_range((G.hand and G.hand.cards) and #G.hand.cards or 0) .. ". "
+      .. string.format("Your move: required transaction_id is %s. Choose exactly one:\nYES: %s\nNO: %s\n",
+        tostring(id), yes_example, no_example)
+      .. "For yes, omit reason. For no, reason is optional; preferably name the concrete next action and exact indices. "
+    local ok_boss, boss_fact = pcall(require("context.ctx_blind").blind_debuff_line)
+    if ok_boss and type(boss_fact) == "string" and boss_fact ~= "" then
+      resolution_query = resolution_query .. "\n" .. boss_fact .. " "
+    end
+    return {
+      query = resolution_query:gsub("  +", " "),
+      actions = { "resolve_play" },
+      decision_snapshot = tx and HandTx.snapshot(tx) or nil,
+    }
+  end
+
   local boss_plan_example = ""
   do
     local requirements = PlanGate.action_requirements("SELECTING_HAND", "play_hand")
@@ -282,8 +352,11 @@ local function build()
   end
   if can_play then
     hand_actions[#hand_actions + 1] = "play_hand"
+    local play_note = final_play
+      and " (FINAL PLAY CHOICE: commits these indices immediately; uses a hand)"
+      or " (uses a hand)"
     commit_opts[#commit_opts + 1] = ActionRegistry.prompt("play_hand")
-      .. " (uses a hand)"
+      .. play_note
       .. boss_plan_example
   end
   if can_discard then
@@ -292,29 +365,24 @@ local function build()
       .. " (uses a discard)"
       .. boss_plan_example
   end
-  if confirming and Actions.is_action_valid("confirm_play") then
-    hand_actions[#hand_actions + 1] = "confirm_play"
-    commit_opts[#commit_opts + 1] = ActionRegistry.prompt("confirm_play")
-      .. " (yes commits the confirmed selection above, no discards it)"
-  end
-  if Actions.is_action_valid("use_card") then
-    hand_actions[#hand_actions + 1] = "use_card"
-    if not TransitionGuard.reject_reason("use_card") then
+  if Actions.is_action_valid("use_consumable") then
+    hand_actions[#hand_actions + 1] = "use_consumable"
+    if not TransitionGuard.reject_reason("use_consumable") then
       local usable = {}
-      for _, payload in ipairs(ActionRegistry.candidates("use_card")) do
+      for _, payload in ipairs(ActionRegistry.candidates("use_consumable")) do
         local area = (payload.area == "consumeables") and G.consumeables or CardUtil.pack_area()
         local _, maximum = CardUtil.consumable_target_range(
           area and area.cards and area.cards[payload.index])
         local fields = (maximum and maximum > 0) and { "area", "index", "hand_indices" } or nil
-        usable[#usable + 1] = ActionRegistry.example("use_card", payload, fields)
+        usable[#usable + 1] = ActionRegistry.example("use_consumable", payload, fields)
       end
       if #usable > 0 then commit_opts[#commit_opts + 1] = table.concat(usable, " or ") end
     end
   end
-  if Actions.is_action_valid("use_directional_card") then
-    hand_actions[#hand_actions + 1] = "use_directional_card"
-    if not TransitionGuard.reject_reason("use_directional_card") then
-      commit_opts[#commit_opts + 1] = ActionRegistry.prompt("use_directional_card")
+  if Actions.is_action_valid("use_directional_consumable") then
+    hand_actions[#hand_actions + 1] = "use_directional_consumable"
+    if not TransitionGuard.reject_reason("use_directional_consumable") then
+      commit_opts[#commit_opts + 1] = ActionRegistry.prompt("use_directional_consumable")
     end
   end
   if BossLegality.boss_names_reorder() and Actions.is_action_valid("set_joker_order") then
@@ -334,7 +402,7 @@ local function build()
   end
   local consumables_shown = false
   for _, name in ipairs(hand_actions) do
-    if name == "use_card" or name == "use_directional_card" or name == "sell_card" then
+    if name == "use_consumable" or name == "use_directional_consumable" or name == "sell_card" then
       consumables_shown = true
     end
   end
@@ -349,9 +417,6 @@ local function build()
       or "Only the second case is actionable -- this mod blocks selling mid-round (base Balatro allows it), so free a slot by using another consumable now, or sell in the shop. "
     query = query .. "An owned consumable (marked not usable) cannot be used right now: either it needs more cards selected than your hand holds, or it creates a joker/consumable and every output slot is full. " .. slot_tail
   end
-  -- Wired here as it already is on force_pack.lua:154 and force_shop.lua:272: a first play_hand
-  -- spends nothing and comes back with the engine's own verdict, which is the only exact
-  -- comparison the model can make between two Ready hands.
   query = query .. teaching(ForceHelpers.pending_gate_note(hand_actions))
   query = query .. "Hand card indices: " .. ForceHelpers.index_range((G.hand and G.hand.cards) and #G.hand.cards or 0) .. ". "
   do
@@ -364,7 +429,15 @@ local function build()
 
   return {
     query = query:gsub("  +", " "),
-    actions = hand_actions
+    actions = hand_actions,
+    decision_snapshot = {
+      transaction_id = nil,
+      phase = "proposal",
+      context_revision = HandTx.context_revision(),
+      run_generation = tonumber(G.NEURO and G.NEURO.run_generation) or 0,
+      state_enter_serial = tonumber(G.NEURO and G.NEURO.state_enter_serial) or 0,
+      actions = copy_list(hand_actions),
+    },
   }
 end
 

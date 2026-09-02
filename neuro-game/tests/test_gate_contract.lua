@@ -264,7 +264,7 @@ do
   local real = Actions.is_action_valid
   Actions.is_action_valid = function(n)
     if n == "play_hand" or n == "discard_hand" then return real(n) end
-    return n == "use_card" or n == "sell_card" or n == "set_joker_order"
+    return n == "use_consumable" or n == "sell_card" or n == "set_joker_order"
   end
   local FSH = require("force.force_selecting_hand")
 
@@ -364,7 +364,7 @@ end
 do
   local real = Actions.is_action_valid
   Actions.is_action_valid = function(n)
-    return n == "toggle_shop" or n == "buy_from_shop" or n == "set_joker_order" or n == "sell_card"
+    return n == "leave_shop" or n == "buy_from_shop" or n == "set_joker_order" or n == "sell_card"
   end
   local FS = require("force.force_shop")
 
@@ -477,12 +477,12 @@ do
   check("the standard-pack rule rides the pack force",
     qs:find("never needs a free slot", 1, true) ~= nil, qs)
 
-  local qb = pack_frame("TAROT_PACK", "Has pack cards", function(n) return n == "skip_booster" end)
+  local qb = pack_frame("TAROT_PACK", "Has pack cards", function(n) return n == "skip_pack" end)
   check("a blocked consumable pack says why, on the force",
     qb:find("You can't take a card from this pack right now", 1, true) ~= nil, qb)
 
   local qj = pack_frame("BUFFOON_PACK", "Full joker slots during buffoon pack",
-    function(n) return n == "sell_card" or n == "skip_booster" end)
+    function(n) return n == "sell_card" or n == "skip_pack" end)
   check("a full joker board is told the sell-then-take route, on the force",
     qj:find("sell_card one of your jokers first to free a slot", 1, true) ~= nil, qj)
 end
@@ -490,7 +490,7 @@ end
 do
   local real = Actions.is_action_valid
 
-  Actions.is_action_valid = function(n) return n == "toggle_shop" or n == "buy_from_shop" end
+  Actions.is_action_valid = function(n) return n == "leave_shop" or n == "buy_from_shop" end
   local FS = require("force.force_shop")
   local NJ = fresh()
   shop_board({ neuro = NJ, jokers = {} })
@@ -498,7 +498,7 @@ do
   check("an empty roster draws the jokerless priority onto the shop force",
     qj:find("You own NO jokers", 1, true) ~= nil, qj)
 
-  Actions.is_action_valid = function(n) return n == "use_card" or n == "play_hand" end
+  Actions.is_action_valid = function(n) return n == "use_consumable" or n == "play_hand" end
   local FSH2 = require("force.force_selecting_hand")
   local NP = fresh()
   local PLANET = { sort_id = 77, sell_cost = 1, cost = 3,
@@ -539,12 +539,12 @@ do
   end
 
   local qpl = pack_frame2("PLANET_PACK", "PLANET_PACK with cards",
-    function(n) return n == "use_card" or n == "skip_booster" end)
+    function(n) return n == "choose_pack_card" or n == "skip_pack" end)
   check("a Planet pack states what levelling a hand type does, on the force",
     qpl:find("A Planet permanently levels ONE hand type", 1, true) ~= nil, qpl)
 
   local qbf = pack_frame2("BUFFOON_PACK", "BUFFOON_PACK variant with pack cards",
-    function(n) return n == "use_card" or n == "skip_booster" end,
+    function(n) return n == "choose_pack_card" or n == "skip_pack" end,
     function() G.jokers.cards = {} end)
   check("a joker pack opened with no xMult owned states the scaling gap, on the force",
     qbf:find("None of your jokers multiply your score", 1, true) ~= nil, qbf)

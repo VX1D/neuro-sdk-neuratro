@@ -66,12 +66,9 @@ end
 local function check_target_name(card, provided, index, area_label)
   if type(provided) ~= "string" or provided == "" then return nil end
   local actual = tostring(Utils.safe_name_or(card))
-  local have = actual:lower():gsub("%s+", " ")
-  local want = provided:lower():gsub("%s+", " ")
-  if have == want or have:sub(1, #want) == want then return nil end
-  local hb = (have:gsub("^the ", ""))
-  local wb = (want:gsub("^the ", ""))
-  if #wb > 0 and (hb == wb or hb:sub(1, #wb) == wb) then return nil end
+  local have = actual:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+  local want = provided:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+  if have == want then return nil end
   return string.format(
     "Index %s in '%s' is currently '%s', not '%s' -- indices shift after a sell/use/pick. Re-check the rows and pick again.",
     tostring(index), tostring(area_label), actual, provided)
@@ -80,11 +77,11 @@ end
 local function find_card_by_name(area, provided)
   if type(provided) ~= "string" or provided == "" then return nil end
   if not (area and area.cards) then return nil end
-  local want = provided:lower():gsub("%s+", " ")
+  local want = provided:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
   local match_c, match_i, count = nil, nil, 0
   for i, c in ipairs(area.cards) do
-    local have = tostring(Utils.safe_name_or(c)):lower():gsub("%s+", " ")
-    if have:find(want, 1, true) or want:find(have, 1, true) then
+    local have = tostring(Utils.safe_name_or(c)):lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+    if have == want then
       count = count + 1
       match_c, match_i = c, i
     end

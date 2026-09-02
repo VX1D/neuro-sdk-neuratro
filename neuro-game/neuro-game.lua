@@ -3,7 +3,7 @@
 --- MOD_ID: neuro-game
 --- MOD_AUTHOR: [x264.webrip]
 --- MOD_DESCRIPTION: Neuro SDK bridge + IPC for Balatro
---- MOD_VERSION: 1.1.0
+--- MOD_VERSION: 1.1.3
 
 if rawget(_G, "NEURO_SDK_MOD_LOADED") then
   local src = debug.getinfo(1, "S").source

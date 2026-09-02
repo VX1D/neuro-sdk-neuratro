@@ -75,11 +75,11 @@ check("audit detects a repeated unchanged terminal acknowledgement loop",
 
 write(inbox, {
   '{"command":"action","data":{"id":"forced-id","name":"cash_out_force_1","data":"{}"}}',
-  '{"command":"action","data":{"id":"foreign-id","name":"set_plan","data":"{}"}}',
+  '{"command":"action","data":{"id":"foreign-id","name":"record_plan","data":"{}"}}',
 })
 write(outbox, {
   '{"command":"startup","game":"Balatro"}',
-  '{"command":"actions/register","game":"Balatro","data":{"actions":[{"name":"cash_out_force_1","description":"d"},{"name":"set_plan","description":"d"},{"name":"cash_out_force_2","description":"d"}]}}',
+  '{"command":"actions/register","game":"Balatro","data":{"actions":[{"name":"cash_out_force_1","description":"d"},{"name":"record_plan","description":"d"},{"name":"cash_out_force_2","description":"d"}]}}',
   '{"command":"actions/force","game":"Balatro","data":{"query":"q","action_names":["cash_out_force_1"]}}',
   '{"command":"action/result","game":"Balatro","data":{"id":"foreign-id","success":true}}',
   '{"command":"actions/force","game":"Balatro","data":{"query":"q2","action_names":["cash_out_force_2"]}}',

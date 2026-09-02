@@ -86,6 +86,7 @@ end
 do
   local D = require("core.dispatcher")
   local Actions = require("core.actions")
+  local Config = require("core.config")
   local function bridge() return { send_action_result = function(self, id, ok, m) self.last = { id = id, ok = ok, m = m } end, send_context = function() end, register_actions = function() end } end
   local function base_G()
     _G.G = {
@@ -114,12 +115,14 @@ do
     require("core.force_state").arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
   end
 
+  Config.set("NEURO_CONFIRM_HAND", "off")
   base_G()
   local before = G.NEURO.decision_serial
   require("tests.helpers").stage_registered(nil, { "play_hand" })
   D.handle_message({ command = "action", data = { id = "d1", name = "play_hand", data = '{"indices":[1,2]}' } }, bridge())
   check("successful forced progress action (play_hand) bumps decision_serial",
     (G.NEURO.decision_serial or 0) == before + 1, "before=" .. tostring(before) .. " after=" .. tostring(G.NEURO.decision_serial))
+  Config.set("NEURO_CONFIRM_HAND", "on")
 
   base_G()
   G.NEURO.force_inflight = false
@@ -143,7 +146,7 @@ end
 
 do
   local Actions = require("core.actions")
-  stub_valid(function(n) return n == "toggle_shop" or n == "buy_from_shop" end)
+  stub_valid(function(n) return n == "leave_shop" or n == "buy_from_shop" end)
   local FS = require("force.force_shop")
   local function q() return ((FS.build() or {}).query or "") .. H.drain_hints() end
   local function shop(njokers, cash)
@@ -219,7 +222,7 @@ do
   shop(2)
   local narrow_valid = Actions.is_action_valid
   Actions.is_action_valid = function(n)
-    return n == "toggle_shop" or n == "buy_from_shop" or n == "sell_card" or n == "set_joker_order"
+    return n == "leave_shop" or n == "buy_from_shop" or n == "sell_card" or n == "set_joker_order"
   end
   verdict_free("sell_card and set_joker_order both offered")
   local qb = q()
@@ -278,7 +281,7 @@ end
 
 do
   local Actions = require("core.actions")
-  stub_valid(function(n) return n == "use_card" or n == "skip_booster" end)
+  stub_valid(function(n) return n == "choose_pack_card" or n == "skip_pack" end)
   local FP = require("force.force_pack")
   local function q() return ((FP.build("BUFFOON_PACK") or {}).query or "") .. H.drain_hints() end
   local function pack()
@@ -302,7 +305,7 @@ do
     has(q(), "almost always better than skipping")
       and has(q(), "None of your jokers multiply"), q())
 
-  Actions.is_action_valid = function(n) return n == "use_card" or n == "skip_booster" end
+  Actions.is_action_valid = function(n) return n == "choose_pack_card" or n == "skip_pack" end
   local function stdpack()
     local pc = { base = { value = "9", suit = "Hearts" }, config = { center = { key = "c", set = "Default" } } }
     _G.G = {
@@ -325,7 +328,7 @@ end
 
 do
   local Actions = require("core.actions")
-  stub_valid(function(n) return n == "use_card" or n == "skip_booster" end)
+  stub_valid(function(n) return n == "choose_pack_card" or n == "skip_pack" end)
   local FP = require("force.force_pack")
   local function q() return ((FP.build("PLANET_PACK") or {}).query or "") .. H.drain_hints() end
   local function planetpack(hands)
@@ -350,7 +353,7 @@ do
     (function()
       local Compact = require("context.context_compact")
       Compact.invalidate_cache()
-      local ctx = Compact.build("PLANET_PACK", { "use_card", "skip_booster" },
+      local ctx = Compact.build("PLANET_PACK", { "choose_pack_card", "skip_pack" },
         { split = "state", no_cache = true }) or ""
       return ctx:find("Two Pair", 1, true) ~= nil and ctx:find("Flush", 1, true) ~= nil, ctx
     end)())
@@ -359,7 +362,7 @@ end
 
 do
   local Actions = require("core.actions")
-  stub_valid(function(n) return n == "skip_booster" end)
+  stub_valid(function(n) return n == "skip_pack" end)
   local FP = require("force.force_pack")
   local tarot = { ability = { name = "The Tower", set = "Tarot" }, config = { center = { key = "c_tower", set = "Tarot" } } }
   _G.G = {
@@ -370,10 +373,10 @@ do
     pack_cards = { cards = { tarot } }, booster_pack = { cards = { tarot } },
   }
   local q = ((FP.build("TAROT_PACK") or {}).query or "") .. H.drain_hints()
-  check("blocked consumable pack has NO use_card in the move list", not has(q, 'use_card|'))
+  check("blocked consumable pack has NO choose_pack_card in the move list", not has(q, 'choose_pack_card|'))
   check("blocked consumable pack explains WHY you can't take (not a bare skip-only)",
     has(q, "You can't take a card from this pack right now"), q)
-  check("blocked pack still offers skip_booster", has(q, "skip_booster"))
+  check("blocked pack still offers skip_pack", has(q, "skip_pack"))
   unstub_valid()
 end
 
@@ -567,8 +570,8 @@ do
   end
   stub_valid(function(n)
     if n == "play_hand" or n == "discard_hand" then return UNSTUBBED_IS_ACTION_VALID(n) end
-    return n == "use_card" or n == "sell_card" or n == "set_joker_order"
-      or n == "toggle_shop" or n == "buy_from_shop"
+    return n == "use_consumable" or n == "sell_card" or n == "set_joker_order"
+      or n == "leave_shop" or n == "buy_from_shop"
   end)
 
   local hand_forces, shop_forces = 0, 0

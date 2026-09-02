@@ -88,7 +88,7 @@ end
 do
   local invalid = Receipt.create({
     id = "invalid-probe",
-    name = "use_card",
+    name = "use_consumable",
     run_generation = 2,
     started_at = 40,
     deadline = 50,
@@ -103,7 +103,7 @@ do
 
   local throwing = Receipt.create({
     id = "throwing-probe",
-    name = "use_card",
+    name = "use_consumable",
     run_generation = 2,
     started_at = 40,
     deadline = 50,
@@ -138,7 +138,7 @@ end
 do
   local receipt = Receipt.create({
     id = "debug",
-    name = "toggle_shop",
+    name = "leave_shop",
     run_generation = 3,
     started_at = 60,
     deadline = 70,

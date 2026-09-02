@@ -15,6 +15,7 @@ end
 local ActionResult = require("core.action_result")
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
+local Config = require("core.config")
 
 local check, done = require("tests.helpers").harness("force-window-contract")
 
@@ -144,6 +145,7 @@ end
 
 do
   selecting_hand_env(320)
+  Config.set("NEURO_CONFIRM_HAND", "off")
   G.NEURO = bridge_neuro({
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 5,
@@ -166,6 +168,7 @@ do
     played == true)
   check("window-close: USAGE.md -- the window is Ended (force_inflight cleared) once that action succeeded",
     G.NEURO.force_inflight == false)
+  Config.set("NEURO_CONFIRM_HAND", "on")
 end
 
 do
@@ -188,6 +191,7 @@ end
 
 do
   selecting_hand_env(500)
+  Config.set("NEURO_CONFIRM_HAND", "off")
   G.NEURO = bridge_neuro({
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 9,
@@ -241,6 +245,7 @@ do
     probe_seen_after_result == true)
   check("result-before-exec: API/README.md 'sent after validating... before it is actually executed in-game' -- action/result for this id had already landed when execution ran",
     probe_seen_before_result == true)
+  Config.set("NEURO_CONFIRM_HAND", "on")
 end
 
 do
@@ -300,6 +305,7 @@ end
 
 do
   selecting_hand_env(700)
+  Config.set("NEURO_CONFIRM_HAND", "off")
   local b, log = reconciling_bridge({
     dispatcher = Dispatcher, actions = Actions, decision_serial = 20,
   })
@@ -329,6 +335,7 @@ do
   check("unregister-before-result: README.md:21 'you should unregister them before sending back the action result' -- unregister happened strictly before that result",
     unregister_ix ~= nil and result_ix ~= nil and unregister_ix < result_ix,
     tostring(unregister_ix) .. " vs " .. tostring(result_ix))
+  Config.set("NEURO_CONFIRM_HAND", "on")
 end
 
 do
@@ -354,7 +361,7 @@ do
   G.NEURO.unregister_actions = function(_, names)
     for _, n in ipairs(names) do dropped[#dropped + 1] = n end
   end
-  raw_arm("MENU", { "setup_run" }, { setup_run = true }, 0, { query = "q" })
+  raw_arm("MENU", { "open_run_setup" }, { open_run_setup = true }, 0, { query = "q" })
   FS.invalidate("unsent")
   check("one-force: a window still awaiting send is dropped as before",
     G.NEURO.force_inflight == false, tostring(G.NEURO.force_inflight))

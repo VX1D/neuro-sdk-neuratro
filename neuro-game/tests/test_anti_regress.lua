@@ -6,6 +6,7 @@ local A = require("core.actions")
 local D = require("core.dispatcher")
 local Utils = require("util.utils")
 local ActionResult = require("core.action_result")
+local Config = require("core.config")
 local function action_error(value)
   return ActionResult.is_error(value) and ActionResult.normalize(value).message or tostring(value or "")
 end
@@ -128,6 +129,7 @@ local MOCK_RESET = {
 }
 local function mock_state(desc_match, state)
   require("core.action_receipt").reset("mock_state")
+  require("core.hand_transaction").reset()
   for _, k in ipairs(MOCK_RESET) do G[k] = nil end
   G.GAME = { current_round = {} }
   G.FUNCS.get_poker_hand_info = nil
@@ -157,10 +159,10 @@ for _, st in ipairs({ "SELECTING_HAND", "SHOP", "TAROT_PACK" }) do
 end
 
 check("start_challenge_run in MENU", has(A.get_action_names_for_state("MENU"), "start_challenge_run"))
-check("change_challenge_description in MENU", has(A.get_action_names_for_state("MENU"), "change_challenge_description"))
+check("select_challenge in MENU", has(A.get_action_names_for_state("MENU"), "select_challenge"))
 for _, st in ipairs({ "RUN_SETUP", "GAME_OVER" }) do
   check("start_challenge_run not in " .. st, not has(A.get_action_names_for_state(st), "start_challenge_run"))
-  check("change_challenge_description not in " .. st, not has(A.get_action_names_for_state(st), "change_challenge_description"))
+  check("select_challenge not in " .. st, not has(A.get_action_names_for_state(st), "select_challenge"))
 end
 
 do
@@ -168,15 +170,15 @@ do
   local f = D.get_force_for_state("GAME_OVER")
   check("GAME_OVER+overlay force omits the flaky exit_overlay_menu",
     f and not has(f.actions, "exit_overlay_menu"), f and table.concat(f.actions or {}, ","))
-  check("GAME_OVER+overlay force offers setup_run (new-run path)",
-    f and has(f.actions, "setup_run"))
+  check("GAME_OVER+overlay force offers open_run_setup (new-run path)",
+    f and has(f.actions, "open_run_setup"))
 end
 
 do
   mock_state("With overlay present", "GAME_OVER")
-  check("GAME_OVER offers setup_run immediately (no hold)",
+  check("GAME_OVER offers open_run_setup immediately (no hold)",
     (D.get_force_for_state("GAME_OVER") or {}).actions ~= nil
-      and has((D.get_force_for_state("GAME_OVER") or {}).actions, "setup_run"))
+      and has((D.get_force_for_state("GAME_OVER") or {}).actions, "open_run_setup"))
 end
 
 do
@@ -184,8 +186,8 @@ do
   local f = D.get_force_for_state("GAME_OVER")
   check("GAME_OVER+unlock popup forces exit_overlay_menu",
     f and has(f.actions, "exit_overlay_menu"), f and table.concat(f.actions or {}, ","))
-  check("GAME_OVER+unlock popup force is exit-only (not setup_run under the popup)",
-    f and not has(f.actions, "setup_run"))
+  check("GAME_OVER+unlock popup force is exit-only (not open_run_setup under the popup)",
+    f and not has(f.actions, "open_run_setup"))
 end
 
 do
@@ -233,13 +235,17 @@ end
 
 do
   mock_state("Normal", "SHOP")
+  require("core.hand_transaction").reset()
+  require("core.force_state").clear_force_state()
+  G.NEURO.force_window = nil
+  G.NEURO.force_dirty = true
   G.jokers = { cards = {
     { ability = { name = "Joker" }, sell_cost = 3, config = { center = { key = "j_joker" } } },
     { ability = { name = "Blueprint" }, sell_cost = 3, config = { center = { key = "j_blueprint" } } },
   }, config = { card_limit = 5 } }
   local f = D.get_force_for_state("SHOP")
   check("SHOP force offers set_joker_order", f and has(f.actions, "set_joker_order"))
-  check("SHOP force offers set_plan whenever planning is on", f and has(f.actions, "set_plan"))
+  check("SHOP force offers record_plan whenever planning is on", f and has(f.actions, "record_plan"))
 end
 
 do
@@ -251,8 +257,8 @@ do
   local f = require("force.force_blind_select").build()
   check("TW-01: blind force offers set_joker_order when advice can recommend it",
     f and has(f.actions, "set_joker_order"))
-  check("TW-01: blind force offers set_plan whenever planning is on",
-    f and has(f.actions, "set_plan"))
+  check("TW-01: blind force offers record_plan whenever planning is on",
+    f and has(f.actions, "record_plan"))
 end
 
 do
@@ -353,9 +359,16 @@ do
 
   local c1, e1 = H("play_hand")({})
   check("play_hand no indices -> error", c1 == nil and ActionResult.is_error(e1))
-  local c_hl = H("play_hand")({ indices = { 1, 2 } })
+  local c_hl, e_hl = H("play_hand")({ indices = { 1, 2 } })
+  check("repeating the reviewed play does not produce an execution closure",
+    c_hl == nil and ActionResult.is_error(e_hl), e_hl)
+  Config.set("NEURO_CONFIRM_HAND", "off")
+  require("core.hand_transaction").reset()
+  c_hl = H("play_hand")({ indices = { 1, 2 } })
   local ok_hl, r_hl = pcall(c_hl)
-  check("atomic play -> closure runs to a string", type(c_hl) == "function" and ok_hl and type(r_hl) == "string", r_hl)
+  check("confirmation toggle off restores immediate play execution",
+    type(c_hl) == "function" and ok_hl and type(r_hl) == "string", r_hl)
+  Config.set("NEURO_CONFIRM_HAND", "on")
 
   G.GAME.blind = { debuff = { h_size_ge = 4 } }
   local c4, e4 = H("play_hand")({ indices = { 1 } })
@@ -378,13 +391,13 @@ do
   local tarot = { ability = { consumeable = { max_highlighted = 1, min_highlighted = 1 } }, config = { center = { key = "c_tarot" } } }
   G.consumeables = { cards = { tarot } }
   G.hand = { cards = {} }
-  local c7, e7 = H("use_card")({ area = "consumeables", index = 1 })
-  check("use_card needs hand target but no hand -> error", c7 == nil and ActionResult.is_error(e7))
+  local c7, e7 = H("use_consumable")({ area = "consumeables", index = 1 })
+  check("use_consumable needs hand target but no hand -> error", c7 == nil and ActionResult.is_error(e7))
   local planet = { ability = { consumeable = {} }, config = { center = { key = "c_planet" } } }
   G.consumeables = { cards = { planet } }
-  local c_uc = H("use_card")({ area = "consumeables", index = 1 })
+  local c_uc = H("use_consumable")({ area = "consumeables", index = 1 })
   local ok_uc, r_uc = pcall(c_uc)
-  check("use_card no-target -> closure runs to a string", type(c_uc) == "function" and ok_uc and type(r_uc) == "string", r_uc)
+  check("use_consumable no-target -> closure runs to a string", type(c_uc) == "function" and ok_uc and type(r_uc) == "string", r_uc)
 
 end
 
@@ -436,15 +449,15 @@ do
   G.OVERLAY_MENU = { get_UIE_by_ID = function(_, id) return (id == "run_setup_seed") and {} or nil end }
   check("RUN_SETUP reachable via overlay detector", State.get_state_name() == "RUN_SETUP")
   local f = D.get_force_for_state("RUN_SETUP")
-  check("run-setup force offers start_setup_run (no deck-pick trap)", has((f or {}).actions, "start_setup_run"))
+  check("run-setup force offers start_run (no deck-pick trap)", has((f or {}).actions, "start_run"))
   G.STATES = { MENU = 1, GAME_OVER = 4 }; G.STATE = 4
   check("GAME_OVER + open run-setup overlay resolves to RUN_SETUP", State.get_state_name() == "RUN_SETUP")
-  check("GAME_OVER-hosted run-setup force offers start_setup_run",
-    has((D.get_force_for_state(State.get_state_name()) or {}).actions, "start_setup_run"))
+  check("GAME_OVER-hosted run-setup force offers start_run",
+    has((D.get_force_for_state(State.get_state_name()) or {}).actions, "start_run"))
   G.STATES = { MENU = 1, BLIND_SELECT = 7 }; G.STATE = 7
   local ok_bs, fbs = pcall(D.get_force_for_state, "BLIND_SELECT")
   check("BLIND_SELECT with a lingering run-setup overlay does NOT serve the RUN_SETUP force",
-    not (ok_bs and has((fbs or {}).actions, "start_setup_run")))
+    not (ok_bs and has((fbs or {}).actions, "start_run")))
   G.STATES = { MENU = 1 }; G.STATE = 1
   G.OVERLAY_MENU = nil
   check("no overlay -> not RUN_SETUP", State.get_state_name() ~= "RUN_SETUP")
@@ -464,8 +477,8 @@ do
   G.consumeables = { cards = { {}, {} }, config = { card_limit = 2 } }
   G.pack_cards = { cards = { tarot } }
   G.booster_pack = G.pack_cards
-  local c, e = H("use_card")({ area = "pack_cards", index = 1 })
-  check("use_card rejects full-consumable pack pick with consumable message",
+  local c, e = H("choose_pack_card")({ area = "pack_cards", index = 1 })
+  check("choose_pack_card rejects full-consumable pack pick with consumable message",
     c == nil and ActionResult.is_error(e) and action_error(e):find("consumable") ~= nil, e)
   G.pack_cards = nil; G.booster_pack = nil
 end
@@ -514,26 +527,26 @@ do
   G.GAME = G.GAME or {}; G.GAME.STOP_USE = nil
   G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  require("core.force_state").arm("BUFFOON_PACK", { "use_card", "skip_booster", "sell_card" }, { use_card = true, skip_booster = true, sell_card = true }, 1)
+  require("core.force_state").arm("BUFFOON_PACK", { "choose_pack_card", "skip_pack", "sell_card" }, { choose_pack_card = true, skip_pack = true, sell_card = true }, 1)
   G.NEURO.state_enter_serial = 42
   require("core.decision_window").reset_field("pack_review")
-  local ok1, msg1 = Enforce.pre_action(nil, "use_card")
+  local ok1, msg1 = Enforce.pre_action(nil, "choose_pack_card")
   check("pack think-gate pauses first pick", ok1 == false and type(msg1) == "string"
     and msg1:find("This is a booster pack", 1, true) ~= nil, msg1)
   check("pack think-gate latches to this pack entry",
     G.NEURO._decision_windows.pack_review.armed_at == "BUFFOON_PACK|42")
-  check("pack think-gate lets the repeat pick through", Enforce.pre_action(nil, "use_card") == true)
+  check("pack think-gate lets the repeat pick through", Enforce.pre_action(nil, "choose_pack_card") == true)
   check("pack think-gate not re-triggered by skip in same entry",
-    Enforce.pre_action(nil, "skip_booster") == true)
+    Enforce.pre_action(nil, "skip_pack") == true)
   G.NEURO.state_enter_serial = 43
-  local ok4, msg4 = Enforce.pre_action(nil, "skip_booster")
+  local ok4, msg4 = Enforce.pre_action(nil, "skip_pack")
   check("pack think-gate re-arms on a new pack entry",
     ok4 == false and type(msg4) == "string" and msg4:find("This is a booster pack", 1, true) ~= nil)
   G.STATES = { MODDED_PACK = 10 }; G.STATE = 10
   G.NEURO.force_state = "MODDED_PACK"
   G.NEURO.state_enter_serial = 44
   require("core.decision_window").reset_field("pack_review")
-  local ok_mod, msg_mod = Enforce.pre_action(nil, "use_card")
+  local ok_mod, msg_mod = Enforce.pre_action(nil, "choose_pack_card")
   check("pack think-gate covers modded *_PACK states",
     ok_mod == false and type(msg_mod) == "string"
       and msg_mod:find("This is a booster pack", 1, true) ~= nil, msg_mod)
@@ -561,11 +574,11 @@ do
   G.GAME = G.GAME or {}; G.GAME.STOP_USE = nil
   G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  require("core.force_state").arm("TAROT_PACK", { "use_card" }, { use_card = true }, 1)
+  require("core.force_state").arm("TAROT_PACK", { "choose_pack_card" }, { choose_pack_card = true }, 1)
   G.NEURO.state_enter_serial = 45
   DecisionWindow.reset_field("pack_review")
   local bridge = { is_transition_cooldown = function() return true end }
-  local ok, msg, transient, code = Enforce.pre_action(bridge, "use_card")
+  local ok, msg, transient, code = Enforce.pre_action(bridge, "choose_pack_card")
   check("TW-07: transition cooldown still blocks execution before the decision window",
     ok == false and transient == true and msg:find("transitioning", 1, true) ~= nil, msg)
   check("TW-07: transition rejection does not arm the pack window",
@@ -575,12 +588,12 @@ do
   check("TW-07: the acknowledged prose tells Neuro nothing applied and to choose again",
     msg:find("nothing was applied", 1, true) ~= nil and msg:find("choose again", 1, true) ~= nil, msg)
   G.GAME.STOP_USE = 1
-  local ok_su, _, _, code_su = Enforce.pre_action({ }, "use_card")
+  local ok_su, _, _, code_su = Enforce.pre_action({ }, "choose_pack_card")
   check("TW-07: the engine-busy guard acknowledges for a forced action too",
     ok_su == false and code_su == "TRANSITION_ACKNOWLEDGED", tostring(code_su))
   G.GAME.STOP_USE = nil
   G.NEURO.force_inflight = nil; G.NEURO.force_state = nil; G.NEURO.force_window = nil
-  local ok2, msg2, transient2, code2 = Enforce.pre_action(bridge, "use_card")
+  local ok2, msg2, transient2, code2 = Enforce.pre_action(bridge, "choose_pack_card")
   check("TW-07: outside a force the same block stays a plain failure",
     ok2 == false and transient2 == true and code2 == "TRANSITION_PENDING"
       and ActionResult.acknowledges(code2) == false, tostring(code2) .. " / " .. tostring(msg2))
@@ -874,16 +887,16 @@ do
   local FH = require("force.force_helpers")
   G.NEURO.last_failed_action = nil; G.NEURO.last_failed_reason = nil
   check("warning empty with no failure", FH.failed_action_warning() == "")
-  G.NEURO.last_failed_action = "use_card"
+  G.NEURO.last_failed_action = "choose_pack_card"
   G.NEURO.last_failed_reason = "the consumable could not be used"
   local w = FH.failed_action_warning()
-  check("warning names the action", w:find("use_card") ~= nil, w)
+  check("warning names the action", w:find("choose_pack_card") ~= nil, w)
   check("warning carries last_failed_reason", w:find("the consumable could not be used") ~= nil, w)
 
   mock_state("Small blind selectable", "BLIND_SELECT")
   local okb, rb = pcall(require("force.force_blind_select").build, "")
   check("BLIND_SELECT force prepends failure warning",
-    okb and type(rb) == "table" and tostring(rb.query):find("use_card") ~= nil, okb and rb and rb.query)
+    okb and type(rb) == "table" and tostring(rb.query):find("choose_pack_card") ~= nil, okb and rb and rb.query)
 
   G.GAME.pack_choices = 1
   G.pack_cards = { cards = { card("2", "Hearts") } }
@@ -902,14 +915,14 @@ do
   TG.reset(); Router._guard_defer_at = nil
   G.GAME.STOP_USE = 0
   local f0 = D.get_force_for_state("BUFFOON_PACK")
-  check("pack offers use_card once settled (STOP_USE=0)", f0 and has(f0.actions or {}, "use_card"),
+  check("pack offers choose_pack_card once settled (STOP_USE=0)", f0 and has(f0.actions or {}, "choose_pack_card"),
     f0 and table.concat(f0.actions or {}, ","))
 
   TG.reset(); Router._guard_defer_at = nil
   G.GAME.STOP_USE = 4
   local f1 = D.get_force_for_state("BUFFOON_PACK")
-  local skip_only = f1 and f1.actions and #f1.actions == 1 and f1.actions[1] == "skip_booster"
-  check("pack NEVER ships skip-only while use_card settles (defers instead)", not skip_only,
+  local skip_only = f1 and f1.actions and #f1.actions == 1 and f1.actions[1] == "skip_pack"
+  check("pack NEVER ships skip-only while choose_pack_card settles (defers instead)", not skip_only,
     f1 and table.concat(f1.actions or {}, ",") or "nil (deferred)")
   G.GAME.STOP_USE = 0; TG.reset(); Router._guard_defer_at = nil
 end
@@ -929,7 +942,7 @@ do
   G.GAME.STOP_USE = 4
   local f1 = D.get_force_for_state("BUFFOON_PACK")
   local sell_only = f1 and f1.actions and #f1.actions == 1 and f1.actions[1] == "sell_card"
-  check("pack NEVER ships sell-only while use_card settles (defers)", not sell_only,
+  check("pack NEVER ships sell-only while choose_pack_card settles (defers)", not sell_only,
     f1 and table.concat(f1.actions or {}, ",") or "nil (deferred)")
   G.GAME.STOP_USE = 0; TG.reset(); Router._guard_defer_at = nil
 end
@@ -958,12 +971,12 @@ do
     table.concat(adv_open, ",") .. " vs " .. table.concat((f_open or {}).actions or {}, ","))
 
   TG.reset(); Router._guard_defer_at = nil
-  G.CONTROLLER = { locks = { toggle_shop = true } }
+  G.CONTROLLER = { locks = { leave_shop = true } }
   local f_lock = D.get_force_for_state("SHOP")
   local adv_lock = move_tokens((f_lock or {}).query or "")
-  check("guard-locked toggle_shop not advertised", not has(adv_lock, "toggle_shop"),
+  check("guard-locked leave_shop not advertised", not has(adv_lock, "leave_shop"),
     table.concat(adv_lock, ","))
-  check("guard-locked toggle_shop not in accepted set", not has((f_lock or {}).actions or {}, "toggle_shop"),
+  check("guard-locked leave_shop not in accepted set", not has((f_lock or {}).actions or {}, "leave_shop"),
     table.concat((f_lock or {}).actions or {}, ","))
   G.CONTROLLER = nil; TG.reset(); Router._guard_defer_at = nil
 end
@@ -1158,7 +1171,7 @@ do
   check("joker_slot_status", jss.count == 2 and jss.limit == 5 and jss.full == false)
   G.jokers = nil
 
-  check("NON_PROGRESS includes a stated-intent action", require("core.action_policy").NON_PROGRESS.set_plan == true)
+  check("NON_PROGRESS includes a stated-intent action", require("core.action_policy").NON_PROGRESS.record_plan == true)
   check("NON_PROGRESS includes a non-advancing action", require("core.action_policy").NON_PROGRESS.set_joker_order == true)
 
   G.NEURO.once_serials = nil
@@ -1233,12 +1246,16 @@ do
 
   local voucher = { cost = 5, ability = { set = "Voucher" }, config = { center = { key = "v_overstock" } } }
   G.shop_vouchers = { cards = { voucher } }
-  local first = H("buy_from_shop")({ area = "shop_vouchers", index = 1 })
+  local _, first_err = H("buy_from_shop")({ area = "shop_vouchers", index = 1 })
+  local first = first_err
   check("voucher buy asks for confirmation first", type(first) ~= "function", type(first))
+  local CR = require("core.context_review")
+  CR.stage(first_err.context_review_candidate, { status = "written" })
+  CR.step_delivery()
   local cv = H("buy_from_shop")({ area = "shop_vouchers", index = 1 })
   check("voucher buy -> exec closure", type(cv) == "function")
   if cv then pcall(cv) end
-  check("voucher routed via use_card, not buy_from_shop", use_called == true and called == nil)
+  check("voucher routed via use_consumable, not buy_from_shop", use_called == true and called == nil)
 
   use_called = nil
   G.NEURO.reserved_dollars = 0
@@ -1246,7 +1263,7 @@ do
   G.shop_booster = { cards = { pack } }
   local cb = H("buy_from_shop")({ area = "shop_booster", index = 1 })
   if cb then pcall(cb) end
-  check("booster routed via use_card, not buy_from_shop", use_called == true and called == nil)
+  check("booster routed via use_consumable, not buy_from_shop", use_called == true and called == nil)
 
   called, captured_id = nil, nil
   G.NEURO.reserved_dollars = 0
@@ -1349,7 +1366,7 @@ do
   G.GAME = G.GAME or {}
   G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  require("core.force_state").arm("SHOP", { "toggle_shop" }, { toggle_shop = true }, 1)
+  require("core.force_state").arm("SHOP", { "leave_shop" }, { leave_shop = true }, 1)
   local DW_ot = require("core.decision_window")
   DW_ot.reset_field("order_think")
   local function roster(specs)
@@ -1361,22 +1378,22 @@ do
   end
   G.jokers = roster({ { "j_joker", { mult = 4 } }, { "j_greedy_joker", { mult = 3 } } })
   check("joker-order think stays silent on an all-additive roster (order is a no-op)",
-    Enforce.pre_action(nil, "toggle_shop") == true)
+    Enforce.pre_action(nil, "leave_shop") == true)
   DW_ot.reset_field("order_think")
   G.jokers = roster({ { "j_scary_face", { set = "Joker", bonus = 50 } }, { "j_cavendish", { x_mult = 3 } } })
   check("joker-order think stays silent on chips+xMult (chips position is irrelevant)",
-    Enforce.pre_action(nil, "toggle_shop") == true)
+    Enforce.pre_action(nil, "leave_shop") == true)
   DW_ot.reset_field("order_think")
   G.jokers = roster({ { "j_joker", { mult = 4 } }, { "j_cavendish", { x_mult = 3 } } })
-  local ok1, msg1 = Enforce.pre_action(nil, "toggle_shop")
+  local ok1, msg1 = Enforce.pre_action(nil, "leave_shop")
   check("joker-order think fires when an xMult sits with additive jokers",
     ok1 == false and type(msg1) == "string" and msg1:find("Your joker lineup changed", 1, true) ~= nil, msg1)
   G.jokers = roster({ { "j_cavendish", { x_mult = 3 } }, { "j_joker", { mult = 4 } } })
   check("joker-order think silent on reorder-only (composition unchanged, repeat commits)",
-    Enforce.pre_action(nil, "toggle_shop") == true)
+    Enforce.pre_action(nil, "leave_shop") == true)
   G.jokers = roster({ { "j_joker", { mult = 4 } }, { "j_blueprint", {} } })
   check("joker-order think re-fires when the joker set changes",
-    Enforce.pre_action(nil, "toggle_shop") == false)
+    Enforce.pre_action(nil, "leave_shop") == false)
   G.jokers = nil
   G.NEURO.force_inflight = nil; G.NEURO.force_state = nil; G.NEURO.force_window = nil
   require("core.decision_window").reset_field("order_think")
@@ -1406,22 +1423,22 @@ do
   local function dispatch(id, name, data)
     G.NEURO.force_inflight = false
     G.NEURO.force_window = nil
-    require("core.force_state").arm("SHOP", { "set_plan", "set_joker_order", "toggle_shop" }, { set_plan = true, set_joker_order = true, toggle_shop = true }, 1)
+    require("core.force_state").arm("SHOP", { "record_plan", "set_joker_order", "leave_shop" }, { record_plan = true, set_joker_order = true, leave_shop = true }, 1)
     D.handle_message({ command = "action", data = { id = id, name = name, data = data or {} } }, bridge)
   end
   local toggled = false
   G.FUNCS.toggle_shop = function() toggled = true end
-  require("tests.helpers").stage_registered(nil, { "toggle_shop", "set_plan", "set_joker_order" })
-  dispatch("shop-revision-leave-early", "toggle_shop")
+  require("tests.helpers").stage_registered(nil, { "leave_shop", "record_plan", "set_joker_order" })
+  dispatch("shop-revision-leave-early", "leave_shop")
   local toggled_early = toggled
-  dispatch("shop-revision-partial", "set_plan", { money_plan = "hold enough for interest" })
-  dispatch("shop-revision-full", "set_plan", {
+  dispatch("shop-revision-partial", "record_plan", { money_plan = "hold enough for interest" })
+  dispatch("shop-revision-full", "record_plan", {
     hand_plan = "play the upgraded hand",
     build_plan = "two jokers now, seek xMult",
     money_plan = "hold enough for interest",
   })
   dispatch("tw05-order", "set_joker_order", { from_index = 1, to_index = 2 })
-  dispatch("tw05-leave", "toggle_shop")
+  dispatch("tw05-leave", "leave_shop")
   check("shop exit requires a complete post-shop plan revision",
     #results == 5 and results[1].ok == true and results[1].reason == "CONFIRMATION_REQUIRED"
       and toggled_early == false and results[2].ok == false
@@ -1452,16 +1469,16 @@ do
       results[#results + 1] = { ok = ok, msg = msg, reason = reason }
     end,
   }
-  require("tests.helpers").stage_registered(nil, { "set_plan" })
+  require("tests.helpers").stage_registered(nil, { "record_plan" })
   for i = 1, 4 do
     G.NEURO.force_inflight = false
     G.NEURO.force_window = nil
-    require("core.force_state").arm("SHOP", { "set_plan" }, { set_plan = true }, 1)
-    D.handle_message({ command = "action", data = { id = "n3f7-" .. i, name = "set_plan", data = {} } }, bridge)
+    require("core.force_state").arm("SHOP", { "record_plan" }, { record_plan = true }, 1)
+    D.handle_message({ command = "action", data = { id = "n3f7-" .. i, name = "record_plan", data = {} } }, bridge)
   end
-  check("four set_plan|{} rejections are recorded",
+  check("four record_plan|{} rejections are recorded",
     #results == 4, tostring(#results))
-  check("the first three set_plan|{} rejections carry PRECONDITION_FAILED and success=false",
+  check("the first three record_plan|{} rejections carry PRECONDITION_FAILED and success=false",
     results[1].ok == false and results[1].reason == "PRECONDITION_FAILED"
       and results[2].ok == false and results[2].reason == "PRECONDITION_FAILED"
       and results[3].ok == false and results[3].reason == "PRECONDITION_FAILED",
@@ -1581,6 +1598,7 @@ end
 
 do
   local function H(name) return D.get_action_handler(name) end
+  Config.set("NEURO_CONFIRM_HAND", "off")
   mock_state("Normal", "SELECTING_HAND")
   G.NEURO.last_play = nil
   G.hand = { cards = { card("King", "Hearts"), card("King", "Spades"), card("9", "Clubs"),
@@ -1622,6 +1640,7 @@ do
   check("no LP line after clear", blob:find("Last hand:", 1, true) == nil and blob:find("Last discard:", 1, true) == nil)
 
   G.GAME.chips = nil; G.GAME.blind = nil; G.FUNCS.get_poker_hand_info = nil
+  Config.set("NEURO_CONFIRM_HAND", "on")
 end
 
 do
@@ -2199,21 +2218,21 @@ do
   G.setup_seed = nil
 
   local f = D.get_force_for_state("MENU")
-  check("seed chain: MENU force offers setup_run", f and has(f.actions, "setup_run"))
+  check("seed chain: MENU force offers open_run_setup", f and has(f.actions, "open_run_setup"))
   check("seed chain: MENU force omits toggle_seeded_run (fails without overlay)",
     not has((f or {}).actions, "toggle_seeded_run"))
   check("seed chain: MENU force omits paste_seed (wiped by overlay rebuild)",
     not has((f or {}).actions, "paste_seed"))
-  check("seed chain: MENU force omits start_setup_run (dispatcher rejects it)",
-    not has((f or {}).actions, "start_setup_run"))
+  check("seed chain: MENU force omits start_run (dispatcher rejects it)",
+    not has((f or {}).actions, "start_run"))
   check("seed chain: toggle_seeded_run invalid without overlay", not A.is_action_valid("toggle_seeded_run"))
-  check("seed chain: start_setup_run invalid without overlay", not A.is_action_valid("start_setup_run"))
+  check("seed chain: start_run invalid without overlay", not A.is_action_valid("start_run"))
 
   G.OVERLAY_MENU = { get_UIE_by_ID = function(_, id) return (id == "run_setup_seed") and {} or nil end }
   local rs = D.get_force_for_state("RUN_SETUP")
   check("seed chain: run-setup force offers toggle_seeded_run", rs and has(rs.actions, "toggle_seeded_run"))
   check("seed chain: run-setup force offers paste_seed", rs and has(rs.actions, "paste_seed"))
-  check("seed chain: run-setup force offers start_setup_run", rs and has(rs.actions, "start_setup_run"))
+  check("seed chain: run-setup force offers start_run", rs and has(rs.actions, "start_run"))
   local rq = (rs or {}).query or ""
   check("seed chain: run-setup force shows seeded mode fact", rq:find("Seeded mode: OFF", 1, true) ~= nil, rq)
   check("seed chain: run-setup force gives paste_seed payload example",
@@ -2241,7 +2260,7 @@ do
   local rq2 = (rs2 or {}).query or ""
   check("seed chain: force reflects seeded ON + pasted seed",
     rq2:find("Seeded mode: ON", 1, true) ~= nil and rq2:find("Pasted seed: ABC123XY", 1, true) ~= nil, rq2)
-  check("seed chain: start_setup_run valid with overlay open", A.is_action_valid("start_setup_run"))
+  check("seed chain: start_run valid with overlay open", A.is_action_valid("start_run"))
 
   G.OVERLAY_MENU = nil
   G.run_setup_seed = nil
@@ -2278,7 +2297,7 @@ do
   G.SETTINGS = { profile = 1 }
   G.PROFILES = { [1] = { MEMORY = {} } }
   G.OVERLAY_MENU = { get_UIE_by_ID = function(_, id) return id == "run_setup_seed" and {} or nil end }
-  local choose = D.get_action_handler("change_selected_back")({ back = "b_blue" })
+  local choose = D.get_action_handler("select_deck")({ back = "b_blue" })
   choose()
   G.GAME.viewed_back:change_to(red)
   G.GAME.selected_back:change_to(red)
@@ -2296,10 +2315,10 @@ do
   G.NEURO.setup_acknowledged = true
   G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  require("core.force_state").arm("RUN_SETUP", { "start_setup_run" }, { start_setup_run = true }, 1)
-  require("tests.helpers").stage_registered(nil, { "start_setup_run" })
+  require("core.force_state").arm("RUN_SETUP", { "start_run" }, { start_run = true }, 1)
+  require("tests.helpers").stage_registered(nil, { "start_run" })
   D.handle_message({ command = "action", data = {
-    id = "deck-start-persistence", name = "start_setup_run", data = {},
+    id = "deck-start-persistence", name = "start_run", data = {},
   } }, { send_action_result = function() end })
   check("selected deck is injected into start_run despite stale menu state", started_with == "b_blue", started_with)
   check("start_run hook is restored after run start", G.FUNCS.start_run == injected_start_run, tostring(G.FUNCS.start_run))
@@ -2366,12 +2385,12 @@ do
     { ability = { name = "Joker" }, sell_cost = 3, config = { center = { key = "j_joker" } } },
     { ability = { name = "Blueprint" }, sell_cost = 3, config = { center = { key = "j_blueprint" } } },
   }, config = { card_limit = 5 } }
-  local f = D.get_force_for_state("SHOP")
-  local ctx = ContextCompact.build("SHOP", f.actions, { force_phase = true, no_cache = true })
-  local ctx2 = ContextCompact.build("SHOP", f.actions, { no_cache = true })
-  check("the action list never rides in the state text -- actions/force carries action_names",
+  local action_list = A.get_valid_actions_for_state("SHOP")
+  local ctx = ContextCompact.build("SHOP", action_list, { force_phase = true, no_cache = true })
+  local ctx2 = ContextCompact.build("SHOP", action_list, { no_cache = true })
+  check("the action list never rides in the state text -- actions/force carries it",
     ctx:find("AVAIL:", 1, true) == nil and ctx2:find("AVAIL:", 1, true) == nil, ctx2:sub(1, 200))
-  check("the force still ships a non-empty action list", #f.actions > 0, #f.actions)
+  check("the state still has a non-empty action list", #action_list > 0, #action_list)
 end
 
 do
@@ -2504,7 +2523,7 @@ do
   check("real_name reveals the owned card's center name", Utils.real_name(hidden) == "Ankh")
   G.consumeables = { cards = { hidden }, config = { card_limit = 2 } }
   G.FUNCS.use_card = function() end
-  local c = D.get_action_handler("use_card")({ area = "consumeables", index = 1 })
+  local c = D.get_action_handler("use_consumable")({ area = "consumeables", index = 1 })
   local ok_u, r_u = pcall(c)
   check("use feedback names the card", ok_u and r_u == "Used: Ankh", tostring(r_u))
   G.FUNCS.use_card = nil
@@ -2534,9 +2553,12 @@ do
   G.jokers = { cards = { jk("Green Joker"), jk("Abstract Joker"), jk("Ice Cream") },
     config = { card_limit = 5 } }
   G.FUNCS.sell_card = function() end
-  local c, err = D.get_action_handler("sell_card")({ area = "jokers", index = 2, name = "Green Joker" })
-  check("SELL: name mismatch rejected with both names",
-    c == nil and action_error(err):find("'Abstract Joker', not 'Green Joker'", 1, true) ~= nil, tostring(err))
+  G.NEURO._candidate_probe = true
+  local shifted = { area = "jokers", index = 2, name = "Green Joker" }
+  local c, err = D.get_action_handler("sell_card")(shifted)
+  G.NEURO._candidate_probe = nil
+  check("SELL: a unique exact name safely relocates a shifted index",
+    type(c) == "function" and shifted.index == 1, tostring(err))
   local c2, err2 = D.get_action_handler("sell_card")({ area = "jokers", index = 2, name = "Abstract Joker" })
   check("SELL: matching name passes validation", c2 ~= nil, tostring(err2))
   G.FUNCS.sell_card = nil
@@ -2559,7 +2581,7 @@ do
   local tarot = { ability = { set = "Tarot", consumeable = {}, name = "The Fool" },
     config = { center = { key = "c_fool", set = "Tarot", loc_txt = { name = "The Fool" } } } }
   G.consumeables = { cards = { tarot }, config = { card_limit = 2 } }
-  local c3, err3 = D.get_action_handler("use_card")({ area = "consumeables", index = 1, name = "The Hermit" })
+  local c3, err3 = D.get_action_handler("use_consumable")({ area = "consumeables", index = 1, name = "The Hermit" })
   check("USE: name mismatch rejected", c3 == nil and action_error(err3):find("'The Fool', not 'The Hermit'", 1, true) ~= nil, tostring(err3))
   G.consumeables = nil; G.shop_jokers = nil; G.jokers = nil
 end
@@ -2864,8 +2886,8 @@ do
     run_generation = tonumber(G.NEURO.run_generation) or 0,
   }
   G.NEURO.weak_fired_serial = tonumber(G.NEURO.decision_serial) or 0
-  check("WEAK: should_stage=true on the re-send (cards lift for the real play)",
-    Staging.should_stage(msg) == true)
+  check("WEAK: repeating the same indices does not stage or commit the play",
+    Staging.should_stage(msg) == false)
   G.NEURO.play_confirm = nil
   G.NEURO.weak_fired_serial = nil
   G.GAME.current_round.discards_left = 0
@@ -2877,8 +2899,8 @@ do
     indices = { 1, 2 }, decision_serial = tonumber(G.NEURO.decision_serial) or 0,
     run_generation = tonumber(G.NEURO.run_generation) or 0,
   }
-  check("CONFIRM: re-send at 0 discards stages the reviewed play",
-    Staging.should_stage(msg) == true)
+  check("CONFIRM: repeating the same indices still does not stage the reviewed play",
+    Staging.should_stage(msg) == false)
   G.GAME.blind = saved_blind; G.hand = saved_hand
   if G.FUNCS then G.FUNCS.get_poker_hand_info = saved_gpi end
   G.NEURO.play_confirm = nil
@@ -2911,9 +2933,9 @@ do
   G.NEURO.state_enter_serial = 4
   require("core.decision_window").reset_field("pack_review")
   local pk = { command = "action",
-    data = { name = "use_card", id = "b1", data = J.encode({ area = "booster_pack", index = 1 }) } }
+    data = { name = "choose_pack_card", id = "b1", data = J.encode({ area = "booster_pack", index = 1 }) } }
   check("JANK: booster pick with pack-think pending is NOT staged", Staging.should_stage(pk) == false)
-  require("core.decision_window").evaluate("use_card")
+  require("core.decision_window").evaluate("choose_pack_card")
   check("JANK: booster pick on confirm re-send IS staged", Staging.should_stage(pk) == true)
   require("core.decision_window").reset_field("pack_review")
 end
@@ -4736,7 +4758,7 @@ do
   local listed_in = {}
   for _, sname in ipairs({ "SHOP", "SELECTING_HAND", "BLIND_SELECT", "MENU", "ROUND_EVAL" }) do
     for _, a in ipairs(A.get_action_names_for_state(sname) or {}) do
-      if a == "toggle_shop" then listed_in[#listed_in + 1] = sname end
+      if a == "leave_shop" then listed_in[#listed_in + 1] = sname end
     end
   end
   local function source_of(path)
@@ -4758,17 +4780,20 @@ do
 
   Config.set("NEURO_CONFIRM_HAND", "on")
   local play_desc = live_play_desc()
-  check("the play_hand contract states the two-send commit protocol",
-    play_desc:find("two sends", 1, true) ~= nil
-      and play_desc:find("confirm_play", 1, true) ~= nil
-      and play_desc:find("is FINAL", 1, true) == nil,
+  check("the play_hand contract states the explicit yes/no commit protocol",
+    play_desc:find("first play_hand", 1, true) ~= nil
+      and play_desc:find('answer:"yes"', 1, true) ~= nil
+      and play_desc:find('answer:"no"', 1, true) ~= nil
+      and play_desc:find("exact integer `transaction_id`", 1, true) ~= nil
+      and play_desc:find("single review", 1, true) ~= nil
+      and play_desc:find("final choice", 1, true) ~= nil,
     play_desc:sub(1, 120))
 
   Config.set("NEURO_CONFIRM_HAND", "off")
   local direct_desc = live_play_desc()
   check("with confirmations off the contract states the single-send commit instead",
     direct_desc:find("commits the selection on the first send", 1, true) ~= nil
-      and direct_desc:find("confirm_play", 1, true) == nil
+      and direct_desc:find("resolve_play", 1, true) == nil
       and direct_desc:find("two sends", 1, true) == nil,
     direct_desc:sub(1, 120))
   Config.set("NEURO_CONFIRM_HAND", "on")
@@ -4806,7 +4831,7 @@ do
       and ds_body:find("G.SETTINGS.GAMESPEED", 1, true) ~= nil
       and ds_body:find("G.SPEEDFACTOR", 1, true) ~= nil)
 
-  check("toggle_shop is listed for the shop state and no other",
+  check("leave_shop is listed for the shop state and no other",
     #listed_in == 1 and listed_in[1] == "SHOP",
     "listed in: " .. table.concat(listed_in, ","))
   _G.G = saved_G

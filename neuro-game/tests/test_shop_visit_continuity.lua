@@ -68,7 +68,6 @@ check("entry from ROUND_EVAL advances the economy epoch", first.economy == 1, fi
 check("shop entry snapshots the current balance", first.entry == 9, first.entry)
 
 G.NEURO.econ_plan_ok = true
-G.NEURO.last_sell_reject = "sell:1:j_a"
 G.NEURO.reserved_dollars = 4
 G.GAME.dollars = 5
 go("SHOP", "ARCANA_PACK")
@@ -88,8 +87,6 @@ check("returning from a pack does not advance the visit epoch", back.visit == fi
 check("returning from a pack does not advance the economy epoch", back.economy == first.economy, back.economy)
 check("returning from a pack preserves the entry balance snapshot", back.entry == 9, back.entry)
 check("returning from a pack preserves the economy plan", G.NEURO.econ_plan_ok == true)
-check("returning from a pack preserves sell confirmation",
-  G.NEURO.last_sell_reject == "sell:1:j_a", tostring(G.NEURO.last_sell_reject))
 check("returning from a pack consumes the resume marker",
   G.NEURO.shop_pack_interrupt == nil, tostring(G.NEURO.shop_pack_interrupt))
 

@@ -34,11 +34,11 @@ local function shop(cards)
 end
 
 local function requires_order()
-  return PlanGate.action_requirements("SHOP", "toggle_shop").joker_order ~= nil
+  return PlanGate.action_requirements("SHOP", "leave_shop").joker_order ~= nil
 end
 
 local function leave(data)
-  local tx, err = PlanTransaction.prepare("toggle_shop", data or {})
+  local tx, err = PlanTransaction.prepare("leave_shop", data or {})
   return tx, err
 end
 
@@ -52,7 +52,7 @@ shop({ xmult("j_cavendish", 3), flat("j_joker", 4) })
 check("a +Mult joker behind the xMult makes the confirmation required", requires_order())
 
 local _, blocked = leave()
-check("toggle_shop is refused while the order is unconfirmed",
+check("leave_shop is refused while the order is unconfirmed",
   blocked ~= nil and blocked.reason_code == "PRECONDITION_FAILED",
   blocked and (tostring(blocked.reason_code) .. " " .. tostring(blocked.message)))
 check("the refusal names both slots and the two ways out",
@@ -62,10 +62,10 @@ check("the refusal names both slots and the two ways out",
     and blocked.message:find("joker_order_confirmed", 1, true),
   blocked and blocked.message)
 
-check("confirming the order lets toggle_shop through", select(2, leave({ joker_order_confirmed = true })) == nil)
+check("confirming the order lets leave_shop through", select(2, leave({ joker_order_confirmed = true })) == nil)
 check("the confirmation is remembered, so the same order is not asked about twice",
   not requires_order())
-check("a plain toggle_shop passes once the order is confirmed", select(2, leave()) == nil)
+check("a plain leave_shop passes once the order is confirmed", select(2, leave()) == nil)
 
 G.jokers.cards = { xmult("j_cavendish", 3), flat("j_joker", 4), flat("j_greedy_joker", 3) }
 check("a changed arrangement asks again rather than riding the old confirmation", requires_order())
@@ -81,15 +81,15 @@ PlanGate.enter_shop()
 check("the next shop visit asks about the same order again", requires_order())
 
 check("the soft order nudge stands down while the required gate holds the exit",
-  DecisionWindow.evaluate("toggle_shop") == false)
+  DecisionWindow.evaluate("leave_shop") == false)
 
 shop({ flat("j_joker", 4), xmult("j_cavendish", 3) })
 check("the soft order nudge still covers a roster with no inversion",
-  DecisionWindow.evaluate("toggle_shop") == "soft_reject")
+  DecisionWindow.evaluate("leave_shop") == "soft_reject")
 
 shop({ xmult("j_cavendish", 3), flat("j_joker", 4) })
 local force = require("force.force_shop").build()
-check("the shop force advertises the confirmation on toggle_shop itself",
+check("the shop force advertises the confirmation on leave_shop itself",
   force ~= nil and force.query:find("joker_order_confirmed", 1, true) ~= nil,
   force and force.query)
 

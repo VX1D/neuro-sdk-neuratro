@@ -102,7 +102,7 @@ function M.joker_order_prose()
   local many = #parts > 1
   return string.format(
     "Jokers fire left to right: %s %s right of slot %d %s (%s Mult), so that xMult never multiplies %s."
-      .. " set_joker_order moves a joker; toggle_shop with joker_order_confirmed true leaves on the current order.",
+      .. " set_joker_order moves a joker; leave_shop with joker_order_confirmed true leaves on the current order.",
     table.concat(parts, " and "), many and "sit" or "sits", gap.pivot.index,
     Utils.safe_name_or(gap.pivot.card), Utils.fmt_xmult(gap.pivot.xmult), many and "them" or "it")
 end
@@ -144,9 +144,10 @@ function M.action_requirements(current_state, action_name)
       requirements.plan.money = true
     elseif action_name == "sell_card" then
       requirements.plan.build, requirements.plan.money = true, true
-    elseif action_name == "use_card" or action_name == "use_directional_card" then
+    elseif action_name == "use_consumable" or action_name == "use_directional_consumable"
+        or action_name == "choose_pack_card" or action_name == "choose_directional_pack_card" then
       requirements.plan.hand, requirements.plan.build = true, true
-    elseif action_name == "toggle_shop" then
+    elseif action_name == "leave_shop" then
       for field, required in pairs(stale_shop_fields()) do
         if required then requirements.plan[field] = true end
       end
@@ -201,7 +202,7 @@ function M.enter_shop()
   G.NEURO.econ_plan_ok = false
   G.NEURO.shop_plan_revision_required = nil
   G.NEURO.joker_order_ack = nil
-  G.NEURO.last_sell_reject = nil
+  pcall(require("core.context_review").clear, "sell_joker")
   G.NEURO.shop_entry_pending = true
   M.settle_shop_entry()
   require("core.decision_window").reset_field("shop_economy")

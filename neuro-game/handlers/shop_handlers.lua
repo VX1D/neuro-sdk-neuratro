@@ -10,6 +10,7 @@ local function anim() return Utils.lazy_require("render.neuro-anim") end
 local Showcase = require("hud.showcase")
 local ActionResult = require("core.action_result")
 local ActionReceipt = require("core.action_receipt")
+local ContextReview = require("core.context_review")
 local Lifecycle = require("core.neuro_lifecycle")
 local GameplayJournal = require("core.gameplay_journal")
 local safe_name_or = Utils.safe_name_or
@@ -17,6 +18,66 @@ local validate_area_card = CardArea.validate_area_card
 local get_area = CardArea.get_area
 local mock_UIBox = GameActions.mock_UIBox
 local shop_spend_floor = CtxEconomy.spend_floor
+
+local function card_identity(card, money_field)
+  local center = card and card.config and card.config.center or {}
+  return table.concat({
+    tostring(card and card.sort_id), tostring(center.key),
+    tostring(card and Utils.real_name_or(card)),
+    tostring(card and card[money_field] or 0),
+  }, "/")
+end
+
+local function ordered_area_identity(area, money_field)
+  local out = {}
+  for i, card in ipairs((area and area.cards) or {}) do
+    out[#out + 1] = tostring(i) .. ":" .. card_identity(card, money_field)
+  end
+  return table.concat(out, ",")
+end
+
+local function sorted_map_identity(map)
+  local out = {}
+  for key, value in pairs(type(map) == "table" and map or {}) do
+    local detail = type(value) == "table"
+      and table.concat({ tostring(value.tag), tostring(value.note) }, "/") or tostring(value)
+    out[#out + 1] = tostring(key) .. "=" .. detail
+  end
+  table.sort(out)
+  return table.concat(out, ",")
+end
+
+local function common_review_parts(kind)
+  local n, game = G and G.NEURO or {}, G and G.GAME or {}
+  return {
+    kind, tostring(n.run_generation or 0), tostring(n.state or ""),
+    tostring(n.state_enter_serial or 0), tostring(n.shop_visit_epoch or 0),
+    tostring(game.dollars or 0),
+  }
+end
+
+local function sell_context_key()
+  local n = G and G.NEURO or {}
+  local parts = common_review_parts("sell_joker")
+  parts[#parts + 1] = ordered_area_identity(G and G.jokers, "sell_cost")
+  parts[#parts + 1] = tostring(n.joker_intent_revision or 0)
+  parts[#parts + 1] = sorted_map_identity(n.joker_intents)
+  parts[#parts + 1] = tostring(n.plan_revision or 0)
+  parts[#parts + 1] = tostring(n.plan and n.plan.build or "")
+  local sold = n.jokers_sold
+  parts[#parts + 1] = tostring(type(sold) == "table" and sold.count or 0)
+  return table.concat(parts, "|")
+end
+
+local function voucher_context_key()
+  local game = G and G.GAME or {}
+  local parts = common_review_parts("buy_voucher")
+  parts[#parts + 1] = ordered_area_identity(G and G.shop_vouchers, "cost")
+  parts[#parts + 1] = tostring(GameFacts.reserved_dollars())
+  parts[#parts + 1] = tostring(shop_spend_floor())
+  parts[#parts + 1] = sorted_map_identity(game.used_vouchers)
+  return table.concat(parts, "|")
+end
 
 local function area_contains(area, target)
   for _, card in ipairs((area and area.cards) or {}) do
@@ -41,7 +102,7 @@ end
 local function voucher_buy_reason(card_name, cost, left)
   return string.format(
     "Buying %s for $%d, leaving $%d. A voucher lasts the whole run and cannot be sold or undone."
-      .. " Send buy_from_shop again to confirm, or pick something else.",
+      .. " Nothing was purchased. After this review is delivered, the next legal voucher buy in this unchanged shop context is FINAL, even if you choose a different voucher; or pick something else.",
     card_name, cost, math.max(0, left))
 end
 
@@ -79,27 +140,21 @@ local function handle_buy_from_shop(data)
   local is_booster = set == "Booster"
   local is_voucher = set == "Voucher"
   if is_voucher and not (G.NEURO and G.NEURO._candidate_probe) then
-    local sig = "buy_voucher:" .. tostring((G.NEURO and G.NEURO.state_enter_serial) or 0)
-      .. ":" .. tostring(card.sort_id or card_name)
-    local decision = tonumber(G.NEURO and G.NEURO.decision_serial) or 0
-    if G.NEURO and G.NEURO.last_voucher_reject == sig
-      and (tonumber(G.NEURO.last_voucher_review_serial) or 0) == decision then
-      G.NEURO.last_voucher_reject = nil
-      G.NEURO.last_voucher_review_serial = nil
-    else
-      if G.NEURO then
-        G.NEURO.last_voucher_reject = sig
-        G.NEURO.last_voucher_review_serial = decision
-      end
+    local context_key = voucher_context_key()
+    if not ContextReview.is_reviewed("buy_voucher", context_key) then
       return ActionResult.reject("CONFIRMATION_REQUIRED",
-        voucher_buy_reason(card_name, cost, dollars - cost))
+        voucher_buy_reason(card_name, cost, dollars - cost), {
+          context_review_candidate = ContextReview.candidate("buy_voucher", context_key,
+            { target = card_name }),
+          consume_force_attempt = true,
+        })
     end
   end
   if data.use and card and card.ability and card.ability.consumeable then
     local needs = tonumber(card.ability.consumeable.max_highlighted or 0) or 0
     if needs > 0 then
       return ActionResult.reject("INVALID_SELECTION",
-        string.format("%s targets hand cards and can't be used straight from the shop; buy it without use, then use_card with hand_indices.", card_name))
+        string.format("%s targets hand cards and can't be used straight from the shop; buy it without use, then use_consumable with hand_indices.", card_name))
     end
   end
   if card and card.ability and card.ability.consumeable and not data.use and not is_booster
@@ -388,16 +443,22 @@ local function joker_sell_reason(card_name, tag, note, sell_value, remaining)
   if type(build) == "string" and build ~= "" then
     parts[#parts + 1] = "Your build plan: \"" .. build .. "\"."
   end
-  parts[#parts + 1] = "Send sell_card again to confirm, or keep the joker and act elsewhere."
+  parts[#parts + 1] = "Nothing was sold. After this review is delivered, the next legal sell_card in this unchanged context is FINAL, even if you choose a different joker; or keep the joker and act elsewhere."
   return table.concat(parts, " ")
 end
 
 local function handle_sell_card(data)
-  local _, card, err = validate_area_card(data)
+  local area, card, err = validate_area_card(data)
   if err then return ActionResult.reject("TARGET_UNAVAILABLE", err) end
-  local card_name = safe_name_or(card)
   local name_err = CardArea.check_target_name(card, data.name, data.index, data.area)
+  if name_err and type(data.name) == "string" and data.name ~= "" then
+    local relocated, index = CardArea.find_card_by_name(area, data.name)
+    if relocated and index then
+      data.index, card, name_err = index, relocated, nil
+    end
+  end
   if name_err then return ActionResult.reject("STALE_TARGET", name_err) end
+  local card_name = safe_name_or(card)
   if card.ability and card.ability.eternal then
     return nil, string.format("Cannot sell %s — it is Eternal. Eternal jokers can never be sold or destroyed.", card_name)
   end
@@ -407,21 +468,15 @@ local function handle_sell_card(data)
     and sell_is_guarded(state_now) then
     local entry = G.NEURO and G.NEURO.joker_intents and G.NEURO.joker_intents[card.sort_id]
     local tag = entry and entry.tag or nil
-    local sig = "sell:" .. tostring((G.NEURO and G.NEURO.state_enter_serial) or 0)
-      .. ":" .. tostring(card.sort_id or card_name)
-    local decision = tonumber(G.NEURO and G.NEURO.decision_serial) or 0
-    if G.NEURO and G.NEURO.last_sell_reject == sig
-      and (tonumber(G.NEURO.last_sell_review_serial) or 0) == decision then
-      G.NEURO.last_sell_reject = nil
-      G.NEURO.last_sell_review_serial = nil
-    else
-      if G.NEURO then
-        G.NEURO.last_sell_reject = sig
-        G.NEURO.last_sell_review_serial = decision
-      end
+    local context_key = sell_context_key()
+    if not ContextReview.is_reviewed("sell_joker", context_key) then
       local remaining = math.max(0, #((G and G.jokers and G.jokers.cards) or {}) - 1)
       return ActionResult.reject("CONFIRMATION_REQUIRED",
-        joker_sell_reason(card_name, tag, entry and entry.note, card.sell_cost or 0, remaining))
+        joker_sell_reason(card_name, tag, entry and entry.note, card.sell_cost or 0, remaining), {
+          context_review_candidate = ContextReview.candidate("sell_joker", context_key,
+            { target = card_name }),
+          consume_force_attempt = true,
+        })
     end
   end
   local sell_value = card.sell_cost or 0
@@ -485,41 +540,19 @@ end
 
 local function pending_sell_card_name()
   if not (G and G.NEURO and G.jokers and G.jokers.cards) then return nil end
-  local sig = G.NEURO.last_sell_reject
-  if type(sig) ~= "string" or sig == "" then return nil end
-  local serial, target = sig:match("^sell:([^:]*):(.+)$")
-  if serial == nil then return nil end
-  if serial ~= tostring(G.NEURO.state_enter_serial or 0) then return nil end
-  if (tonumber(G.NEURO.last_sell_review_serial) or 0) ~= (tonumber(G.NEURO.decision_serial) or 0) then return nil end
-  for _, card in ipairs(G.jokers.cards) do
-    if tostring(card and card.sort_id) == target or safe_name_or(card) == target then
-      return safe_name_or(card)
-    end
-  end
-  return nil
+  return ContextReview.note("sell_joker", sell_context_key())
 end
 
 local function pending_voucher_name()
   if not (G and G.NEURO) then return nil end
-  local sig = G.NEURO.last_voucher_reject
-  if type(sig) ~= "string" or sig == "" then return nil end
-  local serial, target = sig:match("^buy_voucher:([^:]*):(.+)$")
-  if serial == nil then return nil end
-  if serial ~= tostring(G.NEURO.state_enter_serial or 0) then return nil end
-  if (tonumber(G.NEURO.last_voucher_review_serial) or 0) ~= (tonumber(G.NEURO.decision_serial) or 0) then return nil end
-  for _, card in ipairs((G.shop_vouchers and G.shop_vouchers.cards) or {}) do
-    if tostring(card and card.sort_id) == target or Utils.real_name_or(card) == target then
-      return Utils.real_name_or(card)
-    end
-  end
-  return nil
+  return ContextReview.note("buy_voucher", voucher_context_key())
 end
 
 local GUARDED_CONFIRMATIONS = {
   { action = "sell_card", live = pending_sell_card_name,
-    sentence = "A sell_card confirmation is open for %s: sending sell_card for that joker again completes the sale. " },
+    sentence = "FINAL SELL CHOICE -- the sell review began with %s; the next legal sell_card now commits immediately, including a different joker. " },
   { action = "buy_from_shop", live = pending_voucher_name,
-    sentence = "A buy_from_shop confirmation is open for the voucher %s: sending buy_from_shop for that voucher again completes the purchase, and a voucher lasts the whole run and cannot be sold or undone. " },
+    sentence = "FINAL VOUCHER CHOICE -- the voucher review began with %s; the next legal voucher buy now commits immediately, including a different voucher. " },
 }
 
 local function pending_confirmation_note(offered)

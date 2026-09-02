@@ -76,11 +76,11 @@ local rollback = {
 Evidence.stage(rejected_candidate, exact, rejected, rollback)
 check("rejected delivery never promotes", Evidence.step_delivery() == false
   and G.NEURO.confirmation_delivery == nil)
-check("rejected delivery atomically restores the preflight confirmation state",
+check("rejected delivery restores only non-transaction confirmation state",
   G.NEURO.weak_fired_serial == 20
-    and G.NEURO.pending_confirmation == rollback.pending_confirmation
-    and G.NEURO.play_confirm == prior_confirm,
-  tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
+    and G.NEURO.pending_confirmation == nil
+    and G.NEURO.play_confirm == nil,
+  tostring(G.NEURO.pending_confirmation))
 
 base_game()
 G.NEURO.last_play = {
@@ -151,7 +151,7 @@ do
   local Actions = require("core.actions")
   local Registry = require("core.action_registry")
   Actions.get_static_actions()
-  local focus = Registry.get("set_plan").schema.properties.hand_focus
+  local focus = Registry.get("record_plan").schema.properties.hand_focus
   check("hand_focus advertises the visible hand names, not a free string",
     type(focus) == "table" and type(focus.properties.primary.enum) == "table",
     focus and focus.properties and focus.properties.primary)
@@ -180,10 +180,10 @@ check("rewriting free-text hand plan without focus clears stale typed anchor",
   G.NEURO.plan.hand_focus == nil and G.NEURO.plan.provenance.focus == nil)
 
 local defs = require("core.actions").get_static_actions()
-local set_plan
-for _, def in ipairs(defs) do if def.name == "set_plan" then set_plan = def break end end
-local focus_schema = set_plan and set_plan.schema and set_plan.schema.properties
-  and set_plan.schema.properties.hand_focus
+local record_plan
+for _, def in ipairs(defs) do if def.name == "record_plan" then record_plan = def break end end
+local focus_schema = record_plan and record_plan.schema and record_plan.schema.properties
+  and record_plan.schema.properties.hand_focus
 check("wire schema is static simple JSON Schema",
   type(focus_schema) == "table" and focus_schema.type == "object"
     and focus_schema.properties.primary.type == "string"

@@ -45,7 +45,7 @@ if type(Guard.engine_ready) == "function" then
   G.TIMERS.REAL = 1000 + timeout + 0.1
   check("persistent STOP_USE self-releases after the failsafe", Guard.engine_ready() == true)
   check("the same failsafe also releases the per-action STOP_USE guard",
-    Guard.reject_reason("use_card") == nil and Guard.reject_reason("skip_booster") == nil)
+    Guard.reject_reason("choose_pack_card") == nil and Guard.reject_reason("skip_pack") == nil)
   check("self-release does not mutate the engine flag", G.GAME.STOP_USE == 1)
   G.GAME.STOP_USE = 0
   check("a clear frame resets the engine gate", Guard.engine_ready() == true)

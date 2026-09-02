@@ -7,6 +7,14 @@ local persist
 local dirty = false
 local session = {}
 
+local function notify_runtime_change(key, value)
+  if key ~= "NEURO_CONFIRM_HAND" then return end
+  local ok, HandTx = pcall(require, "core.hand_transaction")
+  if ok and HandTx and HandTx.confirmation_mode_changed then
+    pcall(HandTx.confirmation_mode_changed, value == "on")
+  end
+end
+
 local function in_values(def, value)
   for i = 1, #def.values do
     if def.values[i] == value then return true end
@@ -183,7 +191,9 @@ function Config.set(key, value)
   if normalized == nil then return nil end
 
   if def.session then
+    local before = session[key] ~= nil and session[key] or def.default
     session[key] = (normalized ~= def.default) and normalized or nil
+    if before ~= normalized then notify_runtime_change(key, normalized) end
     return normalized
   end
 
@@ -192,6 +202,7 @@ function Config.set(key, value)
   if backing.settings[key] == stored then return normalized end
   backing.settings[key] = stored
   dirty = true
+  notify_runtime_change(key, normalized)
   return normalized
 end
 
@@ -200,13 +211,17 @@ function Config.reset(key)
   local def = Schema.by_key[key]
   if not def then return nil end
   if def.session then
+    local before = session[key] ~= nil and session[key] or def.default
     session[key] = nil
+    if before ~= def.default then notify_runtime_change(key, def.default) end
     return def.default
   end
+  local changed = backing.settings[key] ~= nil
   if backing.settings[key] ~= nil then
     backing.settings[key] = nil
     dirty = true
   end
+  if changed then notify_runtime_change(key, def.default) end
   return def.default
 end
 

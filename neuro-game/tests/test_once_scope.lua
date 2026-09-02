@@ -591,7 +591,7 @@ do
       local FS = require("force.force_shop")
       local real = require("core.actions").is_action_valid
       require("core.actions").is_action_valid = function(n)
-        return n == "toggle_shop" or n == "buy_from_shop"
+        return n == "leave_shop" or n == "buy_from_shop"
       end
       local a = ((FS.build() or {}).query or "")
       local b = ((FS.build() or {}).query or "")

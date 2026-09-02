@@ -29,8 +29,13 @@ local card = {
   sell_cost = 3, sort_id = "j_sale",
 }
 G.jokers.cards = { card }
-G.NEURO.last_sell_reject = "sell:1:j_sale"
-G.NEURO.last_sell_review_serial = 1
+do
+  local _, review = require("handlers.shop_handlers").handle_sell_card({
+    area = "jokers", index = 1, name = "Sale Joker" })
+  local CR = require("core.context_review")
+  CR.stage(review.context_review_candidate, { status = "written" })
+  CR.step_delivery()
+end
 stage_registered_actions("SHOP")
 
 G.NEURO.consumed_actions = { play_hand = true }
@@ -47,7 +52,8 @@ local b = {
 local message = {
   command = "action", run_generation = 1,
   data = { id = "sell-A", name = "sell_card",
-    data = { area = "jokers", index = 1, plan = { money_plan = "sell", build_plan = "sell" } } },
+    data = { area = "jokers", index = 1, name = "Sale Joker",
+      plan = { money_plan = "sell", build_plan = "sell" } } },
 }
 
 Dispatcher.validate_message(message, b)
@@ -59,11 +65,11 @@ check("job sell-A's rollback does not release job-B's unrelated reservation",
 
 local ForceState = require("core.force_state")
 G.NEURO.pack_exit_pending = "job-B"
-ForceState.correct_optimistic("use_card", "cancelled", "job-A", "job-A was cancelled")
+ForceState.correct_optimistic("choose_pack_card", "cancelled", "job-A", "job-A was cancelled")
 check("an unrelated job's correct_optimistic does not release job-B's pack_exit_pending",
   G.NEURO.pack_exit_pending == "job-B", tostring(G.NEURO.pack_exit_pending))
 
-ForceState.correct_optimistic("use_card", "cancelled", "job-B", "job-B was cancelled")
+ForceState.correct_optimistic("choose_pack_card", "cancelled", "job-B", "job-B was cancelled")
 check("correct_optimistic still releases pack_exit_pending for its actual owner",
   G.NEURO.pack_exit_pending == nil, tostring(G.NEURO.pack_exit_pending))
 

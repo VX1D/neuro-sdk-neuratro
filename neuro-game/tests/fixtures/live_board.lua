@@ -274,7 +274,7 @@ M.OUT_OF_RUN = {
   { state = "MENU", desc = "Normal: has G.GAME" },
   { state = "SPLASH", desc = "Normal: minimal state" },
   { state = "RUN_SETUP", desc = "Run setup overlay active" },
-  { state = "GAME_OVER", desc = "No overlay (setup_run must work)" },
+  { state = "GAME_OVER", desc = "No overlay (open_run_setup must work)" },
 }
 
 local function scenario(state, desc)

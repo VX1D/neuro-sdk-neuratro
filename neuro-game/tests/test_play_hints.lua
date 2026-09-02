@@ -63,7 +63,7 @@ local function shop_G(dollars)
   G.NEURO.plan = { money = "hold", money_scope = PlanGate.current_economy_scope() }
 end
 
-stub_valid(function(n) return n == "buy_from_shop" or n == "toggle_shop" end)
+stub_valid(function(n) return n == "buy_from_shop" or n == "leave_shop" end)
 local FS = require("force.force_shop")
 
 do

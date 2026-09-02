@@ -157,8 +157,8 @@ local ROWS = {
         "can buy something: " .. yn(can_buy),
         "can reroll: " .. yn(rf.can_reroll),
         "can sell: " .. yn(Actions.is_action_valid("sell_card")),
-        "can use a consumable: " .. yn(Actions.is_action_valid("use_card")
-          or Actions.is_action_valid("use_directional_card")),
+        "can use a consumable: " .. yn(Actions.is_action_valid("use_consumable")
+          or Actions.is_action_valid("use_directional_consumable")),
       }
     end,
   },

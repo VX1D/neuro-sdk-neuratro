@@ -32,6 +32,15 @@ end
 local function confirm_retry(dispatch, name, data)
   local res, err = dispatch(name, data)
   if not needs_confirmation(err) then return res, err end
+  if name == "play_hand" and err.confirmation_candidate then
+    local evidence = require("core.confirmation_evidence")
+    evidence.stage(err.confirmation_candidate, err.message, { status = "written" })
+    evidence.step_delivery()
+    return dispatch("resolve_play", {
+      transaction_id = err.confirmation_candidate.transaction_id,
+      answer = "yes",
+    })
+  end
   return dispatch(name, data)
 end
 
@@ -147,7 +156,7 @@ end
 
 local function use_owned(ctx, hand_indices)
   local idx = index_of(G.consumeables, ctx.card) or 1
-  local _, err = run_action("use_card", { area = "consumeables", index = idx, hand_indices = hand_indices })
+  local _, err = run_action("use_consumable", { area = "consumeables", index = idx, hand_indices = hand_indices })
   if err then error(err) end
 end
 
@@ -368,7 +377,7 @@ local function generic_consumable_case(kind, center)
     end,
     act = function(ctx)
       local idx = index_of(G.consumeables, ctx.card) or 1
-      local _, err = run_action("use_card", { area = "consumeables", index = idx, hand_indices = ctx.ix })
+      local _, err = run_action("use_consumable", { area = "consumeables", index = idx, hand_indices = ctx.ix })
       ctx.err = err
     end,
     wait_for = function(ctx)
@@ -496,7 +505,7 @@ SPECIAL.c_death = function(_center)
     act = function(ctx)
       local idx = index_of(G.consumeables, ctx.card) or 1
       local name = require("util.utils").safe_name_or(ctx.card)
-      local _, err = run_action("use_directional_card",
+      local _, err = run_action("use_directional_consumable",
         { area = "consumeables", index = idx, name = name, left_index = 1, right_index = 2 })
       if err then error(err) end
     end,
@@ -1049,7 +1058,7 @@ local function booster_cases(center, add)
         ctx.skipped = true
         return
       end
-      local _, err = run_action("use_card", { area = "pack_cards", index = ctx.pick_i })
+      local _, err = run_action("choose_pack_card", { area = "pack_cards", index = ctx.pick_i })
       if err then error(err) end
     end,
     wait_for = function(ctx)
@@ -1089,7 +1098,7 @@ local function booster_cases(center, add)
       local want = math.min(ctx.mx, #G.hand.cards)
       local ix = {}
       for j = 1, math.max(ctx.mn, want) do if G.hand.cards[j] then ix[#ix + 1] = j end end
-      local _, err = run_action("use_card", { area = "booster_pack", index = ctx.pick_i, hand_indices = ix })
+      local _, err = run_action("choose_pack_card", { area = "booster_pack", index = ctx.pick_i, hand_indices = ix })
       if err then error(err) end
     end,
     wait_for = function(ctx)
@@ -1111,7 +1120,7 @@ local function booster_cases(center, add)
       ctx.was_open = not not (G.booster_pack or (G.pack_cards and G.STATE ~= G.STATES.SHOP))
     end,
     act = function(ctx)
-      if ctx.was_open then gfunc("skip_booster") end
+      if ctx.was_open then gfunc("skip_pack") end
     end,
     wait_for = function()
       return G.STATE == G.STATES.SHOP and not G.booster_pack and settled()
@@ -1243,8 +1252,8 @@ function M.build()
       G.NEURO.force_state = "MENU"
       G.NEURO.force_inflight = false
       G.NEURO.force_window = nil
-      require("core.force_state").arm(G.NEURO.force_state or "MENU", { "setup_run" },
-        { setup_run = true }, require("util.utils").now())
+      require("core.force_state").arm(G.NEURO.force_state or "MENU", { "open_run_setup" },
+        { open_run_setup = true }, require("util.utils").now())
       G.NEURO.force_sent_at = require("util.utils").now()
       ctx.enf = require("core.enforce")
       ctx.saved_pre = ctx.enf.pre_action
@@ -1707,8 +1716,8 @@ function M.build()
     assert = function()
       local D = require("core.dispatcher")
       local np = D.NON_PROGRESS_FORCE_ACTIONS or {}
-      local EXPECTED = { "set_joker_order", "set_joker_intents", "set_plan", "copy_seed",
-        "change_selected_back", "change_stake", "toggle_seeded_run", "paste_seed" }
+      local EXPECTED = { "set_joker_order", "record_joker_roles", "record_plan", "copy_seed",
+        "select_deck", "select_stake", "toggle_seeded_run", "paste_seed" }
       local expected_set = {}
       for _, n in ipairs(EXPECTED) do
         expected_set[n] = true
@@ -1730,7 +1739,7 @@ function M.build()
       local ok_s, S = pcall(require, "core.staging")
       if not (ok_s and S.should_stage) then return true, "staging unavailable, skipped" end
       local function ss(name) return S.should_stage({ command = "action", data = { name = name } }) end
-      for _, n in ipairs({ "buy_from_shop", "play_hand", "discard_hand", "select_blind", "use_card", "sell_card", "cash_out" }) do
+      for _, n in ipairs({ "buy_from_shop", "play_hand", "discard_hand", "select_blind", "use_consumable", "sell_card", "cash_out" }) do
         if not ss(n) then return false, n .. " should stage but did not" end
       end
       for _, n in ipairs({ "choose_persona" }) do
@@ -1852,9 +1861,9 @@ function M.build()
         return false, "game-over force must be offered immediately"
       end
       for _, a in ipairs(f.actions) do
-        if a == "setup_run" then return true, "game-over offers setup_run immediately" end
+        if a == "open_run_setup" then return true, "game-over offers open_run_setup immediately" end
       end
-      return false, "game-over force must offer setup_run"
+      return false, "game-over force must offer open_run_setup"
     end,
     teardown = function(ctx) if G.NEURO then G.NEURO.persona = ctx.was_persona end end,
   })
@@ -2217,7 +2226,7 @@ function M.build()
     end,
     act = function(ctx)
       local idx = index_of(G.consumeables, ctx.card) or 1
-      local _, err = run_action("use_card", { area = "consumeables", index = idx, hand_indices = { 1, 2, 3, 4 } })
+      local _, err = run_action("use_consumable", { area = "consumeables", index = idx, hand_indices = { 1, 2, 3, 4 } })
       ctx.err = err
     end,
     wait_for = function() return true end,
@@ -2738,9 +2747,9 @@ function M.build()
       for _, need in ipairs(avail) do
         if not np[need] and not set[need] then return false, "shop force omits legal progress action " .. need end
       end
-      if not set["toggle_shop"] then return false, "shop force must offer toggle_shop" end
+      if not set["leave_shop"] then return false, "shop force must offer leave_shop" end
       if not set["sell_card"] then return false, "shop force must offer sell_card with a sellable joker" end
-      return true, "shop force offers all legal actions incl toggle_shop/sell_card"
+      return true, "shop force offers all legal actions incl leave_shop/sell_card"
     end,
     teardown = function(ctx)
       if ctx.buy_joker then G.NEURO.joker_intents[ctx.buy_joker.sort_id] = nil end
@@ -2897,7 +2906,7 @@ function M.build()
 
   add({
     name = "blind2/toggle_shop_exits_to_blind_select", timeout_s = 20,
-    act = function() gfunc("toggle_shop") end,
+    act = function() gfunc("leave_shop") end,
     wait_for = function()
       return G.STATE == G.STATES.BLIND_SELECT and G.blind_select and settled()
     end,
@@ -2957,16 +2966,16 @@ function M.build()
   add({
     name = "neg/change_stake_bad_value", timeout_s = 8,
     setup = function() end,
-    act = function(ctx) local _, err = run_action("change_stake", { to_key = "abc" }); ctx.err = err end,
+    act = function(ctx) local _, err = run_action("select_stake", { to_key = "abc" }); ctx.err = err end,
     wait_for = function() return true end,
-    assert = function(ctx) return ctx.err ~= nil, "change_stake non-number must reject, got: " .. tostring(ctx.err) end,
+    assert = function(ctx) return ctx.err ~= nil, "select_stake non-number must reject, got: " .. tostring(ctx.err) end,
   })
   add({
     name = "neg/change_selected_back_bad_key", timeout_s = 8,
     setup = function() end,
-    act = function(ctx) local _, err = run_action("change_selected_back", { back = "b_selftest_nonexistent" }); ctx.err = err end,
+    act = function(ctx) local _, err = run_action("select_deck", { back = "b_selftest_nonexistent" }); ctx.err = err end,
     wait_for = function() return true end,
-    assert = function(ctx) return ctx.err ~= nil, "change_selected_back bad key must reject, got: " .. tostring(ctx.err) end,
+    assert = function(ctx) return ctx.err ~= nil, "select_deck bad key must reject, got: " .. tostring(ctx.err) end,
   })
   add({
     name = "neg/choose_persona_invalid", timeout_s = 8,
@@ -3374,13 +3383,13 @@ local function pack_launch_case(name, booster_key)
       if first_tgt_i then
         local hi = {}
         for k = 1, first_tgt_min do hi[k] = k end
-        local _, err = run_action("use_card", { area = "booster_pack", index = first_tgt_i, hand_indices = hi })
+        local _, err = run_action("choose_pack_card", { area = "booster_pack", index = first_tgt_i, hand_indices = hi })
         if err then return false, "targeting pick rejected: " .. tostring(err) .. " | " .. tail end
         return true, "open+hand(" .. hand_n .. ")+targeting-pick OK | " .. tail
       end
       for i, c in ipairs(bp.cards) do
         if CardUtil.can_take_pack_card(c) then
-          local _, err = run_action("use_card", { area = "booster_pack", index = i })
+          local _, err = run_action("choose_pack_card", { area = "booster_pack", index = i })
           if err then return false, "non-target pick rejected: " .. tostring(err) .. " | " .. tail end
           return true, "open+non-target-pick OK | " .. tail
         end
@@ -3388,7 +3397,7 @@ local function pack_launch_case(name, booster_key)
       return false, "NO takeable card -- couldn't pick ANY | " .. tail
     end,
     teardown = function()
-      pcall(run_action, "skip_booster", {})
+      pcall(run_action, "skip_pack", {})
       clear_area(G.consumeables); clear_area(G.jokers)
     end,
   }
@@ -3435,7 +3444,7 @@ local function all_spectrals_case()
         bp:emplace(aura)
         local idx = index_of(bp, aura)
         if idx then
-          local _, err = run_action("use_card", { area = "booster_pack", index = idx, hand_indices = { 1 } })
+          local _, err = run_action("choose_pack_card", { area = "booster_pack", index = idx, hand_indices = { 1 } })
           pick_note = err and ("aura-pick-REJECTED: " .. tostring(err)) or "aura-pick-OK"
         end
       end
@@ -3445,7 +3454,7 @@ local function all_spectrals_case()
       return true, string.format("all %d spectrals ok=Y in real pack | %s", #SPECTRAL_KEYS, pick_note)
     end,
     teardown = function()
-      pcall(run_action, "skip_booster", {})
+      pcall(run_action, "skip_pack", {})
       clear_area(G.consumeables); clear_area(G.jokers)
     end,
   }
@@ -3562,7 +3571,7 @@ local function standard_pack_mutations_case()
       return true, string.format("all %d combos + %d fronts clean (fallback=0 edition_fail=0)", combos, fronts)
     end,
     teardown = function()
-      pcall(run_action, "skip_booster", {})
+      pcall(run_action, "skip_pack", {})
       clear_area(G.consumeables); clear_area(G.jokers)
     end,
   }
@@ -3581,7 +3590,7 @@ end
 
 local function skip_open_pack_once(ctx)
   if not ctx.skipped and G.booster_pack then
-    gfunc("skip_booster")
+    gfunc("skip_pack")
     ctx.skipped = true
   end
 end
@@ -3609,7 +3618,7 @@ local function booster_pick_case(key)
               data.hand_indices = {}
               for k = 1, math.min(mn or 1, #(G.hand and G.hand.cards or {})) do data.hand_indices[k] = k end
             end
-            local _, e = run_action("use_card", data)
+            local _, e = run_action("choose_pack_card", data)
             ctx.err = ctx.err or e
             ctx.picks = ctx.picks + 1
             return false
@@ -3665,7 +3674,7 @@ local function pick_outcome_case(name, key, dest_name, spawn_fill)
         for i, c in ipairs(bp.cards) do
           if CardUtil.can_take_pack_card(c) then
             ctx.picked = c
-            local _, e = run_action("use_card", { area = "booster_pack", index = i })
+            local _, e = run_action("choose_pack_card", { area = "booster_pack", index = i })
             ctx.err = e
             return false
           end
@@ -3717,7 +3726,7 @@ local function mega_sequence_case(key)
       if not ctx.pick1_done then
         for i, c in ipairs(bp and bp.cards or {}) do
           if CardUtil.can_take_pack_card(c) then
-            local _, e = run_action("use_card", pack_pick_data(c, i)); ctx.err = ctx.err or e
+            local _, e = run_action("choose_pack_card", pack_pick_data(c, i)); ctx.err = ctx.err or e
             ctx.pick1_done = true
             return false
           end
@@ -3730,7 +3739,7 @@ local function mega_sequence_case(key)
         ctx.mid_checked = true
         for i, c in ipairs(CardUtil.pack_area() and CardUtil.pack_area().cards or {}) do
           if CardUtil.can_take_pack_card(c) then
-            local _, e = run_action("use_card", pack_pick_data(c, i)); ctx.err = ctx.err or e
+            local _, e = run_action("choose_pack_card", pack_pick_data(c, i)); ctx.err = ctx.err or e
             break
           end
         end

@@ -116,11 +116,11 @@ local function build_force(state_name)
   if not StateKinds.is_progression_overlay() and Actions.is_action_valid("exit_overlay_menu") then
     local overlay_actions = { "exit_overlay_menu" }
     if (state_name == "MENU" or state_name == "SPLASH")
-        and Actions.is_action_valid("setup_run") then
-      overlay_actions[#overlay_actions + 1] = "setup_run"
+        and Actions.is_action_valid("open_run_setup") then
+      overlay_actions[#overlay_actions + 1] = "open_run_setup"
     end
     local overlay_tail = "Your move: exit_overlay_menu|{}"
-    if overlay_actions[2] == "setup_run" then overlay_tail = overlay_tail .. "; setup_run|{}" end
+    if overlay_actions[2] == "open_run_setup" then overlay_tail = overlay_tail .. "; open_run_setup|{}" end
     return {
       query = "State: OVERLAY. A popup is blocking the game. " .. overlay_tail .. ".",
       actions = overlay_actions,
@@ -172,7 +172,7 @@ local function build_force(state_name)
 
   local function offers_progress()
     for _, name in ipairs(filtered) do
-      if (tagging_is_the_exit and name == "set_joker_intents")
+      if (tagging_is_the_exit and name == "record_joker_roles")
           or not ActionPolicy.NON_PROGRESS[name] then
         return true
       end
@@ -262,7 +262,7 @@ local function build_force(state_name)
   local progress = {}
   local ride_along = {}
   for _, name in ipairs(filtered) do
-    if (tagging_is_the_exit and name == "set_joker_intents")
+    if (tagging_is_the_exit and name == "record_joker_roles")
         or not ActionPolicy.NON_PROGRESS[name] then
       progress[#progress + 1] = name
     elseif ActionPolicy.RIDE_ALONG[name] then

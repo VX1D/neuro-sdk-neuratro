@@ -64,8 +64,9 @@ local function handler_accepts(n)
   for i = 1, n do indices[i] = i end
   G.NEURO = {}
   local res, err = HandHandlers.handle_play_hand({ indices = indices })
-  if res ~= nil then return true end
-  return ActionResult.normalize(err).reason_code ~= "INVALID_SELECTION"
+  local accepted = res ~= nil or ActionResult.normalize(err).reason_code ~= "INVALID_SELECTION"
+  require("core.hand_transaction").reset()
+  return accepted
 end
 
 local function agreement_report(label)
@@ -167,7 +168,6 @@ local JSON = require("util.neuro_json")
 
 local function stages_confirmed_play(indices)
   local payload = JSON.encode({ indices = indices })
-  HandHandlers.handle_play_hand({ indices = indices })
   return Staging.should_stage({ command = "action",
     data = { name = "play_hand", id = "p", data = payload } })
 end
@@ -195,7 +195,7 @@ do
   check("the rebuilt force leads with play_hand", offered["play_hand"] == true)
   check("the relaxed force stops claiming a minimum it no longer enforces",
     hints:find(MIN_PROSE, 1, true) == nil, hints)
-  check("the hover preflight reads the same relaxed floor as the handler",
+  check("the hover preflight reads the same relaxed floor and confirmation guard as the handler",
     stages_confirmed_play({ 1, 2, 3 }) == true)
 end
 

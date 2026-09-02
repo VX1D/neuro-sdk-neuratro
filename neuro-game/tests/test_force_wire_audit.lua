@@ -65,10 +65,10 @@ check("class 40 scanner does not mistake a canonical prefix inside its alias", #
 
 local foreign_result = Audit.scan_frames({
   { command = "actions/register", data = { actions = {
-    { name = "cash_out_force_1" }, { name = "set_plan" }, { name = "cash_out_force_2" },
+    { name = "cash_out_force_1" }, { name = "record_plan" }, { name = "cash_out_force_2" },
   } } },
   { command = "actions/force", data = { action_names = { "cash_out_force_1" } } },
-  { command = "action", data = { id = "foreign", name = "set_plan", data = "{}" } },
+  { command = "action", data = { id = "foreign", name = "record_plan", data = "{}" } },
   { command = "action/result", data = { id = "foreign", success = true } },
   { command = "actions/force", data = { action_names = { "cash_out_force_2" } } },
 }, "foreign-result")

@@ -47,7 +47,7 @@ local Actions = require("core.actions")
 check("replay Chariot: all four records describe zero-card hands",
   #fixture.chariot == 4 and (function() for _, row in ipairs(fixture.chariot) do if row.hand_count ~= 0 then return false end end return true end)())
 check("replay Chariot: targeted consumable is not usable without hand", not CardUtil.consumable_usable_now(chariot))
-check("replay Chariot: use_card is not advertised without any usable card", not Actions.is_action_valid("use_card"))
+check("replay Chariot: use_consumable is not advertised without any usable card", not Actions.is_action_valid("use_consumable"))
 G.hand = { cards = { { base = { value = "Ace", suit = "Spades" } } } }
 check("replay Chariot: same card becomes usable with a target", CardUtil.consumable_usable_now(chariot))
 
@@ -62,22 +62,22 @@ end
 local DecisionWindow = require("core.decision_window")
 stack_roster(fixture.reorder.stable_roster)
 check("replay reorder: the fixture order leaves +Mult jokers behind an xMult, so the exit gate is required",
-  require("core.plan_gate").action_requirements("SHOP", "toggle_shop").joker_order ~= nil)
+  require("core.plan_gate").action_requirements("SHOP", "leave_shop").joker_order ~= nil)
 check("replay reorder: the nudge stands down while the required gate holds the exit",
-  DecisionWindow.evaluate("toggle_shop") == false)
+  DecisionWindow.evaluate("leave_shop") == false)
 stack_roster({ "j_scary_face", "j_blue_joker", "j_walkie_talkie", "j_baron", "j_ancient" })
 DecisionWindow.reset_field("order_think")
 check("replay reorder: every +Mult ahead of the xMults leaves no inversion to require",
-  require("core.plan_gate").action_requirements("SHOP", "toggle_shop").joker_order == nil)
-check("replay reorder: new roster arms review", DecisionWindow.evaluate("toggle_shop") == "soft_reject")
-DecisionWindow.acknowledge("toggle_shop")
-check("replay reorder: unchanged roster stays acknowledged", DecisionWindow.evaluate("toggle_shop") == false)
+  require("core.plan_gate").action_requirements("SHOP", "leave_shop").joker_order == nil)
+check("replay reorder: new roster arms review", DecisionWindow.evaluate("leave_shop") == "soft_reject")
+DecisionWindow.acknowledge("leave_shop")
+check("replay reorder: unchanged roster stays acknowledged", DecisionWindow.evaluate("leave_shop") == false)
 G.jokers.cards[#G.jokers.cards + 1] = { config = { center = { key = "j_new" } } }
-check("replay reorder: changed roster re-arms review", DecisionWindow.evaluate("toggle_shop") == "soft_reject")
+check("replay reorder: changed roster re-arms review", DecisionWindow.evaluate("leave_shop") == "soft_reject")
 
 base_game("BLIND_SELECT")
 local PlanGate = require("core.plan_gate")
-local PlanHandler = require("handlers.plan_handlers").handle_set_plan
+local PlanHandler = require("handlers.plan_handlers").handle_record_plan
 local set_small, plan_err = PlanHandler({ hand_plan = "Play the current blind" })
 check("replay stale plan: initial plan accepted", type(set_small) == "function", plan_err)
 if set_small then set_small() end

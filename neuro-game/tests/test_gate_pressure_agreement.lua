@@ -25,18 +25,18 @@ local function with(pressure, gated, fn)
   return a, b
 end
 
-local OFFERED = { "sell_card", "use_card", "buy_from_shop" }
+local OFFERED = { "sell_card", "use_consumable", "buy_from_shop" }
 local NO_PRESSURE = function() return nil end
 
-local base = with(NO_PRESSURE, { sell_card = true, use_card = true }, function()
+local base = with(NO_PRESSURE, { sell_card = true, use_consumable = true }, function()
   return ForceHelpers.pending_gate_note(OFFERED)
 end)
 check("the gate note names every armed action when nothing is under pressure",
-  base:find("sell_card", 1, true) ~= nil and base:find("use_card", 1, true) ~= nil
+  base:find("sell_card", 1, true) ~= nil and base:find("use_consumable", 1, true) ~= nil
     and base:find("an identical repeat carries it out", 1, true) ~= nil, base)
 check("the gate note leaves an unarmed action out", base:find("buy_from_shop", 1, true) == nil, base)
 
-local gate, press = with(function() return "sell_card", 4 end, { sell_card = true, use_card = true },
+local gate, press = with(function() return "sell_card", 4 end, { sell_card = true, use_consumable = true },
   function()
     return ForceHelpers.pending_gate_note(OFFERED), ForceHelpers.repeat_pressure_note()
   end)
@@ -45,7 +45,7 @@ check("the pressure note still names the action at the cap",
     and press:find("another identical send is refused", 1, true) ~= nil, press)
 check("the gate note drops the action the cap will refuse",
   gate:find("sell_card", 1, true) == nil, gate)
-check("the gate note keeps the other armed action", gate:find("use_card", 1, true) ~= nil, gate)
+check("the gate note keeps the other armed action", gate:find("use_consumable", 1, true) ~= nil, gate)
 
 local solo_gate, solo_press = with(function() return "sell_card", 4 end, { sell_card = true },
   function()
@@ -66,7 +66,7 @@ end
 
 for _, case in ipairs({
   { gated = { sell_card = true }, pressed = "sell_card" },
-  { gated = { sell_card = true, use_card = true }, pressed = "use_card" },
+  { gated = { sell_card = true, use_consumable = true }, pressed = "use_consumable" },
   { gated = { buy_from_shop = true }, pressed = "buy_from_shop" },
 }) do
   local query = with(function() return case.pressed, 5 end, case.gated, function()

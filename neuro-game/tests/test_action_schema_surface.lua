@@ -72,12 +72,24 @@ end
 
 do
   local wire = wire_actions()
-  for _, name in ipairs({ "use_card", "sell_card" }) do
+  for _, name in ipairs({ "use_consumable", "sell_card" }) do
     local e = area_enum(wire, name)
     check("" .. name .. ".area advertises the engine spelling `consumeables`",
       e ~= nil and has(e, "consumeables"), e and table.concat(e, ",") or "nil")
     check("" .. name .. ".area does not advertise the `consumables` alias",
       e ~= nil and not has(e, "consumables"), e and table.concat(e, ",") or "nil")
+  end
+  for _, name in ipairs({ "choose_pack_card", "choose_directional_pack_card" }) do
+    local e = area_enum(wire, name)
+    check(name .. ".area is restricted to the open pack",
+      e ~= nil and #e == 1 and e[1] == "booster_pack",
+      e and table.concat(e, ",") or "nil")
+  end
+  for _, name in ipairs({ "use_consumable", "use_directional_consumable" }) do
+    local e = area_enum(wire, name)
+    check(name .. ".area is restricted to owned consumables",
+      e ~= nil and #e == 1 and e[1] == "consumeables",
+      e and table.concat(e, ",") or "nil")
   end
 end
 
@@ -130,10 +142,10 @@ local function dispatch_use_card(area_value)
     unregister_actions = function() end,
     is_transition_cooldown = function() return false end,
   }
-  Helpers.stage_registered(nil, { "use_card" })
-  FS.arm("SELECTING_HAND", { "use_card" }, { use_card = true }, 1)
+  Helpers.stage_registered(nil, { "use_consumable" })
+  FS.arm("SELECTING_HAND", { "use_consumable" }, { use_consumable = true }, 1)
   Dispatcher.handle_message({ command = "action", data = {
-    id = "area-" .. tostring(area_value), name = "use_card",
+    id = "area-" .. tostring(area_value), name = "use_consumable",
     data = { area = area_value, index = 1 } } }, bridge)
   return log[1] or { ok = nil, message = "(no result)", code = nil }
 end
@@ -279,8 +291,8 @@ do
     r_req1.code == "SCHEMA_INVALID" and r_req1.message:find("Missing required parameter: blind", 1, true) ~= nil,
     tostring(r_req1.code) .. " / " .. r_req1.message)
 
-  local r_req2 = dispatch_test("use_card", "SELECTING_HAND", { area = "consumeables" })
-  check("use_card missing required parameter 'index' returns SCHEMA_INVALID",
+  local r_req2 = dispatch_test("use_consumable", "SELECTING_HAND", { area = "consumeables" })
+  check("use_consumable missing required parameter 'index' returns SCHEMA_INVALID",
     r_req2.code == "SCHEMA_INVALID" and r_req2.message:find("Missing required parameter: index", 1, true) ~= nil,
     tostring(r_req2.code) .. " / " .. r_req2.message)
 
@@ -309,8 +321,8 @@ do
     r_enum_blind.code == "SCHEMA_INVALID" and r_enum_blind.message:find("must be one of: small, big, boss", 1, true) ~= nil,
     tostring(r_enum_blind.code) .. " / " .. r_enum_blind.message)
 
-  local r_enum_tag = dispatch_test("set_joker_intents", "SHOP", { intents = { { index = 1, tag = "INVALID_TAG" } } })
-  check("an invalid set_joker_intents tag reports the permitted values",
+  local r_enum_tag = dispatch_test("record_joker_roles", "SHOP", { intents = { { index = 1, tag = "INVALID_TAG" } } })
+  check("an invalid record_joker_roles tag reports the permitted values",
     r_enum_tag.code == "SCHEMA_INVALID" and r_enum_tag.message:find("must be one of: CORE, SCALING, HOLD, CHANGE", 1, true) ~= nil,
     tostring(r_enum_tag.code) .. " / " .. r_enum_tag.message)
 

@@ -3,6 +3,7 @@ if not love then love = { timer = { getTime = function() return 0 end } } end
 
 local HandHandlers = require("handlers.hand_handlers")
 local ActionResult = require("core.action_result")
+local HandTx = require("core.hand_transaction")
 
 local check, done = require("tests.helpers").harness("forced-play-weak-pause")
 
@@ -48,15 +49,17 @@ do
   check("the pause is a confirmation, not a failure",
     norm.reason_code == "CONFIRMATION_REQUIRED", tostring(norm.reason_code))
   local expected = "Selection [7,8] = Pair (lvl 5, 30 chips x 3 mult).\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types.\n"
-    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
+    .. "Bare Pair is one of the three lowest-ranking hand types. Review required: call resolve_play with its transaction_id. Answer \"yes\" to commit these exact cards. Answer \"no\" only for a specific different selection already Ready; no changes or draws any card. After no, the next play_hand commits immediately. For yes, omit reason. For no, optional reason should name the alternative's exact indices."
   check("the message is exactly the zero-discard weak pause text", norm.message == expected, norm.message)
   check("the weak layer fired and armed the confirm slot",
-    G.NEURO.play_confirm ~= nil
-      and tonumber(G.NEURO.weak_fired_serial) == 0, tostring(G.NEURO.play_confirm))
+    HandTx.current() ~= nil
+      and tonumber(G.NEURO.weak_fired_serial) == 0, tostring(HandTx.current()))
 
-  local res2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
-  check("resending the same selection commits it", type(res2) == "function", type(res2))
+  local res2, err2 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
+  check("resending the same selection does not commit it",
+    res2 == nil and ActionResult.is_error(err2)
+      and ActionResult.normalize(err2).reason_code == "POLICY_ACKNOWLEDGED",
+    tostring(err2))
 end
 
 do
@@ -64,8 +67,7 @@ do
   setup(hand, phi("Pair", {}), { hands = 1, discards = 0 })
   local _, err = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   local expected = "Selection [7,8] = Pair.\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types.\n"
-    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
+    .. "Bare Pair is one of the three lowest-ranking hand types. Review required: call resolve_play with its transaction_id. Answer \"yes\" to commit these exact cards. Answer \"no\" only for a specific different selection already Ready; no changes or draws any card. After no, the next play_hand commits immediately. For yes, omit reason. For no, optional reason should name the alternative's exact indices."
   check("the pause carries the engine verdict with no hand-level entry available",
     ActionResult.normalize(err).message == expected, ActionResult.normalize(err).message)
 end
@@ -76,7 +78,7 @@ do
   local res = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
   check("a non-weak hand still commits on the first send", type(res) == "function", type(res))
   check("no latch armed for the non-weak commit",
-    G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
+    HandTx.current() == nil, tostring(HandTx.current()))
 end
 
 do
@@ -96,7 +98,7 @@ do
   local msg = ActionResult.normalize(err).message
   check("with a hand in reserve the general confirmation still owns the pause",
     res == nil and msg:find("Committing Pair", 1, true) ~= nil
-      and msg:find("Answer confirm_play with", 1, true) ~= nil, msg)
+      and msg:find("Call resolve_play with", 1, true) ~= nil, msg)
   check("Z10b and it names the weakness instead of committing a bare hand in silence",
     msg:find("lowest%-ranking") ~= nil and msg:find("no discards left", 1, true) ~= nil, msg)
 end
@@ -107,8 +109,8 @@ do
   local res1 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("the weak pause fires first", res1 == nil)
   local res2 = HandHandlers.handle_play_hand({ indices = { 5, 6 } })
-  check("a different final selection commits without a second confirmation",
-    type(res2) == "function", type(res2))
+  check("strict resolution prevents a different final selection replacing the proposal",
+    res2 == nil, type(res2))
 end
 
 do

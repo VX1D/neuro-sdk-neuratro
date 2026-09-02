@@ -47,7 +47,7 @@ G.jokers.cards = { { ability = {}, cost = 3, sell_cost = 1 } }
 check("sell_card: card present -> available", ActionRegistry.available("sell_card") == true)
 
 check("unknown action stays false", ActionRegistry.available("no_such_action") == false)
-check("action with no predicate anywhere stays true", ActionRegistry.available("set_plan") == true)
+check("action with no predicate anywhere stays true", ActionRegistry.available("record_plan") == true)
 
 warnings = {}
 _G.print = function(...)

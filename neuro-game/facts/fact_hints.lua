@@ -165,7 +165,7 @@ local function chain_visible(card, target)
   return not (target and CardUtil.is_face_down(target))
 end
 
-local function blueprint_chain_hint()
+local function blueprint_chain_hint(force_visible)
   if not (G and G.jokers and G.jokers.cards) then return "" end
   local cards = G.jokers.cards
   local chain_parts = {}
@@ -185,7 +185,8 @@ local function blueprint_chain_hint()
   end
   if #chain_parts == 0 then return "" end
   local chain = table.concat(chain_parts, "; ")
-  return emit("bp_chain:" .. chain, "Joker copy order: " .. chain .. ". Order matters. ")
+  local text = "Joker copy order: " .. chain .. ". Order matters. "
+  return force_visible and text or emit("bp_chain:" .. chain, text)
 end
 
 M.VOUCHER_CHAINS = {
@@ -288,7 +289,7 @@ local function plan_note(window)
       bits[#bits + 1] = "Build focus" .. provenance("build") .. ": " .. p.build
     elseif can_amend then
       bits[#bits + 1] = "Your build last shop" .. provenance("build") .. ": '" .. p.build
-        .. "'. Roster changed -- continue this direction, iterate on it, or change it (set_plan build_plan)."
+        .. "'. Roster changed -- continue this direction, iterate on it, or change it (record_plan build_plan)."
     else
       bits[#bits + 1] = "Your earlier build plan" .. provenance("build") .. ": '" .. p.build .. "'."
     end
@@ -299,7 +300,7 @@ local function plan_note(window)
         bits[#bits + 1] = "Hand decision" .. provenance("hand") .. ": " .. p.hand
       elseif can_amend then
         bits[#bits + 1] = "Your hand plan last blind" .. provenance("hand") .. ": '" .. p.hand
-          .. "'. Blind changed -- keep this line, adapt it, or set a new one (set_plan hand_plan)."
+          .. "'. Blind changed -- keep this line, adapt it, or set a new one (record_plan hand_plan)."
       else
         bits[#bits + 1] = "Your earlier hand plan" .. provenance("hand") .. ": '" .. p.hand .. "'."
       end
@@ -324,7 +325,7 @@ local function plan_note(window)
       bits[#bits + 1] = "Economy decision" .. provenance("money") .. ": " .. p.money
     elseif can_amend then
       bits[#bits + 1] = "Your last economy call" .. provenance("money") .. ": '" .. p.money
-        .. "'. Shop/economy changed -- hold it or revise (set_plan money_plan)."
+        .. "'. Shop/economy changed -- hold it or revise (record_plan money_plan)."
     else
       bits[#bits + 1] = "Your earlier economy call" .. provenance("money") .. ": '" .. p.money .. "'."
     end
@@ -338,7 +339,7 @@ local function plan_note(window)
     lead = "Your decision notes -- pick to advance the diagnosed weakness; current pack contents and game facts are authoritative: "
   elseif window == "blind" then
     add_hand(); add_build()
-    lead = "Current-blind decision notes -- facts win; revise with set_plan if your intended line changed: "
+    lead = "Current-blind decision notes -- facts win; revise with record_plan if your intended line changed: "
   elseif window == "hand" then
     add_boss(); add_hand(); add_build()
     lead = "Your plan this round -- facts win; the hand and build lines cannot be revised until the shop or next blind select: "

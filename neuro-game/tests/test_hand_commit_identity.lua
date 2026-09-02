@@ -4,6 +4,9 @@ if not love then love = { timer = { getTime = function() return 0 end } } end
 
 local check, done = require("tests.helpers").harness("hand_commit_identity")
 local HandHandlers = require("handlers.hand_handlers")
+local ConfirmationEvidence = require("core.confirmation_evidence")
+local ActionResult = require("core.action_result")
+local HandTx = require("core.hand_transaction")
 
 local function card(id)
   return {
@@ -46,24 +49,20 @@ end
 
 do
   local cards, execution = setup()
-  local confirmed = { cards[1], cards[2], cards[3] }
-  G.NEURO.play_confirm = {
-    signature = HandHandlers.play_signature(confirmed),
-    content = HandHandlers.play_content(confirmed),
-    indices = { 1, 2, 3 },
-    decision_serial = 1,
-    run_generation = 0,
-  }
-  local commit = HandHandlers.handle_play_hand({ indices = { 1, 2, 3 } })
+  local _, proposal_error = HandHandlers.handle_play_hand({ indices = { 1, 2, 3 } })
+  local proposal = ActionResult.normalize(proposal_error)
+  local tx = HandTx.current()
+  ConfirmationEvidence.stage(proposal.confirmation_candidate, proposal.message, { status = "written" })
+  ConfirmationEvidence.step_delivery()
+  local commit = HandHandlers.handle_resolve_play({ transaction_id = tx.id, answer = "yes" })
   check("play prepares an executor", type(commit) == "function")
   G.hand.cards = { cards[5], cards[4], cards[3], cards[2], cards[1] }
-  commit()
+  local result = commit()
   local ran = execution()
-  check("play executes the objects selected during validation",
-    ran and ran.kind == "play" and ran.cards[1] == cards[1]
-      and ran.cards[2] == cards[2] and ran.cards[3] == cards[3])
-  check("play does not substitute cards now occupying the old indices",
-    ran and ran.cards[1] ~= cards[5] and ran.cards[2] ~= cards[4])
+  check("a reordered hand invalidates the prepared transaction before gameplay",
+    ran == nil and result ~= nil, tostring(result))
+  check("the invalidated transaction never substitutes the new index occupants",
+    ran == nil)
 end
 
 do

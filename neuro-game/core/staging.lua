@@ -90,17 +90,17 @@ local function DEBUG_STAGING() return Tuning.bool("NEURO_STAGING_DEBUG") end
 local INFO_ACTIONS = { choose_persona = true }
 
 local ACTION_LABELS = {
-  change_selected_back = "Changing deck",
-  change_stake = "Changing stake",
-  change_challenge_description = "Browsing challenge",
+  select_deck = "Changing deck",
+  select_stake = "Changing stake",
+  select_challenge = "Browsing challenge",
   set_joker_order = "Reordering jokers",
-  set_joker_intents = "Tagging jokers",
+  record_joker_roles = "Tagging jokers",
   toggle_seeded_run = "Toggling seeded run",
   paste_seed = "Pasting seed",
   copy_seed = "Copying seed",
-  toggle_shop = "Leaving shop",
+  leave_shop = "Leaving shop",
   exit_overlay_menu = "Closing popup",
-  setup_run = "Opening run setup",
+  open_run_setup = "Opening run setup",
 }
 
 local staged = nil
@@ -243,7 +243,7 @@ local function resolve_hover(msg)
   local juice_scale = 0.5
   local juice_rot = 0.3
 
-  local is_confirmed_play = name == "confirm_play" and payload.answer == "yes"
+  local is_confirmed_play = name == "resolve_play" and payload.answer == "yes"
   if name == "play_hand" or name == "discard_hand" or is_confirmed_play then
     local play_indices = payload.indices
     if is_confirmed_play then
@@ -280,7 +280,8 @@ local function resolve_hover(msg)
     label = "Buying " .. cname .. (cost > 0 and (" ($" .. cost .. ")") or "")
       .. (cfx and (" — " .. cfx) or "")
 
-  elseif name == "use_card" or name == "use_directional_card" then
+  elseif name == "use_consumable" or name == "use_directional_consumable"
+      or name == "choose_pack_card" or name == "choose_directional_pack_card" then
     resolve_payload_card(payload, cards)
     hover_dur = paced("staging_hover", "NEURO_HOVER_USE", HOVER_FLOOR_S)
     post_dur = tuned("staging_post", "NEURO_POST_BUY")
@@ -325,7 +326,7 @@ local function resolve_hover(msg)
     post_dur = 0.3
     label = "Cashing out"
 
-  elseif name == "start_run" or name == "start_setup_run" or name == "start_challenge_run" then
+  elseif name == "start_run" or name == "start_challenge_run" then
     hover_dur = 0
     post_dur = 0.3
     label = "Starting run"
@@ -472,19 +473,18 @@ function Staging.should_stage(msg)
     if not ok_preflight then report_preflight_error("play confirmation", preflight_err) end
     if skip then return false end
   end
-  if name == "confirm_play" then
+  if name == "resolve_play" then
     local skip = false
     local ok_preflight, preflight_err = pcall(function()
       local d = payload_of(msg)
-      if d.answer ~= "yes" then skip = true return end
       local HH = Utils.lazy_require("handlers.hand_handlers")
-      local pend = HH and HH.pending and HH.pending()
-      if not pend then skip = true end
+      if d.answer ~= "yes" then skip = true return end
+      if not (HH and HH.confirm_input_available and HH.confirm_input_available(d)) then skip = true end
     end)
     if not ok_preflight then report_preflight_error("confirm play", preflight_err) end
     if skip then return false end
   end
-  if name == "use_card" or name == "use_directional_card" then
+  if name == "choose_pack_card" or name == "choose_directional_pack_card" then
     local skip = false
     local ok_preflight, preflight_err = pcall(function()
       if require("core.decision_window").would_reject(name) then skip = true end
@@ -492,7 +492,9 @@ function Staging.should_stage(msg)
     if not ok_preflight then report_preflight_error("decision window", preflight_err) end
     if skip then return false end
   end
-  if name == "buy_from_shop" or name == "sell_card" or name == "use_card" or name == "use_directional_card" or name == "reroll_shop" then
+  if name == "buy_from_shop" or name == "sell_card" or name == "use_consumable"
+      or name == "use_directional_consumable" or name == "choose_pack_card"
+      or name == "choose_directional_pack_card" or name == "reroll_shop" then
     local skip = false
     local ok_preflight, preflight_err = pcall(function()
       if name ~= "reroll_shop" then
@@ -523,8 +525,6 @@ function Staging.queue(msg, bridge)
     return false
   end
 
-  -- Hover targets resolve before validation: preflight runs the handler body, which clears
-  -- G.NEURO.play_confirm -- where confirm_play's indices come from.
   local ok_resolve, cards, hover_dur, post_dur, label, j_scale, j_rot, commit_dur, hold_dur, play_like =
     pcall(resolve_hover, msg)
 

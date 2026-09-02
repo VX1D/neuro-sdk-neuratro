@@ -165,7 +165,13 @@ do
     sort_id = "j_sale",
   }
   G.jokers.cards = { card }
-  G.NEURO.last_sell_reject = "sell:1:j_sale"
+  do
+    local _, review = require("handlers.shop_handlers").handle_sell_card({
+      area = "jokers", index = 1, name = "Sale Joker" })
+    local CR = require("core.context_review")
+    CR.stage(review.context_review_candidate, { status = "written" })
+    CR.step_delivery()
+  end
   stage_registered_actions("SHOP")
   local calls = 0
   G.FUNCS.sell_card = function()
@@ -232,8 +238,13 @@ do
     sell_cost = 2.5, sort_id = "fractional-sell",
   }
   G.jokers.cards = { sell_card }
-  G.NEURO.last_sell_reject = "sell:1:fractional-sell"
-  G.NEURO.last_sell_review_serial = 0
+  do
+    local _, review = ShopHandlers.handle_sell_card({ area = "jokers", index = 1,
+      name = "Fractional Sell" })
+    local CR = require("core.context_review")
+    CR.stage(review.context_review_candidate, { status = "written" })
+    CR.step_delivery()
+  end
   local _, _, sell_event = ShopHandlers.handle_sell_card({
     _action_id = "fractional-sell", area = "jokers", index = 1,
   })

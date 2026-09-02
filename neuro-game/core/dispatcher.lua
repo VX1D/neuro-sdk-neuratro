@@ -10,6 +10,8 @@ local ActionReceipt = require("core.action_receipt")
 local ActionExecution = require("core.action_execution")
 local GameplayJournal = require("core.gameplay_journal")
 local ConfirmationEvidence = require("core.confirmation_evidence")
+local ContextReview = require("core.context_review")
+local HandTx = require("core.hand_transaction")
 local ContextDelivery = require("core.context_delivery")
 
 local ActionRegistry = require("core.action_registry")
@@ -42,8 +44,6 @@ local handle_toggle_seeded_run = SeedRunHandlers.handle_toggle_seeded_run
 local handle_paste_seed = SeedRunHandlers.handle_paste_seed
 local handle_start_challenge_run = SeedRunHandlers.handle_start_challenge_run
 
--- confirm_play's schema varies at runtime, so read it live from the registry rather than
--- snapshotting at boot.
 local function current_schema(name)
   Actions.get_static_actions()
   local contract = ActionRegistry.get(name)
@@ -53,6 +53,7 @@ end
 local prepared = {}
 local awaiting_result_write = {}
 local awaiting_disposable_write = {}
+local awaiting_hand_withdrawal = {}
 
 local DROP_LABELS = {
   route_no_message = true,
@@ -161,6 +162,7 @@ function Dispatcher.reset_run_state()
   prepared = {}
   awaiting_result_write = {}
   awaiting_disposable_write = {}
+  awaiting_hand_withdrawal = {}
   reset_drop_ledger()
   PlanTransaction.release()
   ActionReceipt.reset("dispatcher_reset")
@@ -173,6 +175,7 @@ function Dispatcher.reset_transport_state(reason)
   for i = 1, #ids do Dispatcher.abort_prepared(ids[i], reason or "transport reconnected") end
   awaiting_result_write = {}
   awaiting_disposable_write = {}
+  awaiting_hand_withdrawal = {}
   ActionReceipt.reset(reason or "transport_reconnect")
   PlanTransaction.release()
   if G and G.NEURO then
@@ -251,12 +254,7 @@ local function record_action_phase(bridge, id, name, phase, details)
   return ok and recorded ~= false
 end
 
-local CONFIRM_FIELDS = {
-  "last_voucher_reject", "last_voucher_review_serial",
-  "last_sell_reject", "last_sell_review_serial",
-  "weak_fired_serial", "play_confirm",
-  "pending_confirmation", "confirmation_delivery",
-}
+local CONFIRM_FIELDS = { "weak_fired_serial" }
 
 local function snapshot_confirmations()
   local out = {}
@@ -275,7 +273,7 @@ local function restore_confirmations(snapshot)
 end
 
 local function rollback_prepared_acceptance(bridge, id, name, tx, ends_pack, disposable,
-    confirm_snapshot)
+    confirm_snapshot, hand_transaction_id)
   record_action_phase(bridge, id, name, "aborted", { reason = "action result send failed" })
   if G and G.NEURO then
     if G.NEURO.consumed_action_owner == nil
@@ -287,6 +285,14 @@ local function rollback_prepared_acceptance(bridge, id, name, tx, ends_pack, dis
         or G.NEURO.pack_exit_pending == tostring(id)) then G.NEURO.pack_exit_pending = nil end
   end
   pcall(PlanTransaction.hold, tx)
+  local rollback_hand_id = name == "resolve_play"
+    and (hand_transaction_id or (tx and tx.hand_transaction_id)) or nil
+  if HandTx.is_current_id and HandTx.is_current_id(rollback_hand_id) then
+    local hand_tx = HandTx.current()
+    if hand_tx and hand_tx.phase == "committing" then
+      pcall(HandTx.rollback_commit, hand_tx)
+    end
+  end
   restore_confirmations(confirm_snapshot)
   pcall(Enforce.rollback_action)
   pcall(Enforce.post_action, bridge, false)
@@ -296,6 +302,37 @@ local function rollback_prepared_acceptance(bridge, id, name, tx, ends_pack, dis
       if Orch and Orch.register_valid_actions then Orch.register_valid_actions(G.NEURO.state or "") end
     end)
   end
+end
+
+local PROPOSAL_ACTIONS = {
+  "play_hand", "discard_hand", "use_consumable", "use_directional_consumable",
+  "choose_pack_card", "choose_directional_pack_card",
+  "sell_card", "set_joker_order", "record_joker_roles", "record_plan",
+}
+
+local function retire_hand_proposal_actions(bridge, transaction_id)
+  local tx = HandTx.current()
+  if not (tx and tonumber(tx.id) == tonumber(transaction_id)) then return false end
+
+  pcall(ForceState.invalidate, "hand_resolution")
+  if not (bridge and bridge.withdraw_actions_exact) then return true end
+  local ok, receipt = pcall(bridge.withdraw_actions_exact, bridge, PROPOSAL_ACTIONS)
+  if not ok or type(receipt) ~= "table" or receipt.status == "rejected" then
+    HandTx.invalidate(tx, "proposal_action_withdraw_failed")
+    ConfirmationEvidence.clear(transaction_id)
+    return false
+  end
+  if receipt.status == "written" then
+    if bridge.complete_action_withdrawal then
+      pcall(bridge.complete_action_withdrawal, bridge, PROPOSAL_ACTIONS)
+    end
+  else
+    awaiting_hand_withdrawal[tostring(transaction_id)] = {
+      transaction_id = transaction_id, names = PROPOSAL_ACTIONS,
+      bridge = bridge, receipt = receipt,
+    }
+  end
+  return true
 end
 
 local function expire_failure_warning()
@@ -320,8 +357,30 @@ local function send_result(bridge, id, ok, message, name, opts)
     if delivered == false then return false, opts.delivery_receipt end
   end
   if opts.reason_code == "CONFIRMATION_REQUIRED" and opts.confirmation_candidate then
-    pcall(ConfirmationEvidence.stage, opts.confirmation_candidate, enhanced_message,
-      opts.delivery_receipt, opts.confirmation_snapshot)
+    local staged = false
+    local ok_stage, result = pcall(ConfirmationEvidence.stage, opts.confirmation_candidate,
+      enhanced_message, opts.delivery_receipt, opts.confirmation_snapshot)
+    staged = ok_stage and result == true
+    if not staged then
+      local candidate_id = opts.confirmation_candidate.transaction_id
+      if candidate_id ~= nil and HandTx.is_current_id(candidate_id) then
+        local tx = HandTx.current()
+        HandTx.invalidate(tx, "confirmation_evidence_not_staged")
+        ConfirmationEvidence.clear(candidate_id)
+        PlanTransaction.release_hand_proposal(candidate_id)
+        Lifecycle.mark_force_dirty()
+      end
+      Metrics.incr("confirmation_evidence_stage_failed")
+    end
+  end
+  if opts.reason_code == "CONFIRMATION_REQUIRED" and opts.context_review_candidate then
+    local ok_stage, staged = pcall(ContextReview.stage,
+      opts.context_review_candidate, opts.delivery_receipt)
+    if not ok_stage or staged ~= true then Metrics.incr("context_review_stage_failed") end
+  end
+  if opts.consume_force_attempt then
+    pcall(ForceState.invalidate, opts.reason_code == "CONFIRMATION_REQUIRED"
+      and "hand_confirmation_attempt" or "stale_action_attempt")
   end
   local transient = ActionResult.is_transient(opts.reason_code, opts)
   TxCache.store(id, ok, enhanced_message, name, opts.reason_code)
@@ -337,6 +396,9 @@ local function send_result(bridge, id, ok, message, name, opts)
     end
   elseif confirm and not opts.no_verdict then
     expire_failure_warning()
+    if opts.reason_code == "POLICY_ACKNOWLEDGED" and opts.correction then
+      ForceState.record_failure(name, message, opts.correction)
+    end
   elseif not ok and G and name and not opts.guard
     and opts.reason_code ~= "CONFIRMATION_REQUIRED" then
     ForceState.record_failure(name, message, opts.correction)
@@ -354,7 +416,7 @@ local function send_result(bridge, id, ok, message, name, opts)
     if confirm and not follow_up
       and (phase == ForceWindow.FORCED or phase == ForceWindow.ACKNOWLEDGED) then
       ForceState.acknowledge_offer()
-    elseif confirm or Dispatcher.NON_PROGRESS_FORCE_ACTIONS[name] then
+    elseif confirm or opts.preserve_decision_serial or Dispatcher.NON_PROGRESS_FORCE_ACTIONS[name] then
       Lifecycle.mark_force_dirty()
       clear_force_inflight()
     else
@@ -437,7 +499,7 @@ end
 local DISPOSABLE_ACTIONS = {
   play_hand = true,
   discard_hand = true,
-  confirm_play = true,
+  resolve_play = true,
   select_blind = true,
   skip_blind = true,
   cash_out = true,
@@ -450,14 +512,14 @@ local is_object_table = SchemaValidate.is_object_table
 local HandHandlers = require("handlers.hand_handlers")
 local handle_play_hand = HandHandlers.handle_play_hand
 local handle_discard_hand = HandHandlers.handle_discard_hand
-local handle_confirm_play = HandHandlers.handle_confirm_play
+local handle_resolve_play = HandHandlers.handle_resolve_play
 
 local BoardHandlers = require("handlers.board_handlers")
 local handle_select_blind = BoardHandlers.handle_select_blind
 local handle_set_joker_order = BoardHandlers.handle_set_joker_order
 local handle_skip_blind = BoardHandlers.handle_skip_blind
-local handle_set_plan = require("handlers.plan_handlers").handle_set_plan
-local handle_set_joker_intents = require("handlers.plan_handlers").handle_set_joker_intents
+local handle_record_plan = require("handlers.plan_handlers").handle_record_plan
+local handle_record_joker_roles = require("handlers.plan_handlers").handle_record_joker_roles
 
 local function persona_display_name(persona)
   return persona == "evil" and "Evil Neuro" or "Neuro-sama"
@@ -500,17 +562,19 @@ local ACTION_PREFLIGHTS = {
   end,
   play_hand = handle_play_hand,
   discard_hand = handle_discard_hand,
-  confirm_play = handle_confirm_play,
-  use_card = handle_use_card,
-  use_directional_card = handle_directional_card,
+  resolve_play = handle_resolve_play,
+  use_consumable = handle_use_card,
+  choose_pack_card = handle_use_card,
+  use_directional_consumable = handle_directional_card,
+  choose_directional_pack_card = handle_directional_card,
   buy_from_shop = handle_buy_from_shop,
   sell_card = handle_sell_card,
   select_blind = handle_select_blind,
   skip_blind = handle_skip_blind,
   set_joker_order = handle_set_joker_order,
-  set_plan = handle_set_plan,
-  set_joker_intents = handle_set_joker_intents,
-  setup_run = function(_data)
+  record_plan = handle_record_plan,
+  record_joker_roles = handle_record_joker_roles,
+  open_run_setup = function(_data)
     return function()
       G.NEURO.deck_chosen = false
       G.NEURO.seed_pasted = nil
@@ -525,15 +589,15 @@ local ACTION_PREFLIGHTS = {
       return "Opened run setup screen"
     end
   end,
-  change_stake = handle_change_stake,
-  change_challenge_description = handle_change_challenge_description,
-  change_selected_back = handle_change_selected_back,
+  select_stake = handle_change_stake,
+  select_challenge = handle_change_challenge_description,
+  select_deck = handle_change_selected_back,
   toggle_seeded_run = handle_toggle_seeded_run,
   paste_seed = handle_paste_seed,
   start_challenge_run = handle_start_challenge_run,
 }
 
-function Dispatcher.skip_booster_reject_reason()
+function Dispatcher.skip_pack_reject_reason()
   if not CardArea.get_area("booster_pack") then
     return "No booster pack is open. Wait for a pack screen."
   end
@@ -548,9 +612,9 @@ local function handle_simple_action(name, _data)
 
 local gameplay_event
 
-if name == "start_setup_run" then
+if name == "start_run" then
   if not is_run_setup_overlay() then
-    return nil, "start_setup_run requires the run setup screen to be open. Use setup_run first."
+    return nil, "start_run requires the run setup screen to be open. Use open_run_setup first."
   end
   if G.SETTINGS then G.SETTINGS.current_setup = 'New Run' end
 end
@@ -567,11 +631,11 @@ if name == "reroll_boss" then
     return nil, string.format("Can't afford the $%d boss reroll right now.", CtxEconomy.BOSS_REROLL_COST)
   end
 end
-if name == "skip_booster" then
-  local reason = Dispatcher.skip_booster_reject_reason()
+if name == "skip_pack" then
+  local reason = Dispatcher.skip_pack_reject_reason()
   if reason then return nil, reason end
 end
-if name == "reroll_shop" or name == "toggle_shop" then
+if name == "reroll_shop" or name == "leave_shop" then
   if not (G and G.shop) then
     return nil, "Shop is not open. Wait for the shop screen."
   end
@@ -620,13 +684,18 @@ end
       return nil, "Cash out is not available right now."
     end
   end
-  local fn = G.FUNCS and G.FUNCS[name]
+  local engine_name = ({
+    leave_shop = "toggle_shop",
+    skip_pack = "skip_booster",
+    start_run = "start_setup_run",
+  })[name]
+  local fn = G.FUNCS and G.FUNCS[engine_name or name]
   if not fn then
     return nil, "This action is not available here. Choose a different action for this screen."
   end
   return function()
     local selected_center
-    if name == "start_setup_run" then
+    if name == "start_run" then
       local key = G and G.NEURO and G.NEURO.selected_back_key
       local selected_name
       selected_name, selected_center = MenuHandlers.apply_selected_back(key)
@@ -634,7 +703,7 @@ end
         error("selected deck is no longer available: " .. tostring(key))
       end
     end
-    local start_run = name == "start_setup_run" and G.FUNCS and G.FUNCS.start_run
+    local start_run = name == "start_run" and G.FUNCS and G.FUNCS.start_run
     if selected_center and type(start_run) == "function" then
       G.FUNCS.start_run = function(e, args)
         args = args or {}
@@ -663,6 +732,12 @@ for _, name in ipairs(ActionRegistry.names()) do
 end
 
 function Dispatcher.preflight(name, data)
+  if name ~= "resolve_play" and HandTx.stale_mutator(name) then
+    local tx = HandTx.current()
+    return nil, ActionResult.error("POLICY_ACKNOWLEDGED",
+      string.format("Hand transaction %d is awaiting resolve_play; this action was acknowledged without mutation. Resolve transaction_id %d first.", tx.id, tx.id),
+      { no_gate_rollback = true, consume_force_attempt = true, transaction_id = tx.id })
+  end
   return ActionRegistry.preflight(name, data or {})
 end
 local function add_candidate(out, name, payload, probe)
@@ -678,9 +753,10 @@ ActionRegistry.bind_candidates("buy_from_shop", function()
     local area = G and G[area_name]
     for index, card in ipairs((area and area.cards) or {}) do
       local before = #out
-      add_candidate(out, "buy_from_shop", { area = area_name, index = index })
+      local name = not CardUtil.is_face_down(card) and Utils.real_name_or(card) or nil
+      add_candidate(out, "buy_from_shop", { area = area_name, index = index, name = name })
       if #out == before and card and card.ability and card.ability.consumeable then
-        add_candidate(out, "buy_from_shop", { area = area_name, index = index, use = true })
+        add_candidate(out, "buy_from_shop", { area = area_name, index = index, name = name, use = true })
       end
     end
   end
@@ -695,23 +771,22 @@ ActionRegistry.bind_candidates("sell_card", function()
   end
   for _, area_name in ipairs({ "jokers", "consumeables" }) do
     local area = G and G[area_name]
-    for index in ipairs((area and area.cards) or {}) do
-      add_candidate(out, "sell_card", { area = area_name, index = index })
+    for index, card in ipairs((area and area.cards) or {}) do
+      local payload = { area = area_name, index = index }
+      if not CardUtil.is_face_down(card) then payload.name = Utils.real_name_or(card) end
+      add_candidate(out, "sell_card", payload)
     end
   end
   return out
 end)
 
-ActionRegistry.bind_candidates("use_card", function()
+local function card_candidates(action_name, source_name, source_area)
   local out = {}
-  local pack = CardUtil.pack_area()
-  for _, source in ipairs({
-    { name = "consumeables", area = G and G.consumeables },
-    { name = "booster_pack", area = pack },
-  }) do
-    for index, card in ipairs((source.area and source.area.cards) or {}) do
-      if not require("facts.target_contracts").get(card) then
-      local payload = { area = source.name, index = index }
+  for index, card in ipairs((source_area and source_area.cards) or {}) do
+    if not require("facts.target_contracts").get(card) then
+      local visible = not CardUtil.is_face_down(card)
+      local payload = { area = source_name, index = index }
+      if visible then payload.name = Utils.real_name_or(card) end
       local probe = payload
       local minimum, maximum = CardUtil.consumable_target_range(card)
       if maximum and maximum > 0 and not Utils.is_playing_card(card) then
@@ -720,13 +795,19 @@ ActionRegistry.bind_candidates("use_card", function()
         for hand_index = 1, math.min(minimum or 1, hand_count) do
           stand_in[#stand_in + 1] = hand_index
         end
-        probe = { area = source.name, index = index, hand_indices = stand_in }
+        probe = { area = source_name, index = index, name = payload.name, hand_indices = stand_in }
       end
-      add_candidate(out, "use_card", payload, probe)
-      end
+      add_candidate(out, action_name, payload, probe)
     end
   end
   return out
+end
+
+ActionRegistry.bind_candidates("use_consumable", function()
+  return card_candidates("use_consumable", "consumeables", G and G.consumeables)
+end)
+ActionRegistry.bind_candidates("choose_pack_card", function()
+  return card_candidates("choose_pack_card", "booster_pack", CardUtil.pack_area())
 end)
 
 ActionRegistry.bind_candidates("select_blind", function()
@@ -755,6 +836,16 @@ local function reject_schema(bridge, id, name, message)
 end
 
 reject_below_gate = function(bridge, id, name, rejection)
+  if rejection.reason_code == "CONFIRMATION_REQUIRED" and rejection.confirmation_transaction_id then
+    if not retire_hand_proposal_actions(bridge, rejection.confirmation_transaction_id) then
+      rejection.reason_code = "POLICY_ACKNOWLEDGED"
+      rejection.confirmation_candidate = nil
+      rejection.confirmation_transaction_id = nil
+      rejection.message = "The hand proposal could not safely close the old action window; nothing was played. Choose the currently available action."
+      rejection.no_gate_rollback = true
+      rejection.confirmation_withdraw_failed = true
+    end
+  end
   local fault = table.concat({
     tostring(rejection.reason_code or ""),
     tostring(rejection.message or ""),
@@ -772,7 +863,10 @@ reject_below_gate = function(bridge, id, name, rejection)
     correction = Enforce.take_correction and Enforce.take_correction() or nil,
     transient = rejection.transient,
     confirmation_candidate = rejection.confirmation_candidate,
+    context_review_candidate = rejection.context_review_candidate,
     confirmation_snapshot = rejection.confirmation_snapshot,
+    consume_force_attempt = rejection.consume_force_attempt,
+    transaction_id = rejection.transaction_id,
   })
   if not rejection.no_gate_rollback then Enforce.rollback_action() end
   Enforce.post_action(bridge, false)
@@ -894,10 +988,46 @@ local function validate_action(msg, bridge)
   if type(data.area) == "string" then
     data.area = AREA_ALIASES[data.area] or data.area
   end
+  -- Match the transaction before validating resolve_play.
+  if name == "resolve_play" then
+    local tx_now = HandTx.current()
+    local supplied_id = data.transaction_id
+    local integer_id = type(supplied_id) == "number"
+      and supplied_id == math.floor(supplied_id)
+    if not tx_now or not integer_id or supplied_id ~= tx_now.id then
+      reject_below_gate(bridge, id, name, ActionResult.error("POLICY_ACKNOWLEDGED",
+        "This resolve_play is stale or missing its integer transaction_id; nothing was applied. Use the transaction_id from the current proposal.",
+        { no_gate_rollback = true, consume_force_attempt = true,
+          transaction_id = tx_now and tx_now.id or nil }))
+      return nil
+    end
+    local allowed = { transaction_id = true, answer = true, reason = true }
+    for key in pairs(data) do
+      if not allowed[key] then
+        reject_schema(bridge, id, name,
+          "Invalid action parameters: parameters contains unknown property " .. tostring(key))
+        return nil
+      end
+    end
+  end
   local schema = current_schema(name)
   local ok_schema, schema_err = validate_value(schema, data, "parameters")
   if not ok_schema then
     reject_schema(bridge, id, name, "Invalid action parameters: " .. schema_err)
+    return nil
+  end
+  if name ~= "resolve_play" and HandTx.stale_mutator(name) then
+    local tx_now = HandTx.current()
+    reject_below_gate(bridge, id, name, ActionResult.error("POLICY_ACKNOWLEDGED",
+      string.format("Hand transaction %d is awaiting resolve_play; this action was acknowledged without mutation. Resolve transaction_id %d first.", tx_now.id, tx_now.id),
+      { no_gate_rollback = true, consume_force_attempt = true, transaction_id = tx_now.id }))
+    return nil
+  end
+  if name == "play_hand" and HandTx.final_play_required()
+      and not belongs_to_force(bridge, id, name) then
+    reject_below_gate(bridge, id, name, ActionResult.error("POLICY_ACKNOWLEDGED",
+      "This play_hand did not answer the current final-choice force, so it was not executed. Choose play_hand from the current prompt; that choice commits immediately.",
+      { no_gate_rollback = true, consume_force_attempt = true }))
     return nil
   end
   local ok_guard_call, ok_guard, guard_err, guard_transient, guard_reason =
@@ -942,7 +1072,9 @@ local function validate_action(msg, bridge)
     if rejection.reason_code == "CONFIRMATION_REQUIRED" then
       rejection.confirmation_snapshot = confirm_snapshot
     end
-    PlanTransaction.hold(tx)
+    if name ~= "resolve_play" and not rejection.confirmation_withdraw_failed then
+      PlanTransaction.hold(tx, rejection.confirmation_transaction_id)
+    end
     local delivered = reject_below_gate(bridge, id, name, rejection)
     if delivered == false then restore_confirmations(confirm_snapshot) end
     return nil
@@ -972,15 +1104,15 @@ local function validate_action(msg, bridge)
     print("[neuro-game] Warning: action journal could not record prepared id " .. tostring(id))
   end
 
-  local ends_pack = (name == "skip_booster")
-    or ((name == "use_card" or name == "use_directional_card") and type(data) == "table" and data.area == "booster_pack"
+  local ends_pack = (name == "skip_pack")
+    or ((name == "choose_pack_card" or name == "choose_directional_pack_card")
       and (tonumber(G and G.GAME and G.GAME.pack_choices) or 0) <= 1)
   -- Claiming overwrites unconditionally: Staging.queue validates the successor before cancelling
   -- the predecessor, so the job whose claim is overwritten is the one about to be cancelled.
   if ends_pack and G and G.NEURO then G.NEURO.pack_exit_pending = tostring(id) end
   local disposable_names
   if ends_pack then
-    disposable_names = { "use_card", "use_directional_card", "skip_booster" }
+    disposable_names = { "choose_pack_card", "choose_directional_pack_card", "skip_pack" }
   elseif DISPOSABLE_ACTIONS[name] then
     disposable_names = { name }
   end
@@ -1075,6 +1207,16 @@ local function finalize_failed(job, bridge, outcome, details, message)
     .. "' did not produce a verified result. Inspect the current state and choose again.")
   finalizer_steps("failed", id, {
     { "confirmation restore", function() restore_confirmations(job.confirm_snapshot) end },
+    { "hand transaction invalidate", function()
+      if job.name == "resolve_play" and job.data then
+        local tx = HandTx.current()
+        if tx and tonumber(tx.id) == tonumber(job.data.transaction_id) then
+          HandTx.invalidate(tx, "action_failed")
+          ConfirmationEvidence.clear(job.data.transaction_id)
+          PlanTransaction.release_hand_proposal(job.data.transaction_id)
+        end
+      end
+    end },
     { "metric", function() Metrics.incr("action_not_applied") end },
     { "task mode", function() require("core.task_mode").on_action(name, false) end },
     { "force rearm", function() if G and G.NEURO then ForceState.rearm() end end },
@@ -1093,7 +1235,7 @@ local function finalize_failed(job, bridge, outcome, details, message)
   })
 end
 
-local RESTATED_BY_LIVE_STATE = { set_joker_intents = true }
+local RESTATED_BY_LIVE_STATE = { record_joker_roles = true }
 
 local function finalize_applied(job, bridge, message, details)
   local id, name = job.id, job.name
@@ -1116,6 +1258,25 @@ local function finalize_applied(job, bridge, message, details)
         ContextDelivery.event_at("plan_commit", ContextDelivery.here(),
           "After the completed action '" .. tostring(name) .. "': " .. plan_message,
           { bridge = bridge })
+      end
+    end },
+    { "hand transaction", function()
+      if not (G and G.NEURO) then return end
+      if name == "resolve_play" and job.data and job.data.answer == "yes" then
+        local tx = HandTx.current()
+        if tx and tonumber(tx.id) == tonumber(job.data.transaction_id) then
+          HandTx.settle(tx)
+          ConfirmationEvidence.clear(job.data.transaction_id)
+          -- Advance the decision serial after gameplay succeeds.
+          G.NEURO.decision_serial = (tonumber(G.NEURO.decision_serial) or 0) + 1
+          HandTx.observe_context_changed()
+        end
+      end
+      if name == "play_hand" or name == "discard_hand" or name == "use_consumable"
+          or name == "use_directional_consumable" or name == "choose_pack_card"
+          or name == "choose_directional_pack_card" or name == "sell_card"
+          or name == "set_joker_order" then
+        HandTx.observe_context_changed()
       end
     end },
     { "metric", function() Metrics.incr("action_ok") end },
@@ -1228,7 +1389,7 @@ local function advance_accepted_job(job, bridge)
     if withdrawal.status == "rejected" then
       awaiting_disposable_write[tostring(job.id)] = nil
       rollback_prepared_acceptance(bridge, job.id, job.name, job.tx, job.ends_pack, job.disposable,
-        job.confirm_snapshot)
+        job.confirm_snapshot, job.data and job.data.transaction_id)
       Metrics.incr("action_disposable_write_rejected")
       return false
     end
@@ -1242,7 +1403,7 @@ local function advance_accepted_job(job, bridge)
       local ok, completed = pcall(bridge.complete_action_withdrawal, bridge, job.disposable_names)
       if not ok or completed == false then
         rollback_prepared_acceptance(bridge, job.id, job.name, job.tx, job.ends_pack, job.disposable,
-          job.confirm_snapshot)
+          job.confirm_snapshot, job.data and job.data.transaction_id)
         Metrics.incr("action_disposable_completion_failed")
         return false
       end
@@ -1260,16 +1421,24 @@ local function advance_accepted_job(job, bridge)
     if G and G.NEURO then
       G.NEURO.render_dirty_epoch = (tonumber(G.NEURO.render_dirty_epoch) or 0) + 1
     end
+    local result_opts
+    if job.name == "resolve_play" then
+      result_opts = {
+        consume_force_attempt = true,
+        preserve_decision_serial = true,
+        no_verdict = true,
+      }
+    end
     local result_ok, delivered, delivery_receipt = pcall(send_result,
-      bridge, job.id, true, nil, job.name)
+      bridge, job.id, true, nil, job.name, result_opts)
     if not result_ok then
       rollback_prepared_acceptance(bridge, job.id, job.name, job.tx, job.ends_pack, job.disposable,
-        job.confirm_snapshot)
+        job.confirm_snapshot, job.data and job.data.transaction_id)
       error(delivered, 0)
     end
     if delivered == false then
       rollback_prepared_acceptance(bridge, job.id, job.name, job.tx, job.ends_pack, job.disposable,
-        job.confirm_snapshot)
+        job.confirm_snapshot, job.data and job.data.transaction_id)
       return false
     end
     job.result_sent = true
@@ -1285,6 +1454,35 @@ local function advance_accepted_job(job, bridge)
 end
 
 function Dispatcher.update_receipts(now)
+  local hand_withdrawals = {}
+  for key, item in pairs(awaiting_hand_withdrawal) do
+    local receipt = item.receipt
+    if receipt and (receipt.status == "written" or receipt.status == "rejected") then
+      hand_withdrawals[#hand_withdrawals + 1] = key
+    end
+  end
+  table.sort(hand_withdrawals)
+  for i = 1, #hand_withdrawals do
+    local key = hand_withdrawals[i]
+    local item = awaiting_hand_withdrawal[key]
+    awaiting_hand_withdrawal[key] = nil
+    if item then
+      if item.receipt.status == "written" then
+        if item.bridge and item.bridge.complete_action_withdrawal then
+          pcall(item.bridge.complete_action_withdrawal, item.bridge, item.names)
+        end
+      else
+        local tx = HandTx.current()
+        if tx and tonumber(tx.id) == tonumber(item.transaction_id) then
+          HandTx.invalidate(tx, "proposal_action_withdraw_rejected")
+          ConfirmationEvidence.clear(item.transaction_id)
+          PlanTransaction.release_hand_proposal(item.transaction_id)
+          Lifecycle.mark_force_dirty()
+        end
+      end
+    end
+  end
+
   local withdrawal_ready = {}
   for key, job in pairs(awaiting_disposable_write) do
     local receipt = job.disposable_delivery_receipt
@@ -1308,7 +1506,7 @@ function Dispatcher.update_receipts(now)
     elseif receipt and receipt.status == "rejected" then
       awaiting_result_write[key] = nil
       rollback_prepared_acceptance(job.bridge, job.id, job.name, nil, job.ends_pack, job.disposable,
-        job.confirm_snapshot)
+        job.confirm_snapshot, job.data and job.data.transaction_id)
       Metrics.incr("action_result_write_rejected")
     end
   end

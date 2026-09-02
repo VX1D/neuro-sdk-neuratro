@@ -123,7 +123,7 @@ do
     { case = "force/selecting_hand_completeness", state = "SELECTING_HAND",
       offered = { "play_hand", "discard_hand", "sell_card" }, legal = { "play_hand", "sell_card" } },
     { case = "force/shop_completeness", state = "SHOP",
-      offered = { "toggle_shop", "sell_card", "buy_from_shop" }, legal = { "buy_from_shop" } },
+      offered = { "leave_shop", "sell_card", "buy_from_shop" }, legal = { "buy_from_shop" } },
     { case = "force/blind_select_completeness", state = "BLIND_SELECT",
       offered = { "select_blind", "skip_blind" }, legal = { "select_blind" } },
   }

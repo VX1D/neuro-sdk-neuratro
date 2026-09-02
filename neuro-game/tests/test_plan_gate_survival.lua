@@ -11,6 +11,8 @@ local Enforce = require("core.enforce")
 local PlanGate = require("core.plan_gate")
 local PlanTransaction = require("core.plan_transaction")
 local PlanHandlers = require("handlers.plan_handlers")
+local ConfirmationEvidence = require("core.confirmation_evidence")
+local HandTx = require("core.hand_transaction")
 
 local function card(sort_id)
   return {
@@ -24,6 +26,7 @@ local function bridge()
     results = {}, contexts = {},
     send_action_result = function(self, id, ok, message, reason_code)
       self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason_code = reason_code }
+      return true, { status = "written" }
     end,
     send_context = function(self, message) self.contexts[#self.contexts + 1] = message end,
     unregister_actions = function() end,
@@ -75,12 +78,14 @@ local function base(opts)
   require("tests.helpers").stage_registered("SELECTING_HAND", { "play_hand", "discard_hand" })
 end
 
-local function rearm()
+local function rearm(names)
+  names = names or { "play_hand", "discard_hand" }
   G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  require("core.force_state").arm("SELECTING_HAND", { "play_hand", "discard_hand" },
-    { play_hand = true, discard_hand = true }, 1)
-  require("tests.helpers").stage_registered("SELECTING_HAND", { "play_hand", "discard_hand" })
+  local set = {}
+  for _, name in ipairs(names) do set[name] = true end
+  require("core.force_state").arm("SELECTING_HAND", names, set, 1)
+  require("tests.helpers").stage_registered("SELECTING_HAND", names)
 end
 
 local function send(name, id, data, b)
@@ -108,12 +113,14 @@ do
     G.NEURO.held_plan_write ~= nil and G.NEURO.held_plan_write.values.boss_plan == BOSS,
     G.NEURO.held_plan_write and tostring(G.NEURO.held_plan_write.values.boss_plan))
 
-  rearm()
-  send("play_hand", "p2", { indices = { 1, 2 } }, b)
-  check("the bare resend is not refused for a missing plan field",
+  ConfirmationEvidence.step_delivery()
+  local pending = HandTx.current()
+  rearm({ "resolve_play" })
+  send("resolve_play", "p2", { transaction_id = pending.id, answer = "yes" }, b)
+  check("the explicit confirmation is not refused for a missing plan field",
     b.results[2] and b.results[2].reason_code ~= "PRECONDITION_FAILED",
     b.results[2] and tostring(b.results[2].reason_code) .. "/" .. tostring(b.results[2].message))
-  check("the bare resend plays", b.results[2] and b.results[2].ok == true
+  check("the explicit confirmation plays", b.results[2] and b.results[2].ok == true
     and G.GAME.current_round.hands_left == 3, G.GAME.current_round.hands_left)
   check("the plan written at the gate reaches the register", G.NEURO.plan and G.NEURO.plan.boss == BOSS,
     G.NEURO.plan and tostring(G.NEURO.plan.boss))
@@ -133,10 +140,13 @@ do
     and b.results[1].reason_code == "CONFIRMATION_REQUIRED")
   rearm()
   send("discard_hand", "d1", { indices = { 3 } }, b)
-  check("a different action in the same round is not refused for the missing field",
-    b.results[2] and b.results[2].ok == true, b.results[2] and tostring(b.results[2].reason_code))
-  check("the held plan commits with it", G.NEURO.plan and G.NEURO.plan.boss == BOSS,
-    G.NEURO.plan and tostring(G.NEURO.plan.boss))
+  check("strict resolution acknowledges a different action without mutation",
+    b.results[2] and b.results[2].ok == true
+      and b.results[2].reason_code == "POLICY_ACKNOWLEDGED",
+    b.results[2] and tostring(b.results[2].reason_code))
+  check("the proposal-owned plan remains held for its matching confirmation",
+    G.NEURO.plan == nil and G.NEURO.held_plan_write
+      and G.NEURO.held_plan_write.hand_transaction_id == HandTx.current().id)
 end
 
 do
@@ -146,6 +156,7 @@ do
   check("play is gated before the blind changes", b.results[1]
     and b.results[1].reason_code == "CONFIRMATION_REQUIRED")
   G.GAME.blind = { key = "bl_window", name = "The Window", boss = true }
+  HandTx.observe_context_changed()
   rearm()
   send("play_hand", "p2", { indices = { 1, 2 } }, b)
   check("a held plan from the previous boss does not satisfy the new one",
