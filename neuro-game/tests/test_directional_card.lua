@@ -22,15 +22,15 @@ _G.G = {
   FUNCS = { use_card = function() used = { hand.highlighted[1], hand.highlighted[2] }; return true end },
 }
 
-local schema = Registry.get("use_directional_card").schema
+local schema = Registry.get("use_directional_consumable").schema
 check("wire schema requires both directional roles and target identity",
   table.concat(schema.required, ","):find("name", 1, true)
     and table.concat(schema.required, ","):find("left_index", 1, true)
     and table.concat(schema.required, ","):find("right_index", 1, true))
 check("candidate generation does not choose semantic targets for Neuro",
-  #Registry.candidates("use_directional_card") == 0)
+  #Registry.candidates("use_directional_consumable") == 0)
 local exec, err = UseCard.handle_use_card({ area = "consumeables", index = 1, hand_indices = { 1, 2 } })
-check("ordinary use_card cannot bypass a directional contract", exec == nil and err.reason_code == "INVALID_SELECTION")
+check("ordinary use_consumable cannot bypass a directional contract", exec == nil and err.reason_code == "INVALID_SELECTION")
 exec, err = Directional.handle({ area = "consumeables", index = 1, name = "Death", left_index = 2, right_index = 1 })
 check("reversed roles fail live validation", exec == nil and err.reason_code == "INVALID_SELECTION")
 exec, err = Directional.handle({ area = "consumeables", index = 1, name = "The Hermit", left_index = 1, right_index = 2 })

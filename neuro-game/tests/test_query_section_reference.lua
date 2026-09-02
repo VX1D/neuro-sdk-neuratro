@@ -50,10 +50,6 @@ for _, board in ipairs(LB.BOARDS) do
 end
 check("the corpus produced at least one boss row to check", boss_rows > 0, tostring(boss_rows))
 
--- The board the paragraph was written for, built so the guard has something to bite on: one owned
--- consumable that the engine itself refuses (The Fool with no previous Tarot/Planet used --
--- game-dump/card.lua:1874), which leaves use_card with no candidate, which leaves the Consumables
--- list out of the payload.
 local function blocked_consumable_board()
   LB.load("SELECTING_HAND", "Normal: 5 cards, 4 hands, 3 discards")
   G.consumeables.cards = { LB.consumable("c_fool", 950) }
@@ -68,8 +64,8 @@ end
 blocked_consumable_board()
 check("the board really holds a consumable the engine refuses",
   CardUtil.has_blocked_consumable() == true, "has_blocked_consumable")
-check("use_card really has no candidate on that board",
-  Actions.is_action_valid("use_card") == false, "use_card is offered after all")
+check("use_consumable really has no candidate on that board",
+  Actions.is_action_valid("use_consumable") == false, "use_consumable is offered after all")
 
 local built = FP.build("SELECTING_HAND")
 check("the Consumables list is genuinely absent from that payload",

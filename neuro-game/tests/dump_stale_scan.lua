@@ -97,14 +97,14 @@ local function run_iteration(it)
   ran = ran + 1
   local advertised = (type(force) == "table" and force.actions) or {}
   local use_advertised = false
-  for _, name in ipairs(advertised) do if name == "use_card" then use_advertised = true break end end
+  for _, name in ipairs(advertised) do if name == "use_consumable" then use_advertised = true break end end
 
   if use_advertised then
     local usable_flags = {}
     if G.consumeables and G.consumeables.cards then
       for i, card in ipairs(G.consumeables.cards) do
         local rendered = CardUtil.consumable_usable_now(card) and true or false
-        local real = preflight_ok("use_card", use_card_payload(card, i, "consumeables"))
+        local real = preflight_ok("use_consumable", use_card_payload(card, i, "consumeables"))
         usable_flags[#usable_flags + 1] = real
         if rendered ~= real then
           local rec = { it = it, state = state, index = i, rendered = rendered, preflight = real,
@@ -115,11 +115,11 @@ local function run_iteration(it)
     end
     if G.pack_cards and G.pack_cards.cards then
       for i, card in ipairs(G.pack_cards.cards) do
-        usable_flags[#usable_flags + 1] = preflight_ok("use_card", use_card_payload(card, i, "booster_pack"))
+        usable_flags[#usable_flags + 1] = preflight_ok("use_consumable", use_card_payload(card, i, "booster_pack"))
       end
     end
     if not has(usable_flags) then
-      phantom[#phantom + 1] = { it = it, state = state, action = "use_card",
+      phantom[#phantom + 1] = { it = it, state = state, action = "use_consumable",
         targets = (G.consumeables and #G.consumeables.cards or 0) + (G.pack_cards and #G.pack_cards.cards or 0) }
     end
   end
@@ -135,7 +135,7 @@ local safe_n = #parity - dangerous
 local function banner(s) print(("="):rep(90)); print(s); print(("="):rep(90)) end
 banner(string.format("STALE-SCAN FUZZ  seed=%d iters=%d rendered=%d phantom=%d dangerous=%d safe=%d crashes=%d",
   SEED, ITERS, ran, #phantom, dangerous, safe_n, #crashes))
-print("phantom   = use_card advertised but NOTHING it can target passes execution (model chases nothing)")
+print("phantom   = use_consumable advertised but NOTHING it can target passes execution (model chases nothing)")
 print("dangerous = shown 'usable now' but execution REJECTS  -- the PRD phantom bug (GATED)")
 print("safe      = shown 'not usable' but execution ACCEPTS  -- model may needlessly skip it (reported)\n")
 
@@ -143,7 +143,7 @@ if #phantom > 0 then
   banner("PHANTOM ACTIONS (advertised, unexecutable in the unchanged state) -- GATED")
   local seen = {}
   for _, f in ipairs(phantom) do local k = f.state; seen[k] = (seen[k] or 0) + 1 end
-  for k, n in pairs(seen) do print(string.format("  use_card @ %-20s x%d", k, n)) end
+  for k, n in pairs(seen) do print(string.format("  use_consumable @ %-20s x%d", k, n)) end
 end
 if dangerous > 0 then
   banner("DANGEROUS PARITY (shown usable, execution rejects -- phantom the model chases) -- GATED")

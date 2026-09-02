@@ -38,7 +38,7 @@ local registry_ok, registry_errors = Registry.validate({ require_preflights = tr
 check("contracts: every action has schema, prompt, availability and preflight",
   registry_ok, table.concat(registry_errors or {}, "; "))
 check("contracts: dispatcher schema is registry schema",
-  Dispatcher._test.get_action_schema("use_card") == Registry.get("use_card").schema)
+  Dispatcher._test.get_action_schema("use_consumable") == Registry.get("use_consumable").schema)
 local select_prompt = Registry.prompt("select_blind")
 check("contracts: prompt derives enum from schema",
   select_prompt:find('"small"|"big"|"boss"', 1, true) ~= nil, select_prompt)
@@ -49,8 +49,8 @@ local chariot = {
 }
 G.consumeables.cards = { chariot }
 check("preflight parity: targeted consumable has no advertised candidate without hand",
-  #Registry.candidates("use_card") == 0 and not Actions.is_action_valid("use_card"))
-local use_exec, use_err = Dispatcher.preflight("use_card", { area = "consumeables", index = 1 })
+  #Registry.candidates("use_consumable") == 0 and not Actions.is_action_valid("use_consumable"))
+local use_exec, use_err = Dispatcher.preflight("use_consumable", { area = "consumeables", index = 1 })
 check("typed errors: missing consumable target is INVALID_SELECTION or TARGET_UNAVAILABLE",
   use_exec == nil and Result.is_error(use_err)
     and (use_err.reason_code == "INVALID_SELECTION" or use_err.reason_code == "TARGET_UNAVAILABLE"),
@@ -104,20 +104,23 @@ G.jokers.cards = {}
 do
   local Config = require("core.config")
   Config.set("NEURO_CONFIRM_REASON_ALWAYS", "off")
-  local off_schema = Dispatcher._test.get_action_schema("confirm_play")
-  check("confirm_play schema has no required reason once the always-reason flag is off",
-    off_schema and off_schema.properties and off_schema.properties.reason == nil,
+  local off_schema = Dispatcher._test.get_action_schema("resolve_play")
+  check("resolve_play schema keeps reason optional when the legacy flag is off",
+    off_schema and off_schema.properties and off_schema.properties.reason ~= nil
+      and #off_schema.required == 2 and off_schema.required[1] == "transaction_id"
+      and off_schema.required[2] == "answer",
     off_schema and off_schema.required and table.concat(off_schema.required, ","))
 
   Config.set("NEURO_CONFIRM_REASON_ALWAYS", "on")
-  local on_schema = Dispatcher._test.get_action_schema("confirm_play")
-  check("confirm_play schema advertises reason once the always-reason flag is toggled on live",
+  local on_schema = Dispatcher._test.get_action_schema("resolve_play")
+  check("resolve_play schema keeps the same binary contract when the legacy flag is toggled on live",
     on_schema and on_schema.properties and on_schema.properties.reason ~= nil,
     on_schema and on_schema.required and table.concat(on_schema.required, ","))
-  local only_answer = on_schema and on_schema.required
-    and #on_schema.required == 1 and on_schema.required[1] == "answer"
-  check("answer stays the only required field, so answer:\"no\" is never schema-rejected",
-    only_answer, on_schema and on_schema.required and table.concat(on_schema.required, ","))
+  local identity_and_answer = on_schema and on_schema.required
+    and #on_schema.required == 2 and on_schema.required[1] == "transaction_id"
+    and on_schema.required[2] == "answer"
+  check("transaction identity and answer stay required when the legacy flag is toggled on",
+    identity_and_answer, on_schema and on_schema.required and table.concat(on_schema.required, ","))
 
 end
 

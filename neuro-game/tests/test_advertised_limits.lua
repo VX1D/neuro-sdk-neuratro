@@ -97,8 +97,8 @@ local function scenario(label, opts, play_max, discard_max)
 
   local registry = {}
   for _, def in ipairs(Registry.definitions()) do registry[def.name] = def end
-  local hi = registry.use_card and registry.use_card.schema.properties.hand_indices
-  check(label .. ": use_card targets as many hand cards as the run lets the player select",
+  local hi = registry.use_consumable and registry.use_consumable.schema.properties.hand_indices
+  check(label .. ": use_consumable targets as many hand cards as the run lets the player select",
     hi and hi.maxItems == Limits.hand_select_max(), hi and tostring(hi.maxItems))
 
   local lo, up = Legality.play_size_bounds()

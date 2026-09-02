@@ -54,9 +54,9 @@ local function read_frames(bridge)
   return frames
 end
 
-local old_names = { "select_blind", "sell_card", "set_plan" }
-local new_names = { "sell_card", "reroll_shop", "toggle_shop", "set_plan", "set_joker_intents" }
-local shared = { sell_card = true, set_plan = true }
+local old_names = { "select_blind", "sell_card", "record_plan" }
+local new_names = { "sell_card", "reroll_shop", "leave_shop", "record_plan", "record_joker_roles" }
+local shared = { sell_card = true, record_plan = true }
 
 local bridge = Bridge:new({ enabled = true, fs_dir = IPC_DIR })
 G = { NEURO = bridge, TIMERS = { REAL = 100 } }

@@ -8,18 +8,18 @@ local Registry = require("core.action_registry")
 
 _G.G = { GAME = { starting_params = { play_limit = 2, discard_limit = 4 } } }
 require("core.actions") -- populates the action registry, reading the caps set above
-local PlanHandler = require("handlers.plan_handlers").handle_set_plan
+local PlanHandler = require("handlers.plan_handlers").handle_record_plan
 local CardUtil = require("facts.card_util")
 
-local set_plan = Registry.get("set_plan")
-local props = (set_plan and set_plan.schema and set_plan.schema.properties) or {}
+local record_plan = Registry.get("record_plan")
+local props = (record_plan and record_plan.schema and record_plan.schema.properties) or {}
 for _, f in ipairs({ "hand_plan", "build_plan", "money_plan" }) do
-  check("set_plan." .. f .. " is an unbounded string: model-authored prose carries no length cap",
+  check("record_plan." .. f .. " is an unbounded string: model-authored prose carries no length cap",
     props[f] and props[f].type == "string" and props[f].maxLength == nil, props[f] and props[f].maxLength)
 end
-check("set_plan schema does not advertise boss_plan", props.boss_plan == nil)
+check("record_plan schema does not advertise boss_plan", props.boss_plan == nil)
 
-for _, action_name in ipairs({ "buy_from_shop", "sell_card", "use_card", "reroll_shop", "toggle_shop", "select_blind" }) do
+for _, action_name in ipairs({ "buy_from_shop", "sell_card", "use_consumable", "reroll_shop", "leave_shop", "select_blind" }) do
   local action = Registry.get(action_name)
   local embedded = action and action.schema and action.schema.properties and action.schema.properties.plan
   for _, field in ipairs({ "hand_plan", "build_plan", "money_plan" }) do
@@ -43,11 +43,11 @@ for _, action_name in ipairs({ "play_hand", "discard_hand" }) do
       and embedded.properties.boss_plan.maxLength)
 end
 
-local standalone_intents = Registry.get("set_joker_intents").schema.properties.intents
-check("set_joker_intents tag enum is CORE/SCALING/HOLD/CHANGE",
+local standalone_intents = Registry.get("record_joker_roles").schema.properties.intents
+check("record_joker_roles tag enum is CORE/SCALING/HOLD/CHANGE",
   table.concat(standalone_intents.items.properties.tag.enum, ",") == "CORE,SCALING,HOLD,CHANGE")
 local note_schema = standalone_intents.items.properties.note
-check("set_joker_intents note schema advertises no maxLength",
+check("record_joker_roles note schema advertises no maxLength",
   note_schema and note_schema.type == "string" and note_schema.maxLength == nil,
   note_schema and note_schema.maxLength)
 do
@@ -59,7 +59,7 @@ do
   _G.G = { NEURO = {}, jokers = { cards = { { config = { center = { key = "j_a" } },
     ability = { set = "Joker", name = "A" }, sort_id = 7 } } } }
   local long_note = string.rep("x", 2000)
-  local exec, err = require("handlers.plan_handlers").handle_set_joker_intents({
+  local exec, err = require("handlers.plan_handlers").handle_record_joker_roles({
     intents = { { index = 1, tag = "CORE", note = long_note } } })
   check("the handler accepts a 2000-character note", type(exec) == "function", tostring(err))
   local receipt = type(exec) == "function" and exec() or ""
@@ -72,12 +72,12 @@ do
     receipt:find("shortened", 1, true) == nil and receipt:find(long_note, 1, true) ~= nil, #receipt)
   _G.G = saved_G
 end
-check("set_joker_intents description states no character limit",
-  Registry.get("set_joker_intents").description:find("characters", 1, true) == nil,
-  Registry.get("set_joker_intents").description)
-check("toggle_shop no longer embeds joker_intents (it's a standalone action)",
-  Registry.get("toggle_shop").schema.properties.joker_intents == nil)
-for _, action_name in ipairs({ "reroll_shop", "toggle_shop" }) do
+check("record_joker_roles description states no character limit",
+  Registry.get("record_joker_roles").description:find("characters", 1, true) == nil,
+  Registry.get("record_joker_roles").description)
+check("leave_shop no longer embeds joker_intents (it's a standalone action)",
+  Registry.get("leave_shop").schema.properties.joker_intents == nil)
+for _, action_name in ipairs({ "reroll_shop", "leave_shop" }) do
   local schema = Registry.get(action_name).schema
   check(action_name .. " advertises a parameter object", schema.type == "object"
     and type(schema.properties) == "table" and schema.properties.plan ~= nil)

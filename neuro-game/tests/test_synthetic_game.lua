@@ -272,7 +272,7 @@ for it = 1, ITERS do
 
   if state == "SELECTING_HAND" then
     local hand_query = (build_force("SELECTING_HAND") or {}).query or ""
-    local use_bit = hand_query:match("use_card[^;]*") or ""
+    local use_bit = hand_query:match("use_consumable[^;]*") or ""
     local ad = use_bit:find("hand_indices", 1, true) ~= nil
     check("INV4 hand_indices iff targeting consumable (#" .. it .. ")", ad == (w.cons_kind == "tarot"),
       "advertised=" .. tostring(ad) .. " cons=" .. w.cons_kind)

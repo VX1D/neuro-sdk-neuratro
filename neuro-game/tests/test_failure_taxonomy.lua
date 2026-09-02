@@ -7,7 +7,7 @@ local function has(text, needle)
 end
 
 local PlanGate = require("core.plan_gate")
-local PlanHandler = require("handlers.plan_handlers").handle_set_plan
+local PlanHandler = require("handlers.plan_handlers").handle_record_plan
 local FactHints = require("facts.fact_hints")
 local Actions = require("core.actions")
 local CardUtil = require("facts.card_util")
@@ -55,9 +55,9 @@ G.GAME.round_resets.blind_states.Small = "Defeated"
 G.GAME.round_resets.blind_states.Big = "Select"
 PlanGate.begin_cycle()
 check("scope: changing Small to Big invalidates hand plan in same ante", PlanGate._test.blind_needs_plan() == true)
-check("scope: stale plan surfaced in blind-select with a set_plan remedy (valid there)",
+check("scope: stale plan surfaced in blind-select with a record_plan remedy (valid there)",
   has(FactHints.plan_note("blind"), "Blind changed")
-    and has(FactHints.plan_note("blind"), "set_plan"))
+    and has(FactHints.plan_note("blind"), "record_plan"))
 
 G.STATE = G.STATES.SHOP
 PlanGate.mark_shop_changed("reroll_shop")
@@ -71,8 +71,8 @@ PlanGate.mark_shop_changed("buy_from_shop")
 required = PlanGate.shop_required_fields()
 check("plan fields: purchase leaves the build plan outstanding",
   required.build and not required.money and not required.hand)
-local revision_level = DecisionWindow.evaluate("toggle_shop")
-local inline_required = PlanGate.action_requirements("SHOP", "toggle_shop").plan
+local revision_level = DecisionWindow.evaluate("leave_shop")
+local inline_required = PlanGate.action_requirements("SHOP", "leave_shop").plan
 check("plan fields: leave carries only the outstanding field inline",
   revision_level == false
     and inline_required.build
@@ -93,10 +93,10 @@ local chariot = {
 G.consumeables.cards = { chariot }
 G.hand = nil
 check("availability: targeted consumable is unusable without a hand", CardUtil.consumable_usable_now(chariot) == false)
-check("availability: use_card is not advertised when every owned card lacks targets", Actions.is_action_valid("use_card") == false)
+check("availability: use_consumable is not advertised when every owned card lacks targets", Actions.is_action_valid("use_consumable") == false)
 G.hand = { cards = { { base = { value = "Ace", suit = "Spades" } } } }
 check("availability: targeted consumable becomes available with a hand", CardUtil.consumable_usable_now(chariot) == true)
-check("availability: use_card becomes valid after target appears", Actions.is_action_valid("use_card") == true)
+check("availability: use_consumable becomes valid after target appears", Actions.is_action_valid("use_consumable") == true)
 
 local walkie = {
   ability = { set = "Joker", name = "Walkie Talkie", mult = 4, bonus = 10 },
@@ -115,19 +115,19 @@ G.jokers.cards = {
   { config = { center = { key = "j_blueprint" } }, ability = {} },
 }
 DecisionWindow.reset_field("order_think")
-local first_reject = DecisionWindow.evaluate("toggle_shop")
+local first_reject = DecisionWindow.evaluate("leave_shop")
 check("latch: new composition arms order review", first_reject ~= false)
-DecisionWindow.acknowledge("toggle_shop")
-check("latch: unchanged acknowledged composition stays disarmed after toggle", DecisionWindow.would_reject("toggle_shop") == false)
-check("latch: unchanged acknowledged composition evaluates cleanly", DecisionWindow.evaluate("toggle_shop") == false)
+DecisionWindow.acknowledge("leave_shop")
+check("latch: unchanged acknowledged composition stays disarmed after toggle", DecisionWindow.would_reject("leave_shop") == false)
+check("latch: unchanged acknowledged composition evaluates cleanly", DecisionWindow.evaluate("leave_shop") == false)
 G.jokers.cards[2].config.center.key = "j_baron"
 G.jokers.cards[2].ability = { x_mult = 1.5 }
-check("latch: a genuinely changed composition re-arms review", DecisionWindow.evaluate("toggle_shop") ~= false)
+check("latch: a genuinely changed composition re-arms review", DecisionWindow.evaluate("leave_shop") ~= false)
 
 local order_definition = require("core.decision_registry").get("order_think")
 local real_scope_key = order_definition.scope.key
 order_definition.scope.key = function() error("synthetic pre-execution snapshot failure") end
-local failed_snapshot = DecisionWindow.snapshot("toggle_shop")
+local failed_snapshot = DecisionWindow.snapshot("leave_shop")
 order_definition.scope.key = real_scope_key
 local captured_failed_scope = false
 for _, entry in ipairs(failed_snapshot or {}) do
@@ -135,11 +135,11 @@ for _, entry in ipairs(failed_snapshot or {}) do
 end
 check("latch: a failed pre-execution snapshot is not recomputed from post-action state",
   type(failed_snapshot) == "table" and captured_failed_scope == false
-    and pcall(DecisionWindow.acknowledge, "toggle_shop", failed_snapshot) == true)
+    and pcall(DecisionWindow.acknowledge, "leave_shop", failed_snapshot) == true)
 
 local plan_def
 for _, def in ipairs(Actions.get_static_actions()) do
-  if def.name == "set_plan" then plan_def = def break end
+  if def.name == "record_plan" then plan_def = def break end
 end
 check("contract: no plan field advertises a length cap on model-authored prose",
   plan_def and plan_def.schema.properties.hand_plan.maxLength == nil

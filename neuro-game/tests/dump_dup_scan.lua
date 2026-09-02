@@ -196,7 +196,7 @@ local STRIPS = {
   { "[^\n]*needs[^\n]-chips[^\n]-reward[^\n]*", " ", 470 },
   { "Shop items:[^\n]*", " ", 40 },
   { "shop %w+ slot %d+:[^\n]*", " ", 840 },
-  { "Your move:.*$", " ", 1100 }, -- must run last: consumes rest of message
+  { "Your move:.*$", " ", 1300 },
 }
 
 local STRIP_HITS, STRIP_WORST = {}, {}

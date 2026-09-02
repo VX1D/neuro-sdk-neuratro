@@ -18,7 +18,7 @@ local function shop_move_line(untagged_index)
   require("context.context_compact").invalidate_cache()
   local _, force = FP.build("SHOP")
   for line in ((force.query or "") .. "\n"):gmatch("([^\n]*)\n") do
-    if line:find("set_joker_intents", 1, true) then return line end
+    if line:find("record_joker_roles", 1, true) then return line end
   end
   return ""
 end
@@ -28,8 +28,8 @@ check("the shop names WHICH joker lacks a tag",
   line4:find("Jokers that carry no tag: 4", 1, true) ~= nil, line4)
 check("and never states a bare count next to 'carry no tag'",
   line4:find("1 carry no tag", 1, true) == nil and line4:find("carry no tag,", 1, true) == nil, line4)
-check("it still says why toggle_shop is off the list",
-  line4:find("toggle_shop is off the list until every joker has one", 1, true) ~= nil, line4)
+check("it still says why leave_shop is off the list",
+  line4:find("leave_shop is off the list until every joker has one", 1, true) ~= nil, line4)
 
 check("the shop line reuses core.enforce's prose verbatim",
   line4:find(tostring(Enforce.untagged_joker_prose()), 1, true) ~= nil,
@@ -50,11 +50,11 @@ do
   Enforce.untagged_joker_prose = real
   local got = ""
   for line in ((force.query or "") .. "\n"):gmatch("([^\n]*)\n") do
-    if line:find("set_joker_intents", 1, true) then got = line end
+    if line:find("record_joker_roles", 1, true) then got = line end
   end
   check("an unreadable prose still leaves the tagging move offered",
     got:find("records what a joker is for", 1, true) ~= nil
-      and got:find("toggle_shop is off the list", 1, true) ~= nil, got)
+      and got:find("leave_shop is off the list", 1, true) ~= nil, got)
 end
 
 local ForceHelpers = require("force.force_helpers")
@@ -62,19 +62,19 @@ local ForceHelpers = require("force.force_helpers")
 do
   -- Exactly what the engine records for a state gate: core/enforce.lua:501 builds the message and
   -- build_correction_text hands the same instant to the correction channel.
-  G.NEURO.last_failed_action = "toggle_shop"
-  G.NEURO.last_failed_reason = "Action 'toggle_shop' is not available in state 'SHOP'."
-    .. " Jokers that carry no tag: 4. set_joker_intents tags them; toggle_shop returns to the list"
+  G.NEURO.last_failed_action = "leave_shop"
+  G.NEURO.last_failed_reason = "Action 'leave_shop' is not available in state 'SHOP'."
+    .. " Jokers that carry no tag: 4. record_joker_roles tags them; leave_shop returns to the list"
     .. " once every joker has one."
-  G.NEURO.last_failed_correction = "Jokers that carry no tag: 4. set_joker_intents tags them;"
-    .. " toggle_shop returns to the list once every joker has one."
+  G.NEURO.last_failed_correction = "Jokers that carry no tag: 4. record_joker_roles tags them;"
+    .. " leave_shop returns to the list once every joker has one."
   local w = ForceHelpers.failed_action_warning()
   check("the re-ask carries the correction", w:find("Jokers that carry no tag: 4", 1, true) ~= nil, w)
   check("the re-ask states the cause exactly once",
     select(2, w:gsub("Jokers that carry no tag", "")) == 1, w)
   check("the re-ask does not also quote the engine verdict",
     w:find("is not available in state", 1, true) == nil, w)
-  check("the tag gate re-ask fits its measured budget", #w == 163, #w .. ": " .. w)
+  check("the tag gate re-ask fits its measured budget", #w == 162, #w .. ": " .. w)
 end
 
 do

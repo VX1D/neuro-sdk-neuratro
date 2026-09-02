@@ -1,7 +1,7 @@
 _G.NEURO_TEST = true
 if not love then love = { timer = { getTime = function() return 0 end } } end
 
-local H = require("handlers.plan_handlers").handle_set_joker_intents
+local H = require("handlers.plan_handlers").handle_record_joker_roles
 local check, done = require("tests.helpers").harness("joker-intents")
 
 local function jk(key, sid, extra)
@@ -145,7 +145,7 @@ do
 
   require("core.actions") -- populates the action registry read below
   local note_schema = require("core.action_registry")
-    .get("set_joker_intents").schema.properties.intents.items.properties.note
+    .get("record_joker_roles").schema.properties.intents.items.properties.note
   check("the note schema advertises no maxLength", note_schema.maxLength == nil, note_schema.maxLength)
   check("a 5000-character note passes schema validation",
     require("util.schema_validate").validate_value(note_schema, string.rep("z", 5000), "note") == true)

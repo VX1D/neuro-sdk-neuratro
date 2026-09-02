@@ -67,7 +67,7 @@ do
   Enforce.pre_action = function() return false, "not_in_state name=play_hand state=MENU", false end
   local N = { persona = "evil", enabled = true, dispatcher = Dispatcher, actions = Actions }
   _G.G = { STATE = STATES.MENU, STATES = STATES, GAME = {}, NEURO = N }
-  require("core.force_state").arm("MENU", { "setup_run" }, { setup_run = true }, 1)
+  require("core.force_state").arm("MENU", { "open_run_setup" }, { open_run_setup = true }, 1)
   Dispatcher.handle_message({ command = "action", data = { id = "t1", name = "play_hand", data = {} } },
     { send_action_result = function() end, register_actions = function() end })
   Enforce.pre_action = saved
@@ -112,11 +112,11 @@ do
   local has_exit, has_setup = false, false
   for _, a in ipairs((f or {}).actions or {}) do
     if a == "exit_overlay_menu" then has_exit = true end
-    if a == "setup_run" then has_setup = true end
+    if a == "open_run_setup" then has_setup = true end
   end
   print("[PROG] game-over progression screen -> NOT dismissed via exit_overlay_menu=" .. tostring(not has_exit))
   check("game-over progression screen is not force-dismissed (no soft-loop)", not has_exit)
-  check("game-over progression screen offers setup_run (no soft-hang)", has_setup)
+  check("game-over progression screen offers open_run_setup (no soft-hang)", has_setup)
 end
 
 do

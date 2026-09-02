@@ -125,7 +125,7 @@ local function append_joker_sections(sections, state_name)
 end
 
 local function append_consumables(sections, has_filters, action_set)
-  if (not has_filters) or has_action(action_set, "use_card") or has_action(action_set, "use_directional_card")
+  if (not has_filters) or has_action(action_set, "use_consumable") or has_action(action_set, "use_directional_consumable")
     or has_action(action_set, "sell_card") then
     sections[#sections + 1] = consumables_section()
   end
@@ -202,7 +202,7 @@ local function assemble_shop(sections, ctx)
   sections[#sections + 1] = tags_section()
   append_joker_sections(sections, ctx.state_name)
   append_consumables(sections, has_filters, action_set)
-  if (not has_filters) or has_action(action_set, "use_card") or has_action(action_set, "use_directional_card") then
+  if (not has_filters) or has_action(action_set, "use_consumable") or has_action(action_set, "use_directional_consumable") then
     sections[#sections + 1] = hand_section()
   end
   sections[#sections + 1] = levels_section()

@@ -425,16 +425,16 @@ do
   local c = stage("split-buy", 300, "buy_from_shop", BUY_PAYLOAD, into_shop)
   check("split: shop buy runs on the shop hover",
     near(width_of(c), shop_width()), width_of(c))
-  c = stage("split-tray", 310, "use_card", TRAY_PAYLOAD, into_tray)
+  c = stage("split-tray", 310, "use_consumable", TRAY_PAYLOAD, into_tray)
   check("split: consumable use runs on the card-use hover plus the engine lift floor",
     near(width_of(c), tray_width()), width_of(c))
-  c = stage("split-pack", 320, "use_card", PACK_PAYLOAD, into_pack)
+  c = stage("split-pack", 320, "choose_pack_card", PACK_PAYLOAD, into_pack)
   check("split: pack pick runs on the card-use hover plus its commit beat",
     near(width_of(c), pack_width()), width_of(c))
 
   Config.set("NEURO_HOVER_SHOP", 0.15)
   local tray_before = tray_width()
-  c = stage("split-tray-cut", 330, "use_card", TRAY_PAYLOAD, into_tray)
+  c = stage("split-tray-cut", 330, "use_consumable", TRAY_PAYLOAD, into_tray)
   check("split: cutting the shop hover leaves card use alone",
     near(width_of(c), tray_before), width_of(c))
   c = stage("split-buy-cut", 340, "buy_from_shop", BUY_PAYLOAD, into_shop)
@@ -447,7 +447,7 @@ do
   c = stage("split-buy-stretch", 350, "buy_from_shop", BUY_PAYLOAD, into_shop)
   check("split: stretching the card-use hover leaves the buy alone",
     near(width_of(c), shop_width()), width_of(c))
-  c = stage("split-tray-stretch", 360, "use_card", TRAY_PAYLOAD, into_tray)
+  c = stage("split-tray-stretch", 360, "use_consumable", TRAY_PAYLOAD, into_tray)
   check("split: stretching the card-use hover does move card use",
     near(width_of(c), tray_width()), width_of(c))
   Config.reset("NEURO_HOVER_USE")
@@ -510,9 +510,9 @@ end
 do
   local c = stage("tag-buy", 400, "buy_from_shop", BUY_PAYLOAD, into_shop)
   check("attack: the shop buy window carries the attack tag", win_of(c).attack == true)
-  c = stage("tag-tray", 410, "use_card", TRAY_PAYLOAD, into_tray)
+  c = stage("tag-tray", 410, "use_consumable", TRAY_PAYLOAD, into_tray)
   check("attack: consumable use carries no attack tag", not win_of(c).attack)
-  c = stage("tag-pack", 420, "use_card", PACK_PAYLOAD, into_pack)
+  c = stage("tag-pack", 420, "choose_pack_card", PACK_PAYLOAD, into_pack)
   check("attack: pack pick carries no attack tag", not win_of(c).attack)
 
   Staging.reset_run_state()
@@ -593,7 +593,7 @@ do
   local cases = {
     { id = "margin-buy", name = "buy_from_shop", payload = BUY_PAYLOAD,
       prep = into_shop, label = "shop buy" },
-    { id = "margin-pack", name = "use_card", payload = PACK_PAYLOAD,
+    { id = "margin-pack", name = "choose_pack_card", payload = PACK_PAYLOAD,
       prep = into_pack, label = "pack pick" },
   }
   for _, cs in ipairs(cases) do

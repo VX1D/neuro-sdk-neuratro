@@ -80,14 +80,13 @@ end
 
 -- B: dump game.lua:2678-2685 -- an empty hand leaves SELECTING_HAND only while G.deck still holds
 -- cards, so empty hand plus empty deck is a board the engine never exits on its own. A Planet needs
--- no hand target, so use_card is a legal move out of it.
 do
   stage(EMPTY_HAND_CONSUMABLE, function(mock) mock.deck = { cards = {} } end)
-  check("the registry accepts use_card on the empty hand",
-    Actions.is_action_valid("use_card") == true)
+  check("the registry accepts use_consumable on the empty hand",
+    Actions.is_action_valid("use_consumable") == true)
   local force = Dispatcher.get_force_for_state("SELECTING_HAND")
   check("the model is asked for the one move that leaves the state",
-    offered(force)["use_card"] == true,
+    offered(force)["use_consumable"] == true,
     force and table.concat(force.actions, ",") or "NO FORCE")
 end
 

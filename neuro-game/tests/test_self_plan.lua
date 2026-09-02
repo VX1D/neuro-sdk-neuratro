@@ -15,20 +15,20 @@ local FactHints = require("facts.fact_hints")
 local check, done = require("tests.helpers").harness("self-plan")
 
 do
-  local fn, err = Plan.handle_set_plan({})
+  local fn, err = Plan.handle_record_plan({})
   check("both-empty rejected as PRECONDITION_FAILED, not SCHEMA_INVALID",
     fn == nil and type(err) == "table" and err.reason_code == "PRECONDITION_FAILED"
       and type(err.message) == "string" and err.message ~= "",
     type(err) == "table" and tostring(err.reason_code) or type(err))
 
-  local fn_nested, err_nested = Plan.handle_set_plan({ plan = { hand_plan = "test" } })
+  local fn_nested, err_nested = Plan.handle_record_plan({ plan = { hand_plan = "test" } })
   check("nested plan is accepted and returns executor",
     type(fn_nested) == "function" and err_nested == nil,
     err_nested and tostring(err_nested.reason_code))
 end
 
 do
-  local fn = Plan.handle_set_plan({ hand_plan = "flush\nbuild\t  x", build_plan = "  no xMult yet  ", money_plan = "  bank $25  " })
+  local fn = Plan.handle_record_plan({ hand_plan = "flush\nbuild\t  x", build_plan = "  no xMult yet  ", money_plan = "  bank $25  " })
   check("returns executor", type(fn) == "function")
   fn()
   check("hand sanitized", G.NEURO.plan.hand == "flush build x", G.NEURO.plan.hand)
@@ -39,7 +39,7 @@ end
 
 do
   local long_build = string.rep("b", 2000)
-  local fn, err = Plan.handle_set_plan({ build_plan = long_build })
+  local fn, err = Plan.handle_record_plan({ build_plan = long_build })
   check("a long build_plan is accepted", type(fn) == "function" and err == nil, err)
   fn()
   check("a long build_plan is stored verbatim", G.NEURO.plan.build == long_build, #tostring(G.NEURO.plan.build))
@@ -49,21 +49,21 @@ end
 
 do
   local utf8_400 = string.rep("ł", 400) -- 400 characters, 800 bytes
-  local fn, err = Plan.handle_set_plan({ hand_plan = utf8_400 })
+  local fn, err = Plan.handle_record_plan({ hand_plan = utf8_400 })
   check("a 400-character non-ASCII plan is accepted",
     type(fn) == "function" and err == nil, err)
   fn()
   check("a non-ASCII plan is stored byte-for-byte", G.NEURO.plan.hand == utf8_400)
 
   local ascii_5000 = string.rep("a", 5000)
-  local fn_long = Plan.handle_set_plan({ hand_plan = ascii_5000 })
+  local fn_long = Plan.handle_record_plan({ hand_plan = ascii_5000 })
   check("a 5000-character ASCII plan is accepted", type(fn_long) == "function")
   if type(fn_long) == "function" then fn_long() end
   check("a 5000-character plan is stored verbatim", G.NEURO.plan.hand == ascii_5000,
     #tostring(G.NEURO.plan.hand))
 
   local utf8_1001 = string.rep("ł", 1001) -- 1001 characters, 2002 bytes
-  local fn_u = Plan.handle_set_plan({ hand_plan = utf8_1001 })
+  local fn_u = Plan.handle_record_plan({ hand_plan = utf8_1001 })
   check("a 1001-character non-ASCII plan is accepted", type(fn_u) == "function")
   if type(fn_u) == "function" then fn_u() end
   check("a long non-ASCII plan preserves every byte",
@@ -119,8 +119,8 @@ do
   check("hand window shows the hand plan", h:find("go flush", 1, true) ~= nil, h)
   check("hand window shows build read", h:find("Build focus: no xMult yet", 1, true) ~= nil, h)
   check("hand window omits economy", h:find("Economy", 1, true) == nil, h)
-  check("hand window offers no revision (set_plan is invalid in SELECTING_HAND)",
-    h:find("set_plan", 1, true) == nil, h)
+  check("hand window offers no revision (record_plan is invalid in SELECTING_HAND)",
+    h:find("record_plan", 1, true) == nil, h)
   check("an unrecognized window emits no plan echo", FactHints.plan_note("play") == "")
   check("blind window still shows the hand plan", FactHints.plan_note("blind"):find("go flush", 1, true) ~= nil)
 end
@@ -148,15 +148,15 @@ do
   check("stale build is surfaced as prior context, not as current 'Build focus'",
     stale:find("Build focus", 1, true) == nil and stale:find("Your build last shop", 1, true) ~= nil, stale)
   local pack = FactHints.plan_note("pack")
-  check("stale build surfaced read-only in pack (set_plan invalid there)",
+  check("stale build surfaced read-only in pack (record_plan invalid there)",
     pack:find("Build focus", 1, true) == nil
       and pack:find("Your earlier build plan", 1, true) ~= nil
-      and pack:find("set_plan", 1, true) == nil, pack)
+      and pack:find("record_plan", 1, true) == nil, pack)
   local hand = FactHints.plan_note("hand")
-  check("stale build surfaced read-only in hand too (set_plan invalid in SELECTING_HAND)",
+  check("stale build surfaced read-only in hand too (record_plan invalid in SELECTING_HAND)",
     hand:find("Build focus", 1, true) == nil
       and hand:find("Your earlier build plan", 1, true) ~= nil
-      and hand:find("set_plan", 1, true) == nil, hand)
+      and hand:find("record_plan", 1, true) == nil, hand)
   check("play window emits nothing regardless of roster changes (agnostic)", FactHints.plan_note("play") == "")
   G.jokers = nil
 end
@@ -170,9 +170,9 @@ do
 end
 
 do
-  check("set_plan in SHOP action set", Actions.get_state_action_set("SHOP").set_plan == true)
-  check("set_plan in ROUND_EVAL action set", Actions.get_state_action_set("ROUND_EVAL").set_plan == true)
-  check("set_plan in BLIND_SELECT action set", Actions.get_state_action_set("BLIND_SELECT").set_plan == true)
+  check("record_plan in SHOP action set", Actions.get_state_action_set("SHOP").record_plan == true)
+  check("record_plan in ROUND_EVAL action set", Actions.get_state_action_set("ROUND_EVAL").record_plan == true)
+  check("record_plan in BLIND_SELECT action set", Actions.get_state_action_set("BLIND_SELECT").record_plan == true)
 end
 
 do
@@ -218,9 +218,9 @@ do
     buy_from_shop = { build = true },
     reroll_shop = {},
     sell_card = {},
-    use_card = {},
+    use_consumable = {},
   }
-  for _, action_name in ipairs({ "buy_from_shop", "reroll_shop", "sell_card", "use_card" }) do
+  for _, action_name in ipairs({ "buy_from_shop", "reroll_shop", "sell_card", "use_consumable" }) do
     G.NEURO.shop_plan_revision_required = nil
     PlanGate.mark_shop_changed(action_name)
     local marked = G.NEURO.shop_plan_revision_required or {}
@@ -258,29 +258,29 @@ do
   PlanGate.mark_shop_changed("buy_from_shop")
   check("a purchase that leaves the roster alone asks for nothing at the exit",
     PlanGate.shop_needs_revision() == false
-      and PlanGate.action_requirements("SHOP", "toggle_shop").plan.build == nil)
+      and PlanGate.action_requirements("SHOP", "leave_shop").plan.build == nil)
 
   G.jokers.cards[#G.jokers.cards + 1] = joker("j_juggler")
   check("a purchase that changes the roster asks for the build plan at the exit",
     PlanGate.shop_needs_revision() == true
-      and PlanGate.action_requirements("SHOP", "toggle_shop").plan.build == true)
+      and PlanGate.action_requirements("SHOP", "leave_shop").plan.build == true)
   check("the exit asks for the build plan alone",
-    PlanGate.action_requirements("SHOP", "toggle_shop").plan.money == nil
-      and PlanGate.action_requirements("SHOP", "toggle_shop").plan.hand == nil)
+    PlanGate.action_requirements("SHOP", "leave_shop").plan.money == nil
+      and PlanGate.action_requirements("SHOP", "leave_shop").plan.hand == nil)
 
   refresh_build()
   PlanGate.mark_written(false, true, false)
   check("a rewritten build plan clears the exit requirement",
     PlanGate.shop_needs_revision() == false
-      and PlanGate.action_requirements("SHOP", "toggle_shop").plan.build == nil)
+      and PlanGate.action_requirements("SHOP", "leave_shop").plan.build == nil)
 
-  for _, action_name in ipairs({ "reroll_shop", "sell_card", "use_card" }) do
+  for _, action_name in ipairs({ "reroll_shop", "sell_card", "use_consumable" }) do
     G.NEURO.shop_plan_revision_required = nil
     G.jokers.cards[#G.jokers.cards + 1] = joker("j_" .. action_name)
     PlanGate.mark_shop_changed(action_name)
     check(action_name .. " restates its own aged fields and asks nothing at the exit",
       PlanGate.shop_needs_revision() == false
-        and next(PlanGate.action_requirements("SHOP", "toggle_shop").plan) == nil)
+        and next(PlanGate.action_requirements("SHOP", "leave_shop").plan) == nil)
   end
 
   G.NEURO.shop_plan_revision_required = nil
@@ -301,8 +301,8 @@ do
   check("hold: a refused action parks its plan for the next attempt",
     G.NEURO.held_plan_write ~= nil)
 
-  local fn = Plan.handle_set_plan({ hand_plan = "written on purpose" })
-  check("hold: set_plan is accepted", type(fn) == "function")
+  local fn = Plan.handle_record_plan({ hand_plan = "written on purpose" })
+  check("hold: record_plan is accepted", type(fn) == "function")
   if type(fn) == "function" then pcall(fn) end
   check("hold: an explicit plan write releases what a refusal was holding",
     G.NEURO.held_plan_write == nil,
@@ -310,7 +310,7 @@ do
 
   _G.G = { NEURO = { run_generation = 1, plan = {} }, GAME = {} }
   PT.hold({ plan_values = { hand_plan = "parked hand", build_plan = "parked build" }, plan_scopes = {} })
-  local fn2 = Plan.handle_set_plan({ hand_plan = "rewritten hand" })
+  local fn2 = Plan.handle_record_plan({ hand_plan = "rewritten hand" })
   if type(fn2) == "function" then pcall(fn2) end
   local held = G.NEURO.held_plan_write
   check("hold: a partial write frees only the field it names",

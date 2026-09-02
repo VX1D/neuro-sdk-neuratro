@@ -61,19 +61,16 @@ end
 
 -- A fresh schema object per call, not an in-schema conditional: SPECIFICATION.md warns those
 -- aren't reliably supported.
-local function confirm_play_schema()
-  local HH = Utils.lazy_require("handlers.hand_handlers")
-  local pend = HH and HH.pending and HH.pending()
-  local always_reason = require("core.config").bool("NEURO_CONFIRM_REASON_ALWAYS")
+local function resolve_play_schema()
   local props = {
+    transaction_id = { type = "integer", minimum = 1 },
     answer = { type = "string", enum = { "yes", "no" } },
+    reason = { type = "string" },
   }
-  -- Advertised, never required: `required` would also reject a bare answer:"no", the discard path.
-  -- handle_confirm_play enforces it on yes instead.
-  if always_reason or (pend and pend.dominant_alt) then
-    props.reason = { type = "string" }
-  end
-  return { type = "object", properties = props, required = { "answer" } }
+  return {
+    type = "object", properties = props,
+    required = { "transaction_id", "answer" },
+  }
 end
 
 local function joker_intents_schema()
@@ -93,6 +90,28 @@ local function joker_intents_schema()
   }
 end
 
+local function card_action_schema(area, hand_max, directional, require_name)
+  local properties = {
+    area = { type = "string", enum = { area } },
+    index = { type = "integer", minimum = 1 },
+    name = { type = "string" },
+    plan = plan_schema(),
+  }
+  local required = require_name and { "area", "index", "name" } or { "area", "index" }
+  if directional then
+    properties.name.minLength = 1
+    properties.left_index = { type = "integer", minimum = 1 }
+    properties.right_index = { type = "integer", minimum = 1 }
+    required = { "area", "index", "name", "left_index", "right_index" }
+  else
+    properties.hand_indices = {
+      type = "array", items = { type = "integer", minimum = 1 },
+      minItems = 1, maxItems = hand_max, uniqueItems = true,
+    }
+  end
+  return { type = "object", properties = properties, required = required }
+end
+
 local function build_param_actions()
   local play_max = Limits.play_select_max()
   local discard_max = math.max(1, Limits.discard_select_max())
@@ -106,30 +125,15 @@ local function build_param_actions()
       },
       required = { "blind" }
     }),
-    use_card = action_def("use_card", "Use a card from a consumeables slot (Consumables) or an open pack, by area + 1-indexed index. For a consumable that targets hand cards, also pass hand_indices as 1-indexed hand positions. Optionally pass `name` (the card's displayed name) to confirm the target: if the card now at `index` has a different name the action is rejected -- indices shift after every use/pick. When requested by `Your move`, include only the requested plan fields; they describe the plan after using the card and are saved with the action.", {
-      type = "object",
-      properties = {
-        area = { type = "string", enum = { "consumeables", "booster_pack" } },
-        index = { type = "integer", minimum = 1 },
-        name = { type = "string" },
-        hand_indices = { type = "array", items = { type = "integer", minimum = 1 }, minItems = 1, maxItems = hand_max, uniqueItems = true },
-        plan = plan_schema()
-      },
-      required = { "area", "index" }
-    }, { hand_indices = "hand positions" }),
-    use_directional_card = action_def("use_directional_card", "Use a card whose two hand targets have different roles. Pass `area` ('consumeables' or 'booster_pack'), the card's 1-indexed `index`, and its displayed `name`. `left_index` is the visually left source hand card and `right_index` is the visually right destination hand card; they must be distinct and left_index < right_index. When requested by `Your move`, include only the requested plan fields.", {
-      type = "object",
-      properties = {
-        area = { type = "string", enum = { "consumeables", "booster_pack" } },
-        index = { type = "integer", minimum = 1 },
-        name = { type = "string", minLength = 1 },
-        left_index = { type = "integer", minimum = 1 },
-        right_index = { type = "integer", minimum = 1 },
-        plan = plan_schema()
-      },
-      required = { "area", "index", "name", "left_index", "right_index" }
-    }),
-    buy_from_shop = action_def("buy_from_shop", "Buy an item from a Shop items row by area + 1-indexed index. For a targeted consumable, buy with use=false then drive it with use_card, or use_directional_card when its two targets have different roles. Optionally pass `name` (the item's displayed name) to confirm the target: a mismatch with the item now at `index` rejects the buy -- shop rows shift after each purchase or reroll. When requested by `Your move`, include only the requested plan fields; they describe the plan after buying and are saved with the action.", {
+    use_consumable = action_def("use_consumable", "Use one owned Consumable by area='consumeables', 1-indexed index, and its complete displayed name. A targeting card also needs hand_indices. Copy the offered payload; name binds the identity if slots shift. This consumes the card; include plan only when requested.",
+      card_action_schema("consumeables", hand_max), { hand_indices = "hand positions" }),
+    use_directional_consumable = action_def("use_directional_consumable", "Use one owned directional Consumable. Pass area='consumeables', index, displayed name, left_index as the visual-left source, and right_index as the visual-right destination; left_index < right_index. Include plan only when requested.",
+      card_action_schema("consumeables", hand_max, true)),
+    choose_pack_card = action_def("choose_pack_card", "Choose one card from the open pack by area='booster_pack' and 1-indexed index. A targeting card also needs hand_indices. Optional name rejects a shifted slot. This spends one pack choice; include plan only when requested.",
+      card_action_schema("booster_pack", hand_max), { hand_indices = "hand positions" }),
+    choose_directional_pack_card = action_def("choose_directional_pack_card", "Choose one directional card from the open pack. Pass area='booster_pack', index, displayed name, left_index as the visual-left source, and right_index as the visual-right destination; left_index < right_index. Include plan only when requested.",
+      card_action_schema("booster_pack", hand_max, true)),
+    buy_from_shop = action_def("buy_from_shop", "Buy an item from a Shop items row by area + 1-indexed index and its complete displayed `name`. Copy the offered payload: name binds the target if shop rows shift. For a targeted consumable, buy with use=false then use_consumable, or use_directional_consumable when its two targets have different roles. When requested by `Your move`, include only the requested plan fields; they describe the plan after buying and are saved with the action.", {
       type = "object",
       properties = {
         area = { type = "string", enum = { "shop_jokers", "shop_vouchers", "shop_booster" } },
@@ -140,7 +144,7 @@ local function build_param_actions()
       },
       required = { "area", "index" }
     }),
-    sell_card = action_def("sell_card", "Sell a joker (Your jokers) or consumable (Consumables) by area + 1-indexed index. Optionally pass `name` (the card's displayed name) to confirm the target: if the card now at `index` has a different name, the sell is rejected -- this protects you when indices shift right after another sell or use. When requested by `Your move`, include only the requested plan fields; they describe the plan after selling and are saved with the action.", {
+    sell_card = action_def("sell_card", "Sell a joker (Your jokers) or consumable (Consumables) by area + 1-indexed index and its complete displayed `name`. Copy the offered payload: name binds the exact target if slots shift. When requested by `Your move`, include only the requested plan fields; they describe the plan after selling and are saved with the action.", {
       type = "object",
       properties = {
         area = { type = "string", enum = { "jokers", "consumeables" } },
@@ -150,7 +154,7 @@ local function build_param_actions()
       },
       required = { "area", "index" }
     }),
-    play_hand = action_def("play_hand", "Play {count:indices:hand card} as a poker hand. " .. (confirm_hand_on() and "Committing takes two sends: the first play_hand returns a confirmation with the engine verdict and spends nothing, and a `confirm_play` with `answer:\"yes\"` commits it, using one hand (H) and scoring. Sending different indices instead starts a fresh confirmation for that selection. On your last hand with no discards left and at most one ready hand there is nothing to weigh, so the first send commits immediately unless the hand is one of the three lowest-ranking types or the boss blind has something to say about it." or "This commits the selection on the first send, using one hand (H) and scoring.") .. " `indices` are the 1-indexed hand positions from Your hand. Judge the hand yourself from Your hand, the Hand levels, and the Ready/Close facts before playing. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
+    play_hand = action_def("play_hand", "Play {count:indices:hand card} as a poker hand. " .. (confirm_hand_on() and "The first play_hand either commits immediately when no guard applies, or opens one confirmation without spending a hand. Once a confirmation is open, only `resolve_play` is valid: use the exact integer `transaction_id` shown in the prompt with `answer:\"yes\"` to commit or `answer:\"no\"` to cancel. Cancelling spends the single review for this unchanged hand: the next play_hand is the final choice and commits immediately, so use discard_hand first if you want the cards to change. On your last hand with no discards left and at most one ready hand there is nothing to weigh, so the first send commits immediately unless the hand is one of the three lowest-ranking types or the boss blind has something to say about it." or "This commits the selection on the first send, using one hand (H) and scoring.") .. " `indices` are the 1-indexed hand positions from Your hand. Judge the hand yourself from Your hand, the Hand levels, and the Ready/Close facts before playing. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
       type = "object",
       properties = {
         indices = {
@@ -162,7 +166,7 @@ local function build_param_actions()
       },
       required = { "indices" }
     }, { indices = "hand positions" }),
-    confirm_play = action_def("confirm_play", "Answer the play_hand confirmation shown in the current prompt. `answer:\"yes\"` commits exactly the selection that confirmation names -- it spends one hand and scores. `answer:\"no\"` discards the confirmation and returns you to a fresh choice; nothing is spent. This action exists only while a confirmation is open, and it can only answer that one: if your hand changed since it was issued, `yes` is refused and the confirmation is discarded, so choose again. To confirm a different selection, send play_hand with those indices instead -- that opens its own confirmation. When the confirmation asks for one, `answer:\"yes\"` also takes `reason`: a specific, non-boilerplate sentence naming why this is the play, and naming why you prefer it over any other ready hand the confirmation points at.", confirm_play_schema()),
+    resolve_play = action_def("resolve_play", "Resolve the delivered play_hand proposal. Pass the exact integer `transaction_id` and required `answer`. `answer:\"yes\"` commits the named cards, spends one hand, and scores; omit `reason` for yes. `answer:\"no\"` cancels without playing, discarding, or drawing. No spends the one review for this unchanged hand: use discard_hand next for a redraw, or play_hand for a specific alternative; that next play commits immediately. For no, optional `reason` should name that next action and its exact indices; a compact reminder is carried into the final-choice prompt. While the transaction is open, no other hand-decision action is valid. A stale or mismatched transaction_id is acknowledged without mutation.", resolve_play_schema()),
     discard_hand = action_def("discard_hand", "Discard {count:indices:hand card} immediately and draw the same number of replacements. This is FINAL and costs one discard, not a hand -- discards are the cheap re-draw resource (only usable while you have discards left). `indices` are the 1-indexed hand positions from Your hand. Use it to throw away weak cards and draw toward a better hand. When requested by `Your move`, include only the requested plan fields (including `boss_plan` during boss blinds); they describe the plan for this round and are saved with the action.", {
       type = "object",
       properties = {
@@ -175,17 +179,17 @@ local function build_param_actions()
       },
       required = { "indices" }
     }, { indices = "hand positions" }),
-    change_stake = action_def("change_stake", "Change run stake. Pass `to_key`: the stake number from the Stakes list (1-indexed).", {
+    select_stake = action_def("select_stake", "Change run stake. Pass `to_key`: the stake number from the Stakes list (1-indexed).", {
       type = "object",
       properties = { to_key = { type = "integer", minimum = 1 } },
       required = { "to_key" }
     }),
-    change_challenge_description = action_def("change_challenge_description", "Select a challenge. Pass `id`: the challenge id or displayed name (from the challenge list).", {
+    select_challenge = action_def("select_challenge", "Select a challenge. Pass `id`: the challenge id or displayed name (from the challenge list).", {
       type = "object",
       properties = { id = { type = "string" } },
       required = { "id" }
     }),
-    change_selected_back = action_def("change_selected_back", "Select a deck. Pass `back`: the deck key (e.g. b_red, b_blue).", {
+    select_deck = action_def("select_deck", "Select a deck. Pass `back`: the deck key (e.g. b_red, b_blue).", {
       type = "object",
       properties = { back = { type = "string" } },
       required = { "back" }
@@ -220,7 +224,7 @@ local function build_param_actions()
       },
       required = {}
     }),
-    toggle_shop = action_def("toggle_shop", "Exit shop and continue run flow. Blocked while any joker carries no tag; set_joker_intents tags it first. When requested by `Your move`, include only the requested plan fields; they describe the plan after leaving and are saved with the action. `joker_order_confirmed`: true leaves on the current joker order.", {
+    leave_shop = action_def("leave_shop", "Exit shop and continue run flow. Blocked while any joker carries no tag; record_joker_roles tags it first. When requested by `Your move`, include only the requested plan fields; they describe the plan after leaving and are saved with the action. `joker_order_confirmed`: true leaves on the current joker order.", {
       type = "object",
       properties = {
         plan = plan_schema(),
@@ -228,14 +232,14 @@ local function build_param_actions()
       },
       required = {}
     }),
-    set_joker_intents = action_def("set_joker_intents", "Record the role each joker plays in your build. Pass `intents`: a list of { index (1-indexed joker position), tag, note (optional) }. CORE: the piece your build is built around. SCALING: it grows over time and pays off later. HOLD: useful for now, keep it while it earns its slot. CHANGE: you want to swap it out when something better shows up. A tag stays on that joker for the rest of the run and follows the card, not the slot -- retag it whenever your view changes. Tagging never sells, buys or moves anything: every joker sale still needs its own fresh confirmation, and the tag only changes what that confirmation reminds you of. `note` records why, in your own words -- shown on that joker's row while shopping and echoed back if you later try to sell it. A note is stored exactly as you write it, at any length, and is never refused, so the tags in the same call always land. Leaving `note` out keeps any note already on file; passing `note`: '' clears it. While every joker carries a tag you can leave the shop; untagged jokers block toggle_shop until you tag them.", {
+    record_joker_roles = action_def("record_joker_roles", "Record the role each joker plays in your build. Pass `intents`: a list of { index (1-indexed joker position), tag, note (optional) }. CORE: the piece your build is built around. SCALING: it grows over time and pays off later. HOLD: useful for now, keep it while it earns its slot. CHANGE: you want to swap it out when something better shows up. A tag stays on that joker for the rest of the run and follows the card, not the slot -- retag it whenever your view changes. Tagging never sells, buys or moves anything: every joker sale still needs its own fresh confirmation, and the tag only changes what that confirmation reminds you of. `note` records why, in your own words -- shown on that joker's row while shopping and echoed back if you later try to sell it. A note is stored exactly as you write it, at any length, and is never refused, so the tags in the same call always land. Leaving `note` out keeps any note already on file; passing `note`: '' clears it. While every joker carries a tag you can leave the shop; untagged jokers block leave_shop until you tag them.", {
       type = "object",
       properties = {
         intents = joker_intents_schema()
       },
       required = { "intents" }
     }),
-    set_plan = action_def("set_plan", "State committed decisions, verb first -- not analysis or a copy of the board. `hand_plan` = the line you will play this blind. `build_plan` = your build direction and next upgrade. `money_plan` = one spend-or-hold decision. Optional `hand_focus` declares an exact visible hand name as `primary` and optional `fallback`; it is echoed as your declaration and never blocks another play. Dynamic facts (cash, joker roster, boss text) come from live state; do not repeat them.", {
+    record_plan = action_def("record_plan", "State committed decisions, verb first -- not analysis or a copy of the board. `hand_plan` = the line you will play this blind. `build_plan` = your build direction and next upgrade. `money_plan` = one spend-or-hold decision. Optional `hand_focus` declares an exact visible hand name as `primary` and optional `fallback`; it is echoed as your declaration and never blocks another play. Dynamic facts (cash, joker roster, boss text) come from live state; do not repeat them.", {
       type = "object",
       properties = plan_schema().properties,
       required = {}
@@ -297,12 +301,12 @@ local consumable_usable_now = CardUtil.consumable_usable_now
 local SIMPLE_ACTION_DESCS = {
   skip_blind = "Skip current blind and take skip reward.",
   reroll_boss = "Reroll current boss blind when available.",
-  skip_booster = "Skip current booster pack.",
+  skip_pack = "Skip current booster pack.",
   exit_overlay_menu = "Close an open overlay/popup menu and continue.",
   cash_out = "Collect round payout and continue to shop flow.",
-  setup_run = "Open the run setup screen to choose your deck, stake, and seed before starting a run.",
+  open_run_setup = "Open the run setup screen to choose your deck, stake, and seed before starting a run.",
   start_challenge_run = "Start a challenge run with preset rules and restrictions.",
-  start_setup_run = "Start a run from the setup screen with your chosen options.",
+  start_run = "Start a run from the setup screen with your chosen options.",
   toggle_seeded_run = "Toggle seeded run mode on or off for reproducible games.",
   copy_seed = "Copy the current run seed to clipboard.",
 }
@@ -331,42 +335,42 @@ end
 local STATE_ACTIONS = {
   SPLASH = {
     "choose_persona",
-    "setup_run",
-    "change_selected_back",
+    "open_run_setup",
+    "select_deck",
     "toggle_seeded_run",
     "paste_seed",
-    "start_setup_run",
+    "start_run",
   },
   MENU = {
     "choose_persona",
-    "setup_run",
+    "open_run_setup",
     "toggle_seeded_run",
     "copy_seed",
     "paste_seed",
-    "change_stake",
-    "change_selected_back",
-    "start_setup_run",
-    "change_challenge_description",
+    "select_stake",
+    "select_deck",
+    "start_run",
+    "select_challenge",
     "start_challenge_run",
   },
   RUN_SETUP = {
     "choose_persona",
-    "setup_run",
-    "start_setup_run",
+    "open_run_setup",
+    "start_run",
     "toggle_seeded_run",
     "copy_seed",
     "paste_seed",
-    "change_stake",
-    "change_selected_back",
+    "select_stake",
+    "select_deck",
   },
   GAME_OVER = {
     "choose_persona",
-    "setup_run",
+    "open_run_setup",
     "toggle_seeded_run",
     "copy_seed",
     "paste_seed",
-    "change_selected_back",
-    "start_setup_run",
+    "select_deck",
+    "start_run",
   },
   BLIND_SELECT = {
     "select_blind",
@@ -374,42 +378,44 @@ local STATE_ACTIONS = {
     "reroll_boss",
     "sell_card",
     "set_joker_order",
-    "set_joker_intents",
-    "set_plan",
-    "use_card",
-    "use_directional_card",
+    "record_joker_roles",
+    "record_plan",
+    "use_consumable",
+    "use_directional_consumable",
   },
   SELECTING_HAND = {
     "play_hand",
     "discard_hand",
-    "confirm_play",
-    "use_card",
-    "use_directional_card",
+    "resolve_play",
+    "use_consumable",
+    "use_directional_consumable",
     "sell_card",
     "set_joker_order",
   },
   SHOP = {
     "buy_from_shop",
     "sell_card",
-    "use_card",
-    "use_directional_card",
+    "use_consumable",
+    "use_directional_consumable",
     "reroll_shop",
-    "toggle_shop",
+    "leave_shop",
     "set_joker_order",
-    "set_joker_intents",
-    "set_plan",
+    "record_joker_roles",
+    "record_plan",
   },
   ROUND_EVAL = {
     "cash_out",
-    "set_plan",
+    "record_plan",
   },
 }
 
 local PACK_ACTIONS = {
-  "use_card",
-  "use_directional_card",
+  "choose_pack_card",
+  "choose_directional_pack_card",
+  "use_consumable",
+  "use_directional_consumable",
   "sell_card",
-  "skip_booster",
+  "skip_pack",
 }
 STATE_ACTIONS.TAROT_PACK = PACK_ACTIONS
 STATE_ACTIONS.PLANET_PACK = PACK_ACTIONS
@@ -496,7 +502,7 @@ end
 VALIDATORS.play_hand = validate_play_or_discard
 VALIDATORS.discard_hand = validate_play_or_discard
 
-VALIDATORS.confirm_play = function()
+VALIDATORS.resolve_play = function()
   if not confirm_hand_on() then return false end
   local HH = Utils.lazy_require("handlers.hand_handlers")
   if not (HH and type(HH.confirm_ready) == "function" and HH.confirm_ready()) then return false end
@@ -507,13 +513,13 @@ VALIDATORS.set_joker_order = function()
     return false
   end
 end
-VALIDATORS.set_joker_intents = function()
+VALIDATORS.record_joker_roles = function()
   if not G or not G.jokers or not G.jokers.cards or #G.jokers.cards < 1 then
     return false
   end
 end
 
-VALIDATORS.use_card = function()
+VALIDATORS.use_consumable = function()
   local function has_usable_consumable(area)
     if not (area and area.cards and #area.cards > 0) then return false end
     for _, card in ipairs(area.cards) do
@@ -521,33 +527,31 @@ VALIDATORS.use_card = function()
     end
     return false
   end
-  local function has_takeable_pack_card(area)
-    if not (area and area.cards and #area.cards > 0) then return false end
-    for _, card in ipairs(area.cards) do
-      if not require("facts.target_contracts").get(card) and can_take_pack_card(card) then return true end
-    end
-    return false
-  end
-  local has_any =
-    has_usable_consumable(G and G.consumeables)
-    or has_takeable_pack_card(CardUtil.pack_area())
-  if not has_any then
+  if not has_usable_consumable(G and G.consumeables) then
     return false
   end
 end
 
-VALIDATORS.use_directional_card = function()
-  local Contracts = require("facts.target_contracts")
-  if not (G and G.hand and G.hand.cards and #G.hand.cards >= 2) then return false end
-  for _, area in ipairs({ G.consumeables, CardUtil.pack_area() }) do
-    for _, card in ipairs((area and area.cards) or {}) do
-      if Contracts.get(card) and consumable_usable_now(card) and not CardUtil.is_face_down(card) then return end
-    end
+VALIDATORS.choose_pack_card = function()
+  local area = CardUtil.pack_area()
+  for _, card in ipairs((area and area.cards) or {}) do
+    if not require("facts.target_contracts").get(card) and can_take_pack_card(card) then return end
   end
   return false
 end
 
-VALIDATORS.change_challenge_description = function()
+local function directional_available(area)
+  local Contracts = require("facts.target_contracts")
+  if not (G and G.hand and G.hand.cards and #G.hand.cards >= 2) then return false end
+  for _, card in ipairs((area and area.cards) or {}) do
+    if Contracts.get(card) and consumable_usable_now(card) and not CardUtil.is_face_down(card) then return end
+  end
+  return false
+end
+VALIDATORS.use_directional_consumable = function() return directional_available(G and G.consumeables) end
+VALIDATORS.choose_directional_pack_card = function() return directional_available(CardUtil.pack_area()) end
+
+VALIDATORS.select_challenge = function()
   if not (G and G.CHALLENGES and #G.CHALLENGES > 0) then
     return false
   end
@@ -578,7 +582,7 @@ local function validate_run_setup_overlay()
 end
 VALIDATORS.toggle_seeded_run = validate_run_setup_overlay
 VALIDATORS.paste_seed = validate_run_setup_overlay
-VALIDATORS.start_setup_run = validate_run_setup_overlay
+VALIDATORS.start_run = validate_run_setup_overlay
 
 VALIDATORS.reroll_shop = function()
   if not G or not G.GAME or not G.GAME.dollars then return false end
@@ -641,7 +645,7 @@ VALIDATORS.cash_out = function()
   end
 end
 
-VALIDATORS.skip_booster = function()
+VALIDATORS.skip_pack = function()
   if not CardUtil.pack_area() then
     return false
   end
@@ -650,7 +654,7 @@ VALIDATORS.skip_booster = function()
   end
 end
 
-VALIDATORS.toggle_shop = function()
+VALIDATORS.leave_shop = function()
   if not (G and G.shop) then
     return false
   end
@@ -677,7 +681,14 @@ local function consumed_by_commit(action_name)
   return type(set) == "table" and set[action_name] == true
 end
 
+local function hand_transaction_blocks(action_name)
+  local HandTx = Utils.lazy_require("core.hand_transaction")
+  if not HandTx or not HandTx.stale_mutator then return false end
+  return HandTx.stale_mutator(action_name)
+end
+
 function Actions.is_action_valid(action_name)
+  if hand_transaction_blocks(action_name) then return false end
   if consumed_by_commit(action_name) then return false end
   return ActionRegistry.available(action_name)
 end
@@ -691,8 +702,8 @@ local function blocking_overlay_actions(state_name)
   end
   local out = { "exit_overlay_menu" }
   if not unlock_popup and (state_name == "MENU" or state_name == "SPLASH")
-      and Actions.is_action_valid("setup_run") then
-    out[#out + 1] = "setup_run"
+      and Actions.is_action_valid("open_run_setup") then
+    out[#out + 1] = "open_run_setup"
   end
   return out
 end
@@ -701,6 +712,18 @@ function Actions.get_valid_actions_for_state(state_name)
   Actions.get_static_actions()
   local overlay_actions = blocking_overlay_actions(state_name)
   if overlay_actions then return overlay_actions end
+  if state_name == "SELECTING_HAND" then
+    local HandTx = Utils.lazy_require("core.hand_transaction")
+    if HandTx then
+      local mode = HandTx.mode()
+      if mode == "publishing" then return {} end
+      if mode == "resolution" then
+        local HH = Utils.lazy_require("handlers.hand_handlers")
+        if HH and HH.confirm_ready and HH.confirm_ready() then return { "resolve_play" } end
+        return {}
+      end
+    end
+  end
   local all_actions = Actions.get_action_names_for_state(state_name)
   local valid_actions = {}
 
@@ -743,13 +766,9 @@ local _static_actions_caps = nil
 
 local function caps_signature()
   local names = GameFacts.visible_hand_names()
-  local HH = Utils.lazy_require("handlers.hand_handlers")
-  local pend = HH and HH.pending and HH.pending()
   return table.concat({
     Limits.play_select_max(), Limits.discard_select_max(), Limits.hand_select_max(),
     names and table.concat(names, ",") or "-",
-    (pend and pend.dominant_alt) and "1" or "0",
-    require("core.config").bool("NEURO_CONFIRM_REASON_ALWAYS") and "1" or "0",
     confirm_hand_on() and "1" or "0",
   }, "/")
 end

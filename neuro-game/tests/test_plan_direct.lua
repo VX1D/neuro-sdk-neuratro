@@ -1,7 +1,7 @@
 _G.NEURO_TEST = true
 if not love then love = { timer = { getTime = function() return 0 end } } end
 
-local H = require("handlers.plan_handlers").handle_set_plan
+local H = require("handlers.plan_handlers").handle_record_plan
 
 local check, done = require("tests.helpers").harness("plan-direct")
 

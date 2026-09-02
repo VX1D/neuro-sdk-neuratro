@@ -40,7 +40,7 @@ _G.G = {
 _G.SMODS = { current_mod = { path = "./" }, Mods = {}, findModByID = function() return nil end }
 _G.NFS = setmetatable({}, { __index = function() return noop end })
 
-local check, done = require("tests.helpers").harness("use_card diagnostics and receipt")
+local check, done = require("tests.helpers").harness("choose_pack_card diagnostics and receipt")
 
 local Config = require("core.config")
 Config.init({ settings = {}, colours = {} }, function() return true end)
@@ -85,7 +85,7 @@ end
 local function make_receipt(pick_index, action_id)
   local exec = Handle.handle_use_card({ area = "booster_pack", index = pick_index, _action_id = action_id })
   local rc = exec()
-  assert(rc and rc.name == "use_card", "expected receipt, got " .. tostring(rc))
+  assert(rc and rc.name == "choose_pack_card", "expected receipt, got " .. tostring(rc))
   Receipt.transition(rc, "acknowledged")
   Receipt.transition(rc, "executing")
   Receipt.transition(rc, "verifying")
@@ -152,7 +152,7 @@ G.E_MANAGER = { add_event = function(_, e) queued_events[#queued_events + 1] = e
 queued_events = {}
 local exec_one = Handle.handle_use_card({ area = "booster_pack", index = 1, _action_id = "t11-one" })
 local rc_one = exec_one()
-assert(rc_one and rc_one.name == "use_card")
+assert(rc_one and rc_one.name == "choose_pack_card")
 Receipt.transition(rc_one, "acknowledged")
 Receipt.transition(rc_one, "executing")
 Receipt.transition(rc_one, "verifying")
@@ -184,7 +184,7 @@ G.E_MANAGER = { add_event = function(_, e) queued_events[#queued_events + 1] = e
 queued_events = {}
 local exec_pend = Handle.handle_use_card({ area = "booster_pack", index = 1, _action_id = "t11-pend" })
 local rc_pend = exec_pend()
-assert(rc_pend and rc_pend.name == "use_card")
+assert(rc_pend and rc_pend.name == "choose_pack_card")
 Receipt.transition(rc_pend, "acknowledged")
 Receipt.transition(rc_pend, "executing")
 Receipt.transition(rc_pend, "verifying")
@@ -221,7 +221,7 @@ G.E_MANAGER = { add_event = function(_, e) queued_events[#queued_events + 1] = e
 queued_events = {}
 local exec_rst = Handle.handle_use_card({ area = "booster_pack", index = 1, _action_id = "t11-rst" })
 local rc_rst = exec_rst()
-assert(rc_rst and rc_rst.name == "use_card")
+assert(rc_rst and rc_rst.name == "choose_pack_card")
 local rst_event = queued_events[1]
 Receipt.reset("t11_mid_reset")
 check("run reset terminalizes the prepared receipt as ambiguous", rc_rst.phase == "ambiguous"

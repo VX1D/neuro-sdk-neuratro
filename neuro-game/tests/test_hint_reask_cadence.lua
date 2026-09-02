@@ -167,7 +167,7 @@ do
 
   local BOARDS = {}
   for _, sc in ipairs(TD.SCENARIOS) do BOARDS[#BOARDS + 1] = { sc = sc } end
-  local NO_PICK = { use_card = true, use_directional_card = true }
+  local NO_PICK = { choose_pack_card = true, choose_directional_pack_card = true }
   BOARDS[#BOARDS + 1] = { sc = scenario("TAROT_PACK", "Full consumable slots during pack"), block = NO_PICK }
   BOARDS[#BOARDS + 1] = { sc = scenario("BUFFOON_PACK", "Full joker slots during buffoon pack"), block = NO_PICK }
   BOARDS[#BOARDS + 1] = { sc = scenario("BLIND_SELECT", "Small blind selectable"), tweak = function(mock)

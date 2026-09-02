@@ -1370,8 +1370,8 @@ local DESCS = {
   NEURO_SELFTEST_FILTER = "Only run self-test cases matching this text",
   NEURO_SMALL_REGRESSION = "Run the fixed LLM task battery at boot (small regression check)",
   NEURO_CRASH_GUARDS = "Drop throwing deferred events + guard nil-deref UI callbacks (prevents fast-play hardlocks)",
-  NEURO_CONFIRM_HAND = "Require a confirmation before a hand is played; turn off to let play_hand commit on the first send",
-  NEURO_CONFIRM_REASON_ALWAYS = "Require a reason on every confirm_play yes, not just when a stronger ready hand is being passed over; turn off for the lighter-friction yes/no-only behavior",
+  NEURO_CONFIRM_HAND = "Confirm guarded hands before play; OFF abandons an open proposal, while an already accepted play still finishes",
+  NEURO_CONFIRM_REASON_ALWAYS = "Legacy setting; resolve_play always resolves with yes/no, and reason is optional and never blocks the answer",
 }
 
 

@@ -114,7 +114,7 @@ busy(false)
 frame()
 G.GAME.dollars = 1
 DW.reset_field("interest_engine_off")
-local lvl, msg = DW.evaluate("toggle_shop")
+local lvl, msg = DW.evaluate("leave_shop")
 check("entering with $13 and leaving with $1 fires the gate", lvl == "soft_reject", tostring(lvl))
 check("prose quotes the bank after payout", msg and msg:find("entered it with $13", 1, true) ~= nil, msg)
 check("prose does not quote the pre-payout bank",
@@ -128,7 +128,7 @@ G.GAME.dollars = 4
 busy(false)
 frame()
 DW.reset_field("interest_engine_off")
-check("entering with $4 does not fire the gate", DW.evaluate("toggle_shop") == false)
+check("entering with $4 does not fire the gate", DW.evaluate("leave_shop") == false)
 
 env(4)
 busy(true)
@@ -140,7 +140,6 @@ frame()
 local visit = G.NEURO.shop_visit_epoch
 local economy = G.NEURO.economy_epoch
 G.NEURO.econ_plan_ok = true
-G.NEURO.last_sell_reject = "sell:1:j_a"
 G.NEURO.shop_reroll_count = 2
 G.GAME.dollars = 9
 go("SHOP", "PLAY_TAROT")
@@ -159,12 +158,10 @@ check("returning from a consumable does not re-snapshot the account",
 check("returning from a consumable does not reopen the snapshot",
   G.NEURO.shop_entry_pending == nil, tostring(G.NEURO.shop_entry_pending))
 check("returning from a consumable does not clear the economy plan", G.NEURO.econ_plan_ok == true)
-check("returning from a consumable does not disarm the sell confirmation",
-  G.NEURO.last_sell_reject == "sell:1:j_a", tostring(G.NEURO.last_sell_reject))
 check("returning from a consumable does not zero the reroll counter", G.NEURO.shop_reroll_count == 2,
   tostring(G.NEURO.shop_reroll_count))
 DW.reset_field("interest_engine_off")
-local lvl2, msg2 = DW.evaluate("toggle_shop")
+local lvl2, msg2 = DW.evaluate("leave_shop")
 check("the gate after a round trip quotes the bank from shop entry",
   lvl2 == "soft_reject" and msg2:find("entered it with $13", 1, true) ~= nil, msg2)
 

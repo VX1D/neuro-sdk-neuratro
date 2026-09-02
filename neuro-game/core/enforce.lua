@@ -34,7 +34,7 @@ end
 local BYPASS_STATE_VALIDATION = {
   exit_overlay_menu = true,
   start_challenge_run = true,
-  start_setup_run = true,
+  start_run = true,
 }
 
 local UNGATED_ACTIONS = {
@@ -82,7 +82,7 @@ local function is_allowed_in_state(name, state_name)
     return true
   end
   if not state_name or state_name == "UNKNOWN" then
-    return name == "start_challenge_run" or name == "start_setup_run"
+    return name == "start_challenge_run" or name == "start_run"
   end
   local state_set = Actions.get_state_action_set(state_name)
   if not state_set[name] then
@@ -195,10 +195,10 @@ local function state_gate_detail(name, state_name)
   if name == "sell_card" and state_name == "SELECTING_HAND" then
     return " This mod blocks selling while a hand is in play (base Balatro allows it); sell_card is available in the shop."
   end
-  if name == "toggle_shop" then
+  if name == "leave_shop" then
     local prose = Enforce.untagged_joker_prose()
     if prose then
-      return " " .. prose .. ". set_joker_intents tags them; toggle_shop returns to the list once every joker has one."
+      return " " .. prose .. ". record_joker_roles tags them; leave_shop returns to the list once every joker has one."
     end
   end
   if Actions.get_state_action_set(state_name)[name] then return "" end
@@ -232,7 +232,7 @@ local function get_max_repeat(state_name, name)
   if state_name == "SELECTING_HAND" and (
     name == "play_hand"
     or name == "discard_hand"
-    or name == "confirm_play"
+    or name == "resolve_play"
   ) then
     return 30
   end
@@ -249,7 +249,9 @@ local function get_max_repeat(state_name, name)
     end
   end
 
-  if name == "buy_from_shop" or name == "sell_card" or name == "use_card" or name == "use_directional_card" then
+  if name == "buy_from_shop" or name == "sell_card" or name == "use_consumable"
+      or name == "use_directional_consumable" or name == "choose_pack_card"
+      or name == "choose_directional_pack_card" then
     return 20
   end
   return DEFAULT_MAX_REPEAT

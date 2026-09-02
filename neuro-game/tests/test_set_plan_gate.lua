@@ -27,7 +27,7 @@ end
 
 local Actions = require("core.actions")
 Actions.is_action_valid = function(n)
-  return n == "toggle_shop" or n == "buy_from_shop" or n == "reroll_shop" or n == "set_plan"
+  return n == "leave_shop" or n == "buy_from_shop" or n == "reroll_shop" or n == "record_plan"
 end
 local FS = require("force.force_shop")
 
@@ -49,7 +49,7 @@ do
   check("buy-locked: buy remains in the SDK action list", has_action(res, "buy_from_shop"), table.concat(res.actions or {}, ","))
   check("buy-locked: reroll remains in the SDK action list", has_action(res, "reroll_shop"), table.concat(res.actions or {}, ","))
   check("buy candidate embeds required money plan", ml:find('"plan":{"money_plan":"..."}', 1, true) ~= nil, ml)
-  check("set_plan is not promoted as the only unlock", ml:find("set_plan", 1, true) == nil, ml)
+  check("record_plan is not promoted as the only unlock", ml:find("record_plan", 1, true) == nil, ml)
 end
 
 do
@@ -58,11 +58,11 @@ do
   G.NEURO.shop_plan_revision_required = { money = true }
   local res = FS.build()
   local ml = move_line(res)
-  check("revision: toggle_shop remains in the SDK action list", has_action(res, "toggle_shop"),
+  check("revision: leave_shop remains in the SDK action list", has_action(res, "leave_shop"),
     table.concat(res.actions or {}, ","))
   check("revision: toggle candidate embeds required money plan",
-    ml:find('toggle_shop|{"plan":{"money_plan":"..."}}', 1, true) ~= nil, ml)
-  check("revision: standalone set_plan remains in the SDK list", has_action(res, "set_plan"),
+    ml:find('leave_shop|{"plan":{"money_plan":"..."}}', 1, true) ~= nil, ml)
+  check("revision: standalone record_plan remains in the SDK list", has_action(res, "record_plan"),
     table.concat(res.actions or {}, ","))
 end
 
@@ -76,10 +76,10 @@ do
   local ml = move_line(res)
   check("unconstrained: buy_from_shop is offered (not locked)", has_action(res, "buy_from_shop"),
     table.concat(res.actions or {}, ","))
-  check("unconstrained: set_plan is NOT pushed as a move bullet (avoids spam)",
-    ml:find("set_plan", 1, true) == nil, ml)
-  check("unconstrained: set_plan still available in the SDK list for optional use",
-    has_action(res, "set_plan"), table.concat(res.actions or {}, ","))
+  check("unconstrained: record_plan is NOT pushed as a move bullet (avoids spam)",
+    ml:find("record_plan", 1, true) == nil, ml)
+  check("unconstrained: record_plan still available in the SDK list for optional use",
+    has_action(res, "record_plan"), table.concat(res.actions or {}, ","))
 end
 
 done()

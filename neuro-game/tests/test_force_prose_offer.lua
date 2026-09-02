@@ -18,7 +18,7 @@ G.NEURO.actions = Actions
 local AMBIGUOUS = { help = true }
 
 local WITHHELD_NOTICE = {
-  { action = "toggle_shop", clause = "toggle_shop is off the list until every joker has one" },
+  { action = "leave_shop", clause = "leave_shop is off the list until every joker has one" },
 }
 
 local NAMES = {}
@@ -57,7 +57,7 @@ local function covered_by_notice(query, name, span, offered)
 end
 
 local ROUTES = {
-  { first = "change_challenge_description", second = "start_challenge_run" },
+  { first = "select_challenge", second = "start_challenge_run" },
 }
 local routes_seen = {}
 
@@ -230,25 +230,25 @@ do
   end
 
   check("both actions offered -> the paragraph is present",
-    query_with({ toggle_shop = true, sell_card = true, set_joker_order = true })
+    query_with({ leave_shop = true, sell_card = true, set_joker_order = true })
       :find(PARAGRAPH, 1, true) ~= nil)
   check("set_joker_order withheld -> the paragraph is gone",
-    query_with({ toggle_shop = true, sell_card = true }):find(PARAGRAPH, 1, true) == nil)
+    query_with({ leave_shop = true, sell_card = true }):find(PARAGRAPH, 1, true) == nil)
   check("sell_card withheld -> the paragraph is gone",
-    query_with({ toggle_shop = true, set_joker_order = true }):find(PARAGRAPH, 1, true) == nil)
+    query_with({ leave_shop = true, set_joker_order = true }):find(PARAGRAPH, 1, true) == nil)
   check("neither offered -> the paragraph is gone",
-    query_with({ toggle_shop = true }):find(PARAGRAPH, 1, true) == nil)
+    query_with({ leave_shop = true }):find(PARAGRAPH, 1, true) == nil)
 
   Actions.is_action_valid = real_valid
 end
 
 do
   local ForceHelpers = require("force.force_helpers")
-  local LINE = "change_challenge_description then start_challenge_run"
-  check("challenge route absent when change_challenge_description is not offered",
+  local LINE = "select_challenge then start_challenge_run"
+  check("challenge route absent when select_challenge is not offered",
     ForceHelpers.menu_action_tree_query({}):find(LINE, 1, true) == nil)
-  check("challenge route present once change_challenge_description is offered",
-    ForceHelpers.menu_action_tree_query({ change_challenge_description = true })
+  check("challenge route present once select_challenge is offered",
+    ForceHelpers.menu_action_tree_query({ select_challenge = true })
       :find(LINE, 1, true) ~= nil)
 end
 
@@ -275,7 +275,7 @@ do
   local before, query = menu_offer()
   check("MENU prose names start_challenge_run while it is not yet offered",
     query:find("start_challenge_run", 1, true) ~= nil and not before.start_challenge_run)
-  check("the route's first step is offered", before.change_challenge_description == true)
+  check("the route's first step is offered", before.select_challenge == true)
   local exec = MenuHandlers.handle_change_challenge_description({ id = "c_omelette_1" })
   check("the route's first step is executable", type(exec) == "function")
   if type(exec) == "function" then exec() end

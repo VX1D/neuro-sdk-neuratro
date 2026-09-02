@@ -9,6 +9,7 @@ local Enforce = require("core.enforce")
 local Actions = require("core.actions")
 local ForceState = require("core.force_state")
 local TxCache = require("core.tx_cache")
+local ConfirmationEvidence = require("core.confirmation_evidence")
 
 local play_card = require("tests.helpers").play_card
 
@@ -37,7 +38,7 @@ local function env(t)
   Dispatcher.reset_tx()
   G.NEURO = { enabled = true, decision_serial = 1, run_generation = 7,
     dispatcher = Dispatcher, actions = Actions }
-  require("tests.helpers").stage_registered(nil, { "play_hand", "help" })
+  require("tests.helpers").stage_registered(nil, { "play_hand", "resolve_play", "help" })
 end
 
 local function bridge()
@@ -45,6 +46,7 @@ local function bridge()
   function b:send_context(m) self.emitted[#self.emitted + 1] = tostring(m) return true end
   function b:send_action_result(id, ok, message, reason)
     self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason = reason }
+    return true, { status = "written", kind = "test" }
   end
   b.register_actions = function() end
   b.unregister_actions = function() end
@@ -57,6 +59,13 @@ local PLAY = '{"indices":[1,2]}'
 local function action(id, name)
   return { command = "action", run_generation = 7,
     data = { id = id, name = name or "play_hand", data = name and "{}" or PLAY } }
+end
+
+local function confirm_action(id)
+  local tx = require("core.hand_transaction").current()
+  return { command = "action", run_generation = 7,
+    data = { id = id, name = "resolve_play", data = string.format(
+      '{"transaction_id":%d,"answer":"yes"}', tx.id) } }
 end
 
 local function abandon(ids)
@@ -154,7 +163,8 @@ end
 
 local function prepare(b, id)
   Dispatcher.route_message(action(id .. "-arm"), b)
-  return Dispatcher.validate_message(action(id), b)
+  ConfirmationEvidence.step_delivery()
+  return Dispatcher.validate_message(confirm_action(id), b)
 end
 
 do
@@ -166,7 +176,7 @@ do
   check("abandoning a prepared job sends no second result", #b.results == before, #b.results)
   check("and the job is gone from the prepared table",
     Dispatcher.abort_prepared("prep-a", "probe") == false)
-  Dispatcher.handle_message(action("prep-a"), b)
+  Dispatcher.handle_message(confirm_action("prep-a"), b)
   check("and the staging queue re-entry neither runs it nor answers again",
     #b.results == before, #b.results)
 end
@@ -178,7 +188,7 @@ do
   TxCache.invalidate("prep-b")
   local before = #b.results
   stale_open_force()
-  Dispatcher.handle_message(action("prep-b"), b)
+  Dispatcher.handle_message(confirm_action("prep-b"), b)
   check("an unpaid prepared job is answered when it is aborted", #b.results == before + 1,
     #b.results - before)
   check("and the answer addresses the aborted id",

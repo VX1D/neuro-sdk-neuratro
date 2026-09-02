@@ -31,8 +31,8 @@ _G.G = {
   shop_vouchers = { cards = {}, config = { card_limit = 1 } },
   shop_booster = { cards = {}, config = { card_limit = 2 } },
   CHALLENGES = {},
-  FUNCS = { start_setup_run = function() end, exit_overlay_menu = function() end,
-    toggle_seeded_run = function() end, change_selected_back = function() end },
+  FUNCS = { start_run = function() end, exit_overlay_menu = function() end,
+    toggle_seeded_run = function() end, select_deck = function() end },
   CONTROLLER = { locks = {} },
   E_MANAGER = { queues = {} },
 }
@@ -74,8 +74,8 @@ end
 
 check("the overlay reads as RUN_SETUP", State.get_state_name() == "RUN_SETUP",
   State.get_state_name())
-check("start_setup_run is valid on it, so registration is not the failure",
-  Actions.is_action_valid("start_setup_run") == true)
+check("start_run is valid on it, so registration is not the failure",
+  Actions.is_action_valid("start_run") == true)
 
 local setup_force = require("force.menu_flow").run_setup()
 check("the RUN_SETUP builder yields a force, not nil",
@@ -91,6 +91,6 @@ check("the run-setup actions were registered", #registers > 0 and #registers[1] 
 check("a force reaches the wire while the run-setup overlay holds the game paused",
   #forces >= 1, #forces .. " forces in 10s")
 check("and it is the run-setup force, offering the action that starts the run",
-  forces[1] ~= nil and forces[1]:find("start_setup_run", 1, true) ~= nil, forces[1])
+  forces[1] ~= nil and forces[1]:find("start_run", 1, true) ~= nil, forces[1])
 
 done()

@@ -117,12 +117,12 @@ end
 do
   local b = capture_bridge()
   local defs = {
-    { name = "use_card", description = "d", schema = { type = "object" } },
-    { name = "skip_booster", description = "d", schema = { type = "object" } },
+    { name = "use_consumable", description = "d", schema = { type = "object" } },
+    { name = "skip_pack", description = "d", schema = { type = "object" } },
   }
   b:register_actions(defs)
   local before = #b.sent
-  b:unregister_actions({ "use_card", "skip_booster", "never_registered" })
+  b:unregister_actions({ "use_consumable", "skip_pack", "never_registered" })
   local unreg = b.sent[#b.sent]
   check("unregister sent", unreg and unreg.command == "actions/unregister")
   check("only registered names included", unreg and #unreg.data.action_names == 2,

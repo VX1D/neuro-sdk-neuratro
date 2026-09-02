@@ -13,6 +13,7 @@ local Orchestrator = require("core.orchestrator")
 local ContextCompact = require("context.context_compact")
 local TokenLegends = require("facts.token_legends")
 local Once = require("util.once")
+local Config = require("core.config")
 
 local play_card = require("tests.helpers").play_card
 
@@ -300,6 +301,7 @@ end
 
 do
   selecting_hand_env(1400)
+  Config.set("NEURO_CONFIRM_HAND", "off")
   G.NEURO = force_bridge({
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 5,
@@ -343,6 +345,7 @@ do
     end)(), " -> "))
   check("success result closes the force after the unregister",
     G.NEURO.force_inflight == false)
+  Config.set("NEURO_CONFIRM_HAND", "on")
 end
 
 do
@@ -359,10 +362,14 @@ do
     data = { id = "disp-2", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
   local unregs = 0
   for _, e in ipairs(b.log) do if e.kind == "unregister" then unregs = unregs + 1 end end
-  check("confirmation round-trip does NOT unregister (force stays valid for the resend)",
-    unregs == 0, tostring(unregs))
-  check("confirmation result present",
-    b.log[1] and b.log[1].kind == "result" and b.log[1].reason == "CONFIRMATION_REQUIRED")
+  check("guarded proposal withdraws the proposal action surface",
+    unregs == 1, tostring(unregs))
+  local confirmation_result
+  for _, event in ipairs(b.log) do
+    if event.kind == "result" then confirmation_result = event break end
+  end
+  check("confirmation result follows the withdrawal",
+    confirmation_result and confirmation_result.reason == "CONFIRMATION_REQUIRED")
 end
 
 do

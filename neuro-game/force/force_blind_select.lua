@@ -11,7 +11,7 @@ local function build()
   if not on_deck_key then return nil end
   local current_blind = string.lower(on_deck_key)
 
-  local action_list = { "select_blind", "skip_blind", "reroll_boss", "sell_card", "use_card", "use_directional_card", "set_joker_order", "set_plan" }
+  local action_list = { "select_blind", "skip_blind", "reroll_boss", "sell_card", "use_consumable", "use_directional_consumable", "set_joker_order", "record_plan" }
   local progress_actions, can, can_now = ForceHelpers.collect_actions(action_list)
   local can_select, can_skip, can_reroll =
     can_now.select_blind, can_now.skip_blind, can_now.reroll_boss
@@ -85,11 +85,11 @@ local function build()
   end
   if can_skip then move_bits[#move_bits + 1] = ActionRegistry.render("skip_blind", {}) .. ' (banks this blind\'s skip tag -- named on its row above -- and moves straight to the next blind, giving up that blind\'s cash payout and the shop that would follow beating it)' end
   if can_reroll then move_bits[#move_bits + 1] = ActionRegistry.render("reroll_boss", {}) .. ' (costs $' .. tostring(CtxEconomy.BOSS_REROLL_COST) .. ', from your Director\'s Cut / Retcon voucher; swaps this boss for a different one with a different debuff)' end
-  if can_now.use_card then move_bits[#move_bits + 1] = candidates("use_card") .. " before selecting" end
-  if can_now.use_directional_card then move_bits[#move_bits + 1] = ActionRegistry.prompt("use_directional_card") .. " before selecting" end
+  if can_now.use_consumable then move_bits[#move_bits + 1] = candidates("use_consumable") .. " before selecting" end
+  if can_now.use_directional_consumable then move_bits[#move_bits + 1] = ActionRegistry.prompt("use_directional_consumable") .. " before selecting" end
   if can.sell_card then move_bits[#move_bits + 1] = candidates("sell_card") .. " sells a joker or consumable for money" end
   if can.set_joker_order then move_bits[#move_bits + 1] = ActionRegistry.prompt("set_joker_order") .. " rearranges joker order (fires left-to-right)" end
-  if can.set_plan then move_bits[#move_bits + 1] = ActionRegistry.prompt("set_plan") .. " optionally revises the current plan" end
+  if can.record_plan then move_bits[#move_bits + 1] = ActionRegistry.prompt("record_plan") .. " optionally revises the current plan" end
   if #move_bits > 0 then
     query = query .. "\nYour move: " .. table.concat(move_bits, "; ") .. ". "
   end

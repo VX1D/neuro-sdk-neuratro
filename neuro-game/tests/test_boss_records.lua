@@ -301,6 +301,7 @@ do
   local bridge = {
     send_action_result = function(_, id, ok, message, reason_code)
       results[#results + 1] = { id = id, ok = ok, message = message, reason_code = reason_code }
+      return true, { status = "written", kind = "test" }
     end,
     send_context = function() end,
   }
@@ -317,9 +318,10 @@ do
     tostring(G.NEURO.force_inflight) .. "/" .. tostring(G.NEURO.force_dirty))
   check("the verdict does not advance the decision serial, so the resend latch stays valid",
     G.NEURO.decision_serial == 7, tostring(G.NEURO.decision_serial))
-  check("the legality latch is armed for the same selection",
-    G.NEURO.play_confirm and G.NEURO.play_confirm.signature == "11,12",
-    tostring(G.NEURO.play_confirm and G.NEURO.play_confirm.signature))
+  local tx = require("core.hand_transaction").current()
+  check("the legality transaction owns the same selection",
+    tx and tx.signature == "11,12" and tx.phase == "publishing",
+    tx and (tostring(tx.signature) .. "/" .. tostring(tx.phase)) or "nil")
 
   G.NEURO.force_inflight = true
   G.TIMERS.REAL = 200
@@ -327,8 +329,10 @@ do
   Dispatcher.handle_message({ command = "action",
     data = { id = "verdict-2", name = "play_hand", data = { indices = { 1, 2 } } } }, bridge)
   local r2 = results[#results]
-  check("a deliberate resend of the same indices commits (success=true, executor ran)",
-    r2 ~= nil and r2.ok == true and tostring(r2.message):find("Selection [1,2]", 1, true) == nil, r2 and tostring(r2.message))
+  check("a deliberate resend of the same indices is acknowledged without commit",
+    r2 ~= nil and r2.ok == true and r2.reason_code == "POLICY_ACKNOWLEDGED"
+      and tostring(r2.message):find("awaiting resolve_play", 1, true) ~= nil,
+    r2 and tostring(r2.message))
 
   G.NEURO.force_inflight = true
   G.TIMERS.REAL = 300
@@ -336,8 +340,9 @@ do
   Dispatcher.handle_message({ command = "action",
     data = { id = "verdict-3", name = "play_hand", data = { indices = { 1, 99 } } } }, bridge)
   local r3 = results[#results]
-  check("a schema/engine-invalid submission keeps success=false",
-    r3 ~= nil and r3.ok == false, r3 and tostring(r3.message))
+  check("a stale invalid submission is acknowledged behind strict resolution mode",
+    r3 ~= nil and r3.ok == true and r3.reason_code == "POLICY_ACKNOWLEDGED",
+    r3 and tostring(r3.message))
 
 end
 

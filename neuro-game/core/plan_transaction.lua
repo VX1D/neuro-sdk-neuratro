@@ -10,21 +10,25 @@ local Utils = require("util.utils")
 local COVERED = {
   buy_from_shop = true,
   sell_card = true,
-  use_card = true,
-  use_directional_card = true,
+  use_consumable = true,
+  use_directional_consumable = true,
+  choose_pack_card = true,
+  choose_directional_pack_card = true,
   reroll_shop = true,
-  toggle_shop = true,
+  leave_shop = true,
   select_blind = true,
   play_hand = true,
   discard_hand = true,
-  confirm_play = true,
+  resolve_play = true,
 }
 
 local SHOP_MUTATIONS = {
   buy_from_shop = true,
   sell_card = true,
-  use_card = true,
-  use_directional_card = true,
+  use_consumable = true,
+  use_directional_consumable = true,
+  choose_pack_card = true,
+  choose_directional_pack_card = true,
   reroll_shop = true,
 }
 
@@ -106,24 +110,40 @@ function M.release_fields(written)
   return true
 end
 
-function M.hold(tx)
+function M.hold(tx, hand_transaction_id)
   local n = neuro()
   if not n or type(tx) ~= "table" or not has_fields(tx.plan_values) then return false end
   n.held_plan_write = {
     run_generation = n.run_generation,
     values = tx.plan_values,
     scopes = tx.plan_scopes or field_scopes(),
+    hand_transaction_id = tonumber(hand_transaction_id or tx.hand_transaction_id),
   }
   Metrics.incr("plan_tx_held")
   return true
 end
 
-local function held_values(scopes)
+-- Release only the plan owned by this transaction.
+function M.release_hand_proposal(hand_transaction_id)
+  local n = neuro()
+  local held = n and n.held_plan_write
+  if not (held and hand_transaction_id ~= nil) then return false end
+  if tonumber(held.hand_transaction_id) ~= tonumber(hand_transaction_id) then return false end
+  n.held_plan_write = nil
+  pending_message = nil
+  return true
+end
+
+local function held_values(scopes, hand_transaction_id)
   local n = neuro()
   local held = n and n.held_plan_write
   if not held then return nil end
   if held.run_generation ~= n.run_generation then
     n.held_plan_write = nil
+    return nil
+  end
+  if hand_transaction_id ~= nil
+      and tonumber(held.hand_transaction_id) ~= tonumber(hand_transaction_id) then
     return nil
   end
   local out
@@ -139,6 +159,15 @@ end
 function M.prepare(action_name, data)
   if not COVERED[action_name] then return nil end
   data = type(data) == "table" and data or {}
+  if action_name == "resolve_play" then
+    local id = data.transaction_id
+    if type(id) ~= "number" or id ~= math.floor(id) or id < 1 then
+      return reject("resolve_play requires its proposal's integer transaction_id.")
+    end
+  end
+  if action_name == "resolve_play" and data.plan ~= nil then
+    return reject("resolve_play cannot create or replace plan fields; it only resolves the proposal-owned plan.")
+  end
   local state = require("core.state").get_state_name()
   local requirements = PlanGate.action_requirements(state, action_name)
   local explicit = type(data.plan) == "table" and data.plan or nil
@@ -170,7 +199,8 @@ function M.prepare(action_name, data)
   end
 
   local scopes = field_scopes()
-  local held = held_values(scopes)
+  local held = held_values(scopes,
+    action_name == "resolve_play" and tonumber(data.transaction_id) or nil)
   if held then
     for _, key in pairs(PLAN_KEYS) do
       if plan_data[key] == nil and held[key] ~= nil then
@@ -204,7 +234,7 @@ function M.prepare(action_name, data)
   local plan_commit, plan_err
   if has_fields(plan_data) or resumed or has_fields(requirements.plan) then
     local scope_snapshot
-    if action_name == "select_blind" or action_name == "toggle_shop" then
+    if action_name == "select_blind" or action_name == "leave_shop" then
       scope_snapshot = {}
       for k, v in pairs(scopes) do scope_snapshot[k] = v end
     end
@@ -236,6 +266,7 @@ function M.prepare(action_name, data)
       plan_revision = tonumber(n.plan_revision) or 0,
     },
     shop_origin = state == "SHOP",
+    hand_transaction_id = action_name == "resolve_play" and tonumber(data.transaction_id) or nil,
   }
 end
 
@@ -298,6 +329,9 @@ local function note_stale_drop(action_name, tx)
 end
 
 local function commit_receipt_transaction(action_name, tx)
+  if action_name == "resolve_play" and tx.hand_transaction_id == nil then
+    return
+  end
   if not token_is_current(tx) then
     note_stale_drop(action_name, tx)
     local dropped = dropped_fields(tx)
@@ -313,18 +347,26 @@ local function commit_receipt_transaction(action_name, tx)
   pending_message = message ~= "" and message or nil
 end
 
-function M.wrap(action_name, _data, exec, tx)
+function M.wrap(action_name, data, exec, tx)
   if type(exec) ~= "function" or not tx then return exec end
   return function()
     local result = exec()
     if ActionReceipt.is_receipt(result) then
       ActionReceipt.chain_callbacks(result, function()
-        commit_receipt_transaction(action_name, tx)
+        if action_name == "resolve_play" and data and data.answer == "no" then
+          M.release_hand_proposal(data.transaction_id)
+        else
+          commit_receipt_transaction(action_name, tx)
+        end
       end)
       return result
     end
     if ActionReceipt.is_outcome(result) and result.status == "applied" then
-      commit_receipt_transaction(action_name, tx)
+      if action_name == "resolve_play" and data and data.answer == "no" then
+        M.release_hand_proposal(data.transaction_id)
+      else
+        commit_receipt_transaction(action_name, tx)
+      end
     end
     return result
   end

@@ -74,7 +74,8 @@ do -- negative: last hand, no discards, but >=2 ready hands -> NOT forced -> con
   local res, err = HandHandlers.handle_play_hand({ indices = { 1, 2, 3, 4, 5 } })
   check(">=2 ready hands: confirm fires despite last hand/no discards",
     res == nil and ActionResult.is_error(err), tostring(err))
-  check("latch armed by the confirm", G.NEURO.play_confirm ~= nil, tostring(G.NEURO.play_confirm))
+  check("transaction opened by the confirm", require("core.hand_transaction").current() ~= nil,
+    tostring(require("core.hand_transaction").current()))
 end
 
 do -- negative: more than one hand left -> never forced -> confirm fires
@@ -91,20 +92,35 @@ do
   local res1, err1 = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
   check("first play with discards left pauses once", res1 == nil and ActionResult.is_error(err1), tostring(err1))
   local msg = ActionResult.normalize(err1).message
-  local expected = "Selection [7,8] = Pair.\n"
-    .. "This is a bare Pair -- one of the three lowest-ranking hand types. Discards are a separate pool that costs no hand-slot, and you have 3 -- the odds above show the stronger hands you are one card away from. Choose one action now: Discard toward one first, or send your final play.\n"
-    .. "Committing Pair -- 4 hand(s) and 3 discard(s) left.\n"
-    .. "Answer confirm_play with \"yes\" to commit it, or \"no\" to discard it. Any other selection gets its own confirmation first."
-  check("message composes the weak pause with the general confirm (layer C and D both surface)",
-    msg == expected, msg)
-  check("quality latch armed on the paused selection", G.NEURO.play_confirm ~= nil, tostring(G.NEURO.play_confirm))
+  check("the weak guard owns the pause and exposes the explicit yes/no resolution",
+    msg:find("Bare Pair", 1, true) ~= nil
+      and msg:find("resolve_play", 1, true) ~= nil
+      and msg:find("transaction_id", 1, true) ~= nil, msg)
+  local tx = require("core.hand_transaction").current()
+  check("quality transaction owns the paused selection", tx ~= nil and tx.phase == "publishing",
+    tx and tostring(tx.phase) or "nil")
   local res2, err2 = HandHandlers.handle_play_hand({ indices = { 6, 7 } })
-  check("weak spent for this decision point: a different selection meets the general confirm, not a free pass",
+  check("strict resolution mode blocks a different selection until this proposal is resolved",
     res2 == nil and ActionResult.is_error(err2)
-      and ActionResult.normalize(err2).message:find("Committing Pair", 1, true) ~= nil, tostring(err2))
-  local res3 = HandHandlers.handle_play_hand({ indices = { 6, 7 } })
-  check("resending that exact selection now commits", type(res3) == "function", type(res3))
-  check("latch cleared after confirmed play", G.NEURO.play_confirm == nil, tostring(G.NEURO.play_confirm))
+      and ActionResult.normalize(err2).reason_code == "POLICY_ACKNOWLEDGED", tostring(err2))
+  local res3, err3 = HandHandlers.handle_play_hand({ indices = { 6, 7 } })
+  check("resending that exact selection does not commit", res3 == nil and ActionResult.is_error(err3), tostring(err3))
+  check("the pending proposal remains open until explicit resolution",
+    require("core.hand_transaction").current() == tx, tostring(require("core.hand_transaction").current()))
+end
+
+do
+  local hand = hand8(card("9", "Hearts"), card("9", "Diamonds"))
+  setup(hand, function(cards)
+    local text = (#cards == 2) and "Pair" or "High Card"
+    return text, {}, { Straight = { { cards[1] } } }, cards
+  end, { hands = 4, discards = 3 })
+  local _, err = HandHandlers.handle_play_hand({ indices = { 7, 8 } })
+  local msg = ActionResult.normalize(err).message
+  check("stronger-ready wording refers to the whole current hand, not the proposed cards",
+    msg:find("Your current hand also contains Ready Straight", 1, true) ~= nil
+      and msg:find("These cards can also", 1, true) == nil,
+    msg)
 end
 
 done()

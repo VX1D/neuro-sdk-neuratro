@@ -199,7 +199,7 @@ end
 
 do
   local OFFERS = { "play_hand", "discard_hand", "buy_from_shop", "sell_card",
-    "set_joker_order", "set_joker_intents", "help", "cash_out" }
+    "set_joker_order", "record_joker_roles", "help", "cash_out" }
   local ROW = "1. Joker -- +4 Mult"
   local ContextCompact = require("context.context_compact")
 

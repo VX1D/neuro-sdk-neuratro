@@ -56,7 +56,7 @@ do
   pack_board()
   local full = shape("TAROT_PACK")
   check("fixture: an unblocked pack offers the two actions that leave it",
-    full == "use_card,skip_booster", tostring(full))
+    full == "choose_pack_card,skip_pack", tostring(full))
 
   G.GAME.STOP_USE = 1
   check("the settling pack defers first", shape("TAROT_PACK") == nil)
@@ -66,8 +66,8 @@ do
   G.TIMERS.REAL = 1000 + FAILSAFE + 0.5
   local released = shape("TAROT_PACK")
   check("past the failsafe the force carries a real way out of the pack",
-    released ~= nil and released:find("use_card", 1, true) ~= nil
-      and released:find("skip_booster", 1, true) ~= nil, tostring(released))
+    released ~= nil and released:find("choose_pack_card", 1, true) ~= nil
+      and released:find("skip_pack", 1, true) ~= nil, tostring(released))
 
   local shapes, order = {}, {}
   local silent = 0
@@ -94,7 +94,7 @@ do
   G.TIMERS.REAL = 1000 + FAILSAFE + 0.5
   local back = shape("TAROT_PACK")
   check("an engine that never left the pack gets asked again",
-    back == "use_card,skip_booster", tostring(back))
+    back == "choose_pack_card,skip_pack", tostring(back))
   check("and the stale flag is dropped, so the next pack starts clean",
     G.NEURO.pack_exit_pending == nil, tostring(G.NEURO.pack_exit_pending))
 

@@ -1,13 +1,13 @@
 local NON_PROGRESS = {
-  set_joker_order = true, set_joker_intents = true, set_plan = true, copy_seed = true,
-  change_selected_back = true, change_stake = true, toggle_seeded_run = true,
+  set_joker_order = true, record_joker_roles = true, record_plan = true, copy_seed = true,
+  select_deck = true, select_stake = true, toggle_seeded_run = true,
   paste_seed = true,
 }
 
 local FORFEIT = {
-  skip_booster = true,
+  skip_pack = true,
   skip_blind = true,
-  toggle_shop = true,
+  leave_shop = true,
 }
 
 local SETTLING_NONPROGRESS = {
@@ -20,10 +20,10 @@ return {
   SETTLING_NONPROGRESS = SETTLING_NONPROGRESS,
   RIDE_ALONG = {
     set_joker_order = true,
-    set_joker_intents = true,
-    set_plan = true,
-    change_selected_back = true,
-    change_stake = true,
+    record_joker_roles = true,
+    record_plan = true,
+    select_deck = true,
+    select_stake = true,
     copy_seed = true,
   },
 }

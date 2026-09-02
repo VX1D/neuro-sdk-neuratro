@@ -28,7 +28,7 @@ local function fresh_G(with_boss)
 end
 
 local Actions = require("core.actions")
-Actions.is_action_valid = function(n) return n == "toggle_shop" end
+Actions.is_action_valid = function(n) return n == "leave_shop" end
 local FS = require("force.force_shop")
 
 local function force()
@@ -122,7 +122,7 @@ end
 do
   local narrow_valid = Actions.is_action_valid
   Actions.is_action_valid = function(n)
-    return n == "toggle_shop" or n == "sell_card" or n == "set_joker_order"
+    return n == "leave_shop" or n == "sell_card" or n == "set_joker_order"
   end
   fresh_G(false)
   G.jokers.cards = { FLAT, ICE }

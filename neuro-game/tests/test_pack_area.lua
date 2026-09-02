@@ -30,17 +30,17 @@ check("no areas -> nil", CardUtil.pack_area() == nil)
 local Dispatcher = require("core.dispatcher")
 
 G.pack_cards, G.booster_pack, G.GAME = nil, nil, nil
-check("skip rejected when no pack is open", Dispatcher.skip_booster_reject_reason() ~= nil)
+check("skip rejected when no pack is open", Dispatcher.skip_pack_reject_reason() ~= nil)
 
 G.pack_cards, G.booster_pack = { cards = { {} } }, nil
 G.GAME = { STOP_USE = 0 }
-check("skip allowed on a live pack when STOP_USE=0", Dispatcher.skip_booster_reject_reason() == nil)
+check("skip allowed on a live pack when STOP_USE=0", Dispatcher.skip_pack_reject_reason() == nil)
 
 G.GAME.STOP_USE = 3
-local r = Dispatcher.skip_booster_reject_reason()
+local r = Dispatcher.skip_pack_reject_reason()
 check("skip rejected while STOP_USE>0 (double-close guard)", r ~= nil and tostring(r):find("resolving") ~= nil, r)
 
 G.GAME.STOP_USE = nil
-check("skip allowed again once STOP_USE clears (nil)", Dispatcher.skip_booster_reject_reason() == nil)
+check("skip allowed again once STOP_USE clears (nil)", Dispatcher.skip_pack_reject_reason() == nil)
 
 done()

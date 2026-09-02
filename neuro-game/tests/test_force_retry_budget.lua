@@ -50,7 +50,7 @@ local function env(t)
     dispatcher = Dispatcher, actions = Actions,
     send_context = function() return true end }
   require("tests.helpers").stage_registered("SELECTING_HAND",
-    { "buy_from_shop", "toggle_shop", "discard_hand" })
+    { "buy_from_shop", "leave_shop", "discard_hand" })
   G.NEURO.force_inflight = false
   return b
 end
@@ -124,7 +124,7 @@ end
 
 do
   local b = env(730)
-  local names = { "play_hand", "discard_hand", "toggle_shop" }
+  local names = { "play_hand", "discard_hand", "leave_shop" }
   for i = 1, 30 do
     send(b, { command = "action", data = { id = 42, name = names[(i % 3) + 1], data = "{}" } })
   end
@@ -134,7 +134,7 @@ end
 do
   local b = env(740)
   local ids = { 42, true, {}, "" }
-  local names = { "play_hand", "discard_hand", "toggle_shop" }
+  local names = { "play_hand", "discard_hand", "leave_shop" }
   for i = 1, 30 do
     send(b, { command = "action",
       data = { id = ids[(i % 4) + 1], name = names[(i % 3) + 1], data = "{}" } })
@@ -230,7 +230,7 @@ do
       data = '{"indices":[' .. (90 + (i % 5)) .. ']}' } })
   end
   b.results = {}
-  Enforce.note_accepted("set_plan")
+  Enforce.note_accepted("record_plan")
   send(b, { command = "action", data = { id = "r-next", name = "play_hand",
     data = '{"indices":[97]}' } })
   check("a NON_PROGRESS answer does NOT hand the exhausted decision a fresh retry budget",

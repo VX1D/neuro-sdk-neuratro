@@ -109,7 +109,7 @@ local function fresh(Dispatcher, Actions, state)
   end
   Dispatcher.reset_run_state()
   require("tests.helpers").stage_registered(state,
-    { "play_hand", "discard_hand", "sell_card", "buy_from_shop", "use_card" })
+    { "play_hand", "discard_hand", "sell_card", "buy_from_shop", "use_consumable" })
   tick(3.0)
 end
 
@@ -262,7 +262,7 @@ function M.run()
 
   do
     fresh(Dispatcher, Actions, "SELECTING_HAND")
-    local msg = { command = "action", data = { id = "stg-F", name = "use_card",
+    local msg = { command = "action", data = { id = "stg-F", name = "use_consumable",
       data = '{"area":"consumables","index":1,"hand_indices":[1]}' } }
     local bridge = make_bridge()
     Staging.queue(msg, bridge)
@@ -273,10 +273,10 @@ function M.run()
   do
     fresh(Dispatcher, Actions, "TAROT_PACK")
     G.NEURO.state_enter_serial = 1
-    require("core.decision_window").evaluate("use_card")
-    local msg = { command = "action", data = { id = "stg-G", name = "use_card",
+    require("core.decision_window").evaluate("choose_pack_card")
+    local msg = { command = "action", data = { id = "stg-G", name = "choose_pack_card",
       data = '{"area":"pack_cards","index":1}' } }
-    if not Staging.should_stage(msg) then fail("G: pack use_card should stage") end
+    if not Staging.should_stage(msg) then fail("G: pack choose_pack_card should stage") end
     local bridge = make_bridge()
     Staging.queue(msg, bridge)
     drive(Staging, bridge)
@@ -482,7 +482,7 @@ function M.run()
       logged[#logged + 1] = table.concat(parts, " ")
     end
     local ok_stage, staged_or_err = pcall(Staging.should_stage, { command = "action",
-      data = { id = "stg-M", name = "use_card", data = '{"area":"consumables","index":1}' } })
+      data = { id = "stg-M", name = "choose_pack_card", data = '{"area":"booster_pack","index":1}' } })
     _G.print = real_print
     DW.would_reject = real_would_reject
 

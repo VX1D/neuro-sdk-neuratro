@@ -1,3 +1,4 @@
+_G.NEURO_TEST = true
 love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
 _G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
 
@@ -61,6 +62,8 @@ end
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
 local Staging = require("core.staging")
+local ConfirmationEvidence = require("core.confirmation_evidence")
+local HandTx = require("core.hand_transaction")
 
 local play_card = require("tests.helpers").play_card
 
@@ -78,24 +81,11 @@ local function apply_play()
   G.GAME.current_round.hands_left = G.GAME.current_round.hands_left - 1
 end
 
-local function content_of(cards)
-  local parts = {}
-  for _, c in ipairs(cards) do
-    local base = c.base or {}
-    local center = c.config and c.config.center
-    parts[#parts + 1] = table.concat({
-      tostring(c.sort_id or "?"), tostring(base.value or "?"),
-      tostring(base.suit or "?"), tostring(center and center.key or "?"),
-    }, "/")
-  end
-  table.sort(parts)
-  return table.concat(parts, ",")
-end
-
 local function result_bridge()
   local b = { results = {}, contexts = {} }
   function b:send_action_result(id, ok, msg, reason)
     self.results[#self.results + 1] = { id = id, ok = ok, msg = msg, reason = reason }
+    return true, { status = "written" }
   end
   function b:send_context(msg) self.contexts[#self.contexts + 1] = tostring(msg) end
   function b:register_actions(_) end
@@ -141,8 +131,8 @@ do
   check("confirm: decision serial untouched (resend latch stays valid)",
     G.NEURO.decision_serial == 5)
   check("confirm: play latch survives the force closure",
-    G.NEURO.play_confirm and G.NEURO.play_confirm.signature == "1,2"
-      and G.NEURO.play_confirm.decision_serial == 5)
+    HandTx.current() and HandTx.current().signature == "1,2"
+      and HandTx.current().decision_serial == 5)
 
   G.TIMERS.REAL = 322
   G.NEURO.force_inflight = false
@@ -153,28 +143,40 @@ do
   Dispatcher.handle_message({ command = "action",
     data = { id = "confirm-2", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
   local r2 = b.results[2]
-  check("confirm resend: same indices commit the play",
-    r2 and r2.ok == true and r2.reason == nil and played == true)
-  check("confirm resend: progress closes the force with a serial bump",
-    G.NEURO.force_inflight == false and G.NEURO.decision_serial == 6)
+  check("confirm resend: same indices do not commit the play",
+    r2 and r2.ok == true and r2.reason == "POLICY_ACKNOWLEDGED"
+      and played == false,
+    r2 and r2.msg)
+  check("confirm resend: the explicit confirm path remains pending and does not advance the serial",
+    G.NEURO.force_inflight == false and G.NEURO.decision_serial == 5)
 end
 
 do
   selecting_hand_env(340)
   G.NEURO = bridge_neuro({ dispatcher = Dispatcher, actions = Actions })
-  G.NEURO.play_confirm = {
+  local content = require("handlers.hand_handlers").play_content(
+    { G.hand.cards[1], G.hand.cards[2] })
+  local hand_tx = assert(HandTx.create({
     signature = "1,2",
-    content = content_of({ G.hand.cards[1], G.hand.cards[2] }),
-    indices = { 1, 2 }, decision_serial = 0, run_generation = 0,
-  }
+    content = content, indices = { 1, 2 }, context_revision = HandTx.context_revision(),
+    hand_type = "Pair",
+  }))
+  local candidate = ConfirmationEvidence.candidate(
+    hand_tx.signature, hand_tx.content, { 1, 2 }, "Pair", hand_tx.id, hand_tx.context_revision)
+  assert(ConfirmationEvidence.stage(candidate,
+    "Committing Pair -- Call resolve_play with answer yes to commit this play.",
+    { status = "written" }))
+  assert(ConfirmationEvidence.step_delivery())
   G.NEURO.weak_fired_serial = 0
   Staging.reset_run_state()
   require("core.tx_cache").reset()
   local b = result_bridge()
   local played = false
   G.FUNCS.play_cards_from_highlighted = function() played = true apply_play() end
+  require("tests.helpers").stage_registered(nil, { "resolve_play" })
   local queued = Staging.queue({ command = "action",
-    data = { id = "early-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
+    data = { id = "early-1", name = "resolve_play",
+      data = string.format('{"transaction_id":%d,"answer":"yes"}', hand_tx.id) } }, b)
   check("staged: queue accepted the action", queued == true)
   check("staged: action/result sent at queue time, before any update tick",
     #b.results == 1 and b.results[1].id == "early-1" and b.results[1].ok == true)

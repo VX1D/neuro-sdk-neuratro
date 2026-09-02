@@ -103,13 +103,13 @@ do
   check("fixture: the untagged joker really is untagged",
     CardUtil.untagged_joker_count() == 1, CardUtil.untagged_joker_count())
   Registry.bind_availability("sell_card", function() return false end)
-  check("fixture: with sell_card neutralised, toggle_shop is the only other SHOP action valid at all",
-    require("core.actions").is_action_valid("toggle_shop") == false
+  check("fixture: with sell_card neutralised, leave_shop is the only other SHOP action valid at all",
+    require("core.actions").is_action_valid("leave_shop") == false
       and require("core.actions").is_action_valid("buy_from_shop") == false
-      and require("core.actions").is_action_valid("use_card") == false
+      and require("core.actions").is_action_valid("use_consumable") == false
       and require("core.actions").is_action_valid("reroll_shop") == false
       and require("core.actions").is_action_valid("sell_card") == false
-      and require("core.actions").is_action_valid("set_joker_intents") == true)
+      and require("core.actions").is_action_valid("record_joker_roles") == true)
 
   local real_untagged_joker_count = CardUtil.untagged_joker_count
   local calls = 0
@@ -135,9 +135,9 @@ do
   if type(force) == "table" and type(force.actions) == "table" then
     local has_intents = false
     for _, name in ipairs(force.actions) do
-      if name == "set_joker_intents" then has_intents = true end
+      if name == "record_joker_roles" then has_intents = true end
     end
-    check("set_joker_intents survives as the shop's only progressing action",
+    check("record_joker_roles survives as the shop's only progressing action",
       has_intents, table.concat(force.actions, ","))
   end
 end

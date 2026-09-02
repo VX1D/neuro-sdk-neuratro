@@ -75,9 +75,9 @@ end
 local plan_n = 0
 local function answer_set_plan(text)
   plan_n = plan_n + 1
-  require("tests.helpers").stage_registered(nil, { "set_plan" })
+  require("tests.helpers").stage_registered(nil, { "record_plan" })
   Dispatcher.handle_message({ command = "action", run_generation = 1,
-    data = { id = "plan-" .. plan_n, name = "set_plan",
+    data = { id = "plan-" .. plan_n, name = "record_plan",
       data = { hand_plan = text, build_plan = text, money_plan = text } } }, bridge)
   return bridge.results[#bridge.results]
 end
@@ -112,7 +112,7 @@ for i = 1, 5 do
 end
 local last = forces[#forces]
 check("repeated windows don't lose the non-progress action",
-  last and last.actions:find("set_plan") ~= nil, last and last.actions)
+  last and last.actions:find("record_plan") ~= nil, last and last.actions)
 check("repeated windows still carry the progress action",
   last and last.actions:find("select_blind") ~= nil, last and last.actions)
 

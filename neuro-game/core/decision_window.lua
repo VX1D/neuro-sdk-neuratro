@@ -200,10 +200,10 @@ M.define{
       return not G.NEURO.setup_acknowledged
     end,
   },
-  blocks = { "start_setup_run" },
-  reject_prose = "Run setup is still open: change_selected_back sets the deck (a key from the Decks you can select list), toggle_seeded_run then paste_seed sets a specific seed, change_stake sets the stake. Red Deck is the default selection; each deck changes the run's starting rules. Send start_setup_run again to begin with your current choices.",
+  blocks = { "start_run" },
+  reject_prose = "Run setup is still open: select_deck sets the deck (a key from the Decks you can select list), toggle_seeded_run then paste_seed sets a specific seed, select_stake sets the stake. Red Deck is the default selection; each deck changes the run's starting rules. Send start_run again to begin with your current choices.",
   acknowledged_by = {
-    "start_setup_run", "change_selected_back", "change_stake",
+    "start_run", "select_deck", "select_stake",
     "toggle_seeded_run", "paste_seed",
   },
   on_acknowledged = function()
@@ -228,16 +228,16 @@ M.define{
       return (tonumber(G and G.NEURO and G.NEURO.shop_entry_dollars) or 0) >= INTEREST_GATE_ENTRY
     end,
   },
-  blocks = { "toggle_shop" },
+  blocks = { "leave_shop" },
   reject_prose = function()
     local Econ = require("facts.economy_facts")
     local money = math.floor(tonumber(G and G.GAME and G.GAME.dollars or 0) or 0)
     local entry = math.floor(tonumber(G and G.NEURO and G.NEURO.shop_entry_dollars or money) or money)
     return string.format(
-      "You are leaving the shop with $%d; you entered it with $%d. The next cash-out pays interest on the money you carry into the blind: +$%d per full $5 held, up to +$%d at $%d held. $%d held pays $0 -- under $5 there is no partial step, and dollars carry to the next shop either way. Send toggle_shop again to leave with $%d.",
+      "You are leaving the shop with $%d; you entered it with $%d. The next cash-out pays interest on the money you carry into the blind: +$%d per full $5 held, up to +$%d at $%d held. $%d held pays $0 -- under $5 there is no partial step, and dollars carry to the next shop either way. Send leave_shop again to leave with $%d.",
       money, entry, Econ.interest_amount(), Econ.max_interest(), Econ.interest_cap(), money, money)
   end,
-  acknowledged_by = { "toggle_shop", "set_plan" },
+  acknowledged_by = { "leave_shop", "record_plan" },
 }
 
 M.define{
@@ -257,12 +257,12 @@ M.define{
       return require("facts.card_util").joker_composition_signature()
     end,
   },
-  blocks = { "toggle_shop" },
+  blocks = { "leave_shop" },
   reject_prose = function()
     return "Your joker lineup changed. Jokers trigger left to right, so their order changes the score."
-      .. " set_joker_order changes the order; toggle_shop again leaves the shop with the current order."
+      .. " set_joker_order changes the order; leave_shop again leaves the shop with the current order."
   end,
-  acknowledged_by = { "set_joker_order", "toggle_shop" },
+  acknowledged_by = { "set_joker_order", "leave_shop" },
 }
 
 M.define{
@@ -282,9 +282,9 @@ M.define{
       return StateKinds.is_pack_state(State.get_state_name())
     end,
   },
-  blocks = { "use_card", "use_directional_card", "skip_booster" },
-  reject_prose = "This is a booster pack: use_card takes an ordinary card, use_directional_card takes a card with ordered target roles, and skip_booster closes the pack without taking one. Your jokers and hand levels are listed above. Review the pack, then choose again; your next pack action may confirm this choice or select a different option.",
-  acknowledged_by = { "use_card", "use_directional_card", "skip_booster" },
+  blocks = { "choose_pack_card", "choose_directional_pack_card", "skip_pack" },
+  reject_prose = "This is a booster pack: choose_pack_card takes an ordinary card, choose_directional_pack_card takes a card with ordered target roles, and skip_pack closes the pack without taking one. Your jokers and hand levels are listed above. Review the pack, then choose again; your next pack action may confirm this choice or select a different option.",
+  acknowledged_by = { "choose_pack_card", "choose_directional_pack_card", "skip_pack" },
 }
 if rawget(_G, "NEURO_TEST") then
   M._test = {

@@ -178,9 +178,9 @@ FS.clear_force_state()
 G.STATE = STATES.BLIND_SELECT
 G.NEURO.state = "BLIND_SELECT"
 frame()
-local open_names = { "select_blind", "sell_card", "set_plan" }
+local open_names = { "select_blind", "sell_card", "record_plan" }
 FS.arm("BLIND_SELECT", open_names,
-  { select_blind = true, sell_card = true, set_plan = true }, G.TIMERS.REAL,
+  { select_blind = true, sell_card = true, record_plan = true }, G.TIMERS.REAL,
   stale_payload("OPEN-QUERY"))
 FS.mark_sent(G.TIMERS.REAL)
 G.STATE = STATES.SHOP
@@ -247,7 +247,7 @@ G.STATE = STATES.BLIND_SELECT
 G.NEURO.state = "BLIND_SELECT"
 frame()
 FS.arm("BLIND_SELECT", open_names,
-  { select_blind = true, sell_card = true, set_plan = true }, G.TIMERS.REAL,
+  { select_blind = true, sell_card = true, record_plan = true }, G.TIMERS.REAL,
   stale_payload("HELD-QUERY"))
 FS.mark_sent(G.TIMERS.REAL)
 Receipt.create({ id = "atomicity-1", name = "select_blind", probe = function() return "pending" end,
@@ -287,9 +287,9 @@ for _ = 1, 1200 do
   if G.NEURO.force_inflight then
     plan_n = plan_n + 1
     answers = answers + 1
-    require("tests.helpers").stage_registered(nil, { "set_plan" })
+    require("tests.helpers").stage_registered(nil, { "record_plan" })
     Dispatcher.handle_message({ command = "action", run_generation = 1,
-      data = { id = "plan-" .. plan_n, name = "set_plan",
+      data = { id = "plan-" .. plan_n, name = "record_plan",
         data = { hand_plan = "p" .. plan_n, build_plan = "p", money_plan = "p" } } }, bridge)
   end
 end

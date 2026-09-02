@@ -284,10 +284,10 @@ do
     end
     pos = s + 1
   end
-  check("use_card has Event constructions to check (" .. sites .. ")", sites == 1, "sites=" .. sites)
-  check("every use_card Event declares blockable explicitly", explicit == sites,
+  check("use_consumable has Event constructions to check (" .. sites .. ")", sites == 1, "sites=" .. sites)
+  check("every use_consumable Event declares blockable explicitly", explicit == sites,
     "explicit=" .. explicit .. "/" .. sites)
-  check("use_card keeps the conservative blockable = true", all_true)
+  check("use_consumable keeps the conservative blockable = true", all_true)
 end
 
 do

@@ -30,7 +30,7 @@ local function fresh_G(boss, states)
 end
 
 local Actions = require("core.actions")
-Actions.is_action_valid = function(n) return n == "toggle_shop" end
+Actions.is_action_valid = function(n) return n == "leave_shop" end
 local FS = require("force.force_shop")
 
 local function query(boss, states)

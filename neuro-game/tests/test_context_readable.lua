@@ -229,7 +229,7 @@ end
 
 do
   local CtxShop = require("context.ctx_shop")
-  local menu = CtxShop.legality_section("MENU", { start_setup_run = true }) or ""
+  local menu = CtxShop.legality_section("MENU", { start_run = true }) or ""
   check("legality_section menu shows run-start/deck-switch, not shop legality",
     menu:find("can start run: yes", 1, true) ~= nil
     and menu:find("can switch deck: no", 1, true) ~= nil

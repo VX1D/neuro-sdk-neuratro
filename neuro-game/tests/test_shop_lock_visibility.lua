@@ -67,8 +67,8 @@ do
   local Actions = require("core.actions")
   local real_valid = Actions.is_action_valid
   Actions.is_action_valid = function(n)
-    return n == "toggle_shop" or n == "buy_from_shop" or n == "reroll_shop" or n == "set_plan"
-      or n == "set_joker_intents"
+    return n == "leave_shop" or n == "buy_from_shop" or n == "reroll_shop" or n == "record_plan"
+      or n == "record_joker_roles"
   end
   local FS = require("force.force_shop")
 
@@ -106,8 +106,8 @@ do
     check("[" .. c.name .. "] reroll_shop remains offered with requirements",
       offered(res, "reroll_shop") and requires_says(line, "reroll"),
       line .. " || " .. table.concat(res.actions or {}, ","))
-    check("[" .. c.name .. "] toggle_shop remains offered",
-      offered(res, "toggle_shop"), line .. " || " .. table.concat(res.actions or {}, ","))
+    check("[" .. c.name .. "] leave_shop remains offered",
+      offered(res, "leave_shop"), line .. " || " .. table.concat(res.actions or {}, ","))
   end
   Actions.is_action_valid = real_valid
 end
@@ -136,7 +136,7 @@ do
   check("L4e plain line remains readable without requirements",
     out3:find("Legality: can buy something: yes", 1, true) ~= nil, out3)
 
-  local out4 = CtxShop.legality_section("RUN_SETUP", { start_setup_run = true }) or ""
+  local out4 = CtxShop.legality_section("RUN_SETUP", { start_run = true }) or ""
   check("L4f RUN_SETUP branch untouched", out4:find("can start run: yes", 1, true) ~= nil, out4)
 end
 

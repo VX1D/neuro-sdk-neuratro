@@ -203,11 +203,11 @@ function M.run()
 
   do
     local src = read_file("force/force_pack.lua") or ""
-    local i = src:find('ActionRegistry.render("skip_booster"', 1, true)
+    local i = src:find('ActionRegistry.render("skip_pack"', 1, true)
     if claimed(not i) then
-      fail("force_pack no longer renders skip_booster where the parity lint expects it")
+      fail("force_pack no longer renders skip_pack where the parity lint expects it")
     elseif claimed(not src:sub(i, i + 300):find("(", 1, true)) then
-      fail("skip_booster is offered without any parenthetical describing what it does")
+      fail("skip_pack is offered without any parenthetical describing what it does")
     end
   end
 
@@ -258,7 +258,7 @@ function M.run()
   do
     local by_name = {}
     for _, d in ipairs(defs) do by_name[d.name] = d end
-    for _, nm in ipairs({ "buy_from_shop", "use_card", "sell_card" }) do
+    for _, nm in ipairs({ "buy_from_shop", "use_consumable", "sell_card" }) do
       local desc = (by_name[nm] or {}).description or ""
       if claimed(desc == "") then
         fail("action '%s' has no description -- the embedded-payload scan over it is vacuous", nm)

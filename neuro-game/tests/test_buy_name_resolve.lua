@@ -18,10 +18,10 @@ end
 do
   local a = area(card("Ice Cream"), card("Wily Joker"))
   local c1, i1 = find(a, "Wily")
-  check("substring (want in have) matches", c1 == a.cards[2] and i1 == 2, tostring(i1))
+  check("truncated target does not relocate", c1 == nil and i1 == nil, tostring(i1))
   local a2 = area(card("Joker"))
   local c2, i2 = find(a2, "Joker (Common)")
-  check("substring (have in want) matches", c2 == a2.cards[1] and i2 == 1, tostring(i2))
+  check("decorated target does not relocate", c2 == nil and i2 == nil, tostring(i2))
 end
 
 do

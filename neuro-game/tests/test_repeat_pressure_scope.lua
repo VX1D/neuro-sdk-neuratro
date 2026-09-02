@@ -48,8 +48,8 @@ end
 
 local CASES = {
   { state = "BLIND_SELECT", action = "select_blind", count = 6 },
-  { state = "TAROT_PACK", action = "skip_booster", count = 3 },
-  { state = "BUFFOON_PACK", action = "use_card", count = 3 },
+  { state = "TAROT_PACK", action = "skip_pack", count = 3 },
+  { state = "BUFFOON_PACK", action = "choose_pack_card", count = 3 },
   { state = "SHOP", action = "buy_from_shop", count = 20 },
   { state = "SELECTING_HAND", action = "play_hand", count = 30 },
 }

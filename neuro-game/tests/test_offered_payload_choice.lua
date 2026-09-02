@@ -54,14 +54,14 @@ check("the sweep actually found offers to scan", scanned > 20, tostring(scanned)
 check("at least one scanned offer carries an array field", with_arrays > 0, tostring(with_arrays))
 
 do
-  local REGRESSION = 'use_card|{"area":"consumeables","index":1,"hand_indices":[1]}'
+  local REGRESSION = 'use_consumable|{"area":"consumeables","index":1,"hand_indices":[1]}'
   local hits = offers(REGRESSION)
   check("the regression payload is extracted", #hits == 1, tostring(#hits))
   if hits[1] then
     check("the regression payload is rejected",
       #literal_selections(hits[1].name, hits[1].payload) == 1, hits[1].payload)
   end
-  local FIXED = 'use_card|{"area":"consumeables","index":1,"hand_indices":[<pick 1 to 5 different hand positions>]}'
+  local FIXED = 'use_consumable|{"area":"consumeables","index":1,"hand_indices":[<pick 1 to 5 different hand positions>]}'
   local ok_hits = offers(FIXED)
   check("the fixed payload is extracted", #ok_hits == 1, tostring(#ok_hits))
   if ok_hits[1] then

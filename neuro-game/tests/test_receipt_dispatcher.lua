@@ -278,16 +278,16 @@ do
   local bridge = setup()
   Dispatcher._test.execute_action({
     id = "sync-outcome",
-    name = "set_plan",
+    name = "record_plan",
     exec = function() return Receipt.outcome("applied", "Plan observed.", { revision = 2 }) end,
   }, bridge)
-  check("structural applied outcome bypasses legacy path", G.NEURO.last_action_name == "set_plan"
-    and bridge.contexts[1] == "[run 3] After the completed action 'set_plan': Plan observed.")
+  check("structural applied outcome bypasses legacy path", G.NEURO.last_action_name == "record_plan"
+    and bridge.contexts[1] == "[run 3] After the completed action 'record_plan': Plan observed.")
 
   bridge = setup()
   Dispatcher._test.execute_action({
     id = "sync-failed",
-    name = "set_plan",
+    name = "record_plan",
     exec = function() return Receipt.outcome("failed", "Plan did not change.") end,
   }, bridge)
   check("structural failed outcome has no success side effects",
@@ -301,11 +301,11 @@ do
   local bridge = setup()
   Dispatcher._test.execute_action({
     id = "missing-evidence",
-    name = "set_plan",
+    name = "record_plan",
     exec = function() return "Legacy success text" end,
   }, bridge)
   check("mutating action without evidence fails closed instead of using legacy success",
-    G.NEURO.last_action_name == nil and G.NEURO.last_failed_action == "set_plan"
+    G.NEURO.last_action_name == nil and G.NEURO.last_failed_action == "record_plan"
       and bridge.phases[2] and bridge.phases[2].details.outcome == "ambiguous")
 end
 
@@ -313,11 +313,11 @@ do
   local bridge = setup()
   Dispatcher._test.execute_action({
     id = "leaked-receipt",
-    name = "set_plan",
+    name = "record_plan",
     exec = function()
       Receipt.create({
         id = "leaked-receipt",
-        name = "set_plan",
+        name = "record_plan",
         run_generation = 3,
         started_at = 100,
         deadline = 100000,
@@ -335,12 +335,12 @@ end
 do
   local bridge = setup()
   Dispatcher._test.execute_action({
-    id = "intents-applied", name = "set_joker_intents", ack_snapshot = {},
+    id = "intents-applied", name = "record_joker_roles", ack_snapshot = {},
     exec = function()
       return Receipt.outcome("applied", 'Tagged: 1=CORE (Green Joker) note: "the engine"')
     end,
   }, bridge)
-  check("an applied set_joker_intents leaves nothing on the permanent channel",
+  check("an applied record_joker_roles leaves nothing on the permanent channel",
     bridge.contexts[1] == nil, tostring(bridge.contexts[1]))
   check("but it still completes as applied",
     bridge.phases[2] and bridge.phases[2].phase == "completed"

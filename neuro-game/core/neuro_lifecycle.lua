@@ -41,14 +41,14 @@ end
 
 function M.clear_pending_confirm()
   if not Utils.neuro_ready() then return end
+  pcall(function()
+    local HandTx = require("core.hand_transaction")
+    HandTx.invalidate(nil, "lifecycle_reset")
+  end)
+  pcall(require("core.context_review").reset)
   G.NEURO.weak_fired_serial = nil
-  G.NEURO.play_confirm = nil
   G.NEURO.pending_confirmation = nil
   G.NEURO.confirmation_delivery = nil
-  G.NEURO.last_sell_reject = nil
-  G.NEURO.last_sell_review_serial = nil
-  G.NEURO.last_voucher_reject = nil
-  G.NEURO.last_voucher_review_serial = nil
 end
 
 function M.reset_context_delivery()
@@ -64,6 +64,9 @@ end
 
 function M.bump_run_generation(reason)
   local current = Utils.neuro_ready() and tonumber(G.NEURO.run_generation) or nil
+  pcall(function()
+    require("core.hand_transaction").invalidate(nil, reason or "run generation changed")
+  end)
   require("core.dispatcher").reset_transport_state(reason or "run generation changed")
   require("core.staging").on_reconnect()
   if current == nil then return nil end
@@ -88,13 +91,15 @@ LifecycleRegistry.register_fields("run", {
   "action_phase", "action_phase_at",
   "recent_actions", "once_serials", "decision_snapshot", "gameplay_journal",
   "pending_confirmation", "confirmation_delivery",
+  "hand_transaction", "hand_last_transaction", "hand_decision", "hand_context_revision", "hand_context_key",
+  "hand_transaction_id_generation", "hand_transaction_next_id", "context_reviews",
   "last_failed_action", "last_failed_reason", "last_failed_correction", "last_failed_at",
   "last_action_at", "last_action_real_at", "last_action_name", "last_play",
   "shop_pack_interrupt", "reserved_dollars", "purchase_showcase_queue", "held_plan_write",
   "joker_intents_ack_identity", "reward_joker_roster",
   "plan", "plan_revision", "joker_intent_revision", "econ_plan_ok", "blind_plan_ok", "blind_plan_scope", "shop_plan_revision_required",
   "economy_epoch", "shop_visit_epoch", "shop_entry_dollars", "shop_entry_pending", "joker_order_ack",
-  "selected_back_key", "pack_exit_pending", "weak_fired_serial", "play_confirm", "last_sell_reject", "last_sell_review_serial", "last_voucher_reject", "last_voucher_review_serial", "jokers_sold", "jokers_sold_run", "joker_intents", "joker_observations", "joker_hits", "joker_bought_cost", "last_reward_outcome_key", "rare_joker_announced", "blind_reward_cache", "blind_reward_round",
+  "selected_back_key", "pack_exit_pending", "weak_fired_serial", "jokers_sold", "jokers_sold_run", "joker_intents", "joker_observations", "joker_hits", "joker_bought_cost", "last_reward_outcome_key", "rare_joker_announced", "blind_reward_cache", "blind_reward_round",
   "state", "state_enter_serial", "decision_serial", "decision_ack_count", "decision_ack_serial",
   "decision_ack_level", "decision_ack_at", "setup_acknowledged",
   "consumed_actions", "consumed_action_owner",

@@ -40,9 +40,9 @@ local function make_bridge()
   return b
 end
 
-local REAL = { "play_hand", "discard_hand", "select_blind", "skip_blind", "toggle_shop",
-  "buy_from_shop", "sell_card", "use_card", "set_plan", "set_joker_order", "reroll_shop",
-  "cash_out", "start_setup_run", "choose_persona", "skip_booster" }
+local REAL = { "play_hand", "discard_hand", "select_blind", "skip_blind", "leave_shop",
+  "buy_from_shop", "sell_card", "use_consumable", "record_plan", "set_joker_order", "reroll_shop",
+  "cash_out", "start_run", "choose_persona", "skip_pack" }
 
 local WIPE = { "hand","jokers","consumeables","shop_jokers","shop_vouchers","shop_booster","shop","pack_cards","booster_pack","blind_select_opts","blind_select","OVERLAY_MENU" }
 local function fresh_g()
@@ -67,7 +67,7 @@ local function run_iteration(it)
 
   local wrong = (sc.state == "SELECTING_HAND") and { "buy_from_shop", "reroll_shop" }
     or (sc.state == "SHOP") and { "play_hand", "discard_hand" }
-    or { "play_hand", "buy_from_shop", "toggle_shop" }
+    or { "play_hand", "buy_from_shop", "leave_shop" }
   local names = { "bogus_action_" .. it }
   for _, w in ipairs(wrong) do names[#names + 1] = w end
   for _, r in ipairs(REAL) do names[#names + 1] = r end     -- some will gate / be unavailable in this state

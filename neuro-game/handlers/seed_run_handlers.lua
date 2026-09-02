@@ -5,7 +5,7 @@ local mock_UIBox = GameActions.mock_UIBox
 
 local function handle_toggle_seeded_run(_data)
   if not ForceHelpers.is_run_setup_overlay() then
-    return nil, "Run setup screen is not open. Use setup_run first, then toggle seeded mode."
+    return nil, "Run setup screen is not open. Use open_run_setup first, then toggle seeded mode."
   end
   return function()
     local fn = G.FUNCS and G.FUNCS.toggle_seeded_run

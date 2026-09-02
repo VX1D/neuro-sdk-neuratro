@@ -75,13 +75,13 @@ local function exact_goal(name, data, before)
   local game = G and G.GAME or {}
   local rr = game.round_resets or {}
   if name == "choose_persona" then return n.persona == data.persona end
-  if name == "change_stake" then
+  if name == "select_stake" then
     local profile = G and G.PROFILES and G.SETTINGS and G.PROFILES[G.SETTINGS.profile]
     return G and G.viewed_stake == data.to_key
       or profile and profile.MEMORY and profile.MEMORY.stake == data.to_key
   end
-  if name == "change_selected_back" then return n.selected_back_key == data.back and n.deck_chosen == true end
-  if name == "change_challenge_description" then
+  if name == "select_deck" then return n.selected_back_key == data.back and n.deck_chosen == true end
+  if name == "select_challenge" then
     local tab = G and G.challenge_tab
     return tab ~= nil and (tostring(tab.id) == tostring(data.id) or tostring(tab.name) == tostring(data.id)
       or type(data.id) == "number" and G.CHALLENGES and tab == G.CHALLENGES[data.id])
@@ -93,8 +93,8 @@ local function exact_goal(name, data, before)
   if name == "toggle_seeded_run" then
     return G and ((not not G.run_setup_seed) ~= (not not before.seeded))
   end
-  if name == "set_plan" then return (tonumber(n.plan_revision) or 0) > before.plan_revision end
-  if name == "set_joker_intents" then
+  if name == "record_plan" then return (tonumber(n.plan_revision) or 0) > before.plan_revision end
+  if name == "record_joker_roles" then
     for _, entry in ipairs(data.intents or {}) do
       local card = G and G.jokers and G.jokers.cards[entry.index]
       local intent = card and n.joker_intents and n.joker_intents[card.sort_id]
@@ -109,7 +109,7 @@ local function exact_goal(name, data, before)
   end
   if name == "set_joker_order" then return G and G.jokers and G.jokers.cards[data.to_index] == before.card end
   if name == "exit_overlay_menu" then return G and G.OVERLAY_MENU == nil end
-  if name == "setup_run" then
+  if name == "open_run_setup" then
     return G and G.OVERLAY_MENU ~= nil and G.OVERLAY_MENU ~= before.overlay
   end
   if name == "select_blind" then
@@ -131,16 +131,16 @@ local function exact_goal(name, data, before)
       and tonumber(game.round_scores.times_rerolled.amt) or 0
     return count > before.rerolls
   end
-  if name == "toggle_shop" then
-    local locked = G and G.CONTROLLER and G.CONTROLLER.locks and G.CONTROLLER.locks.toggle_shop
+  if name == "leave_shop" then
+    local locked = G and G.CONTROLLER and G.CONTROLLER.locks and G.CONTROLLER.locks.leave_shop
     return G and G.shop == nil and state_name() ~= "SHOP" and not locked
   end
   if name == "cash_out" then return G and G.round_eval == nil and state_name() == "SHOP" end
-  if name == "skip_booster" then
+  if name == "skip_pack" then
     return CardUtil.pack_area() == nil or CardUtil.pack_area() ~= before.pack
       or (tonumber(game.pack_choices) or 0) < before.pack_choices
   end
-  if name == "start_setup_run" or name == "start_challenge_run" then
+  if name == "start_run" or name == "start_challenge_run" then
     return (tonumber(n.run_generation) or 0) ~= before.generation
       or (state_name() ~= before.state and not require("core.state_kinds").is_menu_state(state_name()))
   end
@@ -162,12 +162,12 @@ local ASYNC = {
   reroll_boss = true,
   reroll_shop = true,
   select_blind = true,
-  setup_run = true,
+  open_run_setup = true,
   skip_blind = true,
-  skip_booster = true,
+  skip_pack = true,
   start_challenge_run = true,
-  start_setup_run = true,
-  toggle_shop = true,
+  start_run = true,
+  leave_shop = true,
 }
 
 local NATIVE = {
@@ -175,17 +175,20 @@ local NATIVE = {
   discard_hand = true,
   play_hand = true,
   sell_card = true,
-  use_card = true,
-  use_directional_card = true,
+  use_consumable = true,
+  use_directional_consumable = true,
+  choose_pack_card = true,
+  choose_directional_pack_card = true,
 }
 
 local MUTATING = {
-  "buy_from_shop", "cash_out", "change_challenge_description", "change_selected_back",
-  "change_stake", "choose_persona", "copy_seed",
+  "buy_from_shop", "cash_out", "select_challenge", "select_deck",
+  "select_stake", "choose_persona", "copy_seed",
   "discard_hand", "exit_overlay_menu", "paste_seed", "play_hand", "reroll_boss", "reroll_shop",
-  "select_blind", "sell_card", "set_joker_intents", "set_joker_order", "set_plan", "setup_run",
-  "skip_blind", "skip_booster", "start_challenge_run",
-  "start_setup_run", "toggle_seeded_run", "toggle_shop", "use_card", "use_directional_card",
+  "select_blind", "sell_card", "record_joker_roles", "set_joker_order", "record_plan", "open_run_setup",
+  "skip_blind", "skip_pack", "start_challenge_run",
+  "start_run", "toggle_seeded_run", "leave_shop", "use_consumable",
+  "use_directional_consumable", "choose_pack_card", "choose_directional_pack_card",
 }
 
 local KNOWN = {}
@@ -210,9 +213,9 @@ function M.wrap(name, data, exec)
       id = tostring(data._action_id or (name .. ":" .. Utils.now())),
       name = name,
       run_generation = G and G.NEURO and G.NEURO.run_generation,
-      deadline = Receipt.now() + ((name == "start_setup_run" or name == "start_challenge_run") and 15 or 6),
+      deadline = Receipt.now() + ((name == "start_run" or name == "start_challenge_run") and 15 or 6),
       timeout_outcome = "ambiguous",
-      allow_generation_change = name == "start_setup_run" or name == "start_challenge_run",
+      allow_generation_change = name == "start_run" or name == "start_challenge_run",
       correction = "The accepted action '" .. name
         .. "' did not reach its requested state before the verification deadline. Inspect the current state and choose again.",
       applied_message = message,

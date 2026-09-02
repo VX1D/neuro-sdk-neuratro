@@ -74,9 +74,12 @@ local function handle_change_selected_back(data)
     return nil, "Back key is required. Provide a valid back key."
   end
   local pool = G.P_CENTER_POOLS and G.P_CENTER_POOLS.Back
-  local target_idx = find_back_by_key(pool, data.back)
+  local target_idx, _, target = find_back_by_key(pool, data.back)
   if not target_idx then
     return nil, "Deck key '" .. data.back .. "' not found. Use a key like b_red, b_blue."
+  end
+  if target.unlocked == false then
+    return nil, "Deck key '" .. data.back .. "' is locked. Choose a key from Decks you can select."
   end
   return function()
     local selected_name = apply_selected_back(data.back)

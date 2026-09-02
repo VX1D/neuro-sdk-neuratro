@@ -64,6 +64,8 @@ local function mark_force_dirty() Lifecycle.mark_force_dirty() end
 
 local DecisionDelta = require("facts.decision_delta")
 local ConfirmationEvidence = require("core.confirmation_evidence")
+local ContextReview = require("core.context_review")
+local HandTx = require("core.hand_transaction")
 local GameplayJournal = require("core.gameplay_journal")
 
 local TokenLegends = require("facts.token_legends")
@@ -123,8 +125,8 @@ local function build_valid_action_definitions(state_name, valid)
   return filtered
 end
 
-local function register_valid_actions(state_name)
-  local valid = NeuroActions.get_valid_actions_for_state(state_name)
+local function register_valid_actions(state_name, requested)
+  local valid = requested or NeuroActions.get_valid_actions_for_state(state_name)
   if not NeuroActions.state_is_modelled(state_name) then return valid, true end
   if not (G and G.NEURO and G.NEURO.register_actions) then return valid, false end
   local ok, delivered = pcall(function()
@@ -334,6 +336,7 @@ end
 
 local function _step_state_transition(state_name, state_changed, prev_state)
   if not state_changed then return end
+  HandTx.invalidate(nil, "state_changed")
   Staging.on_state_change()
   local NA = anim()
   if NA and NA.on_state_enter then
@@ -597,7 +600,7 @@ local function _step_force_arming(state_name, now)
     force_supersede()
     register_valid_actions(state_name)
   end
-  if ConfirmationEvidence.has_staged_delivery() then return end
+  if ConfirmationEvidence.has_staged_delivery() or ContextReview.has_staged_delivery() then return end
   if ForceState.reask_due() then
     ForceState.reask()
   end
@@ -655,14 +658,6 @@ local function _step_force_arming(state_name, now)
   local hint_snapshot = snapshot_once_serials()
   FactHints.reset_pending()
   Once.begin_journal()
-  local _, registration_ok = register_valid_actions(state_name)
-  if not registration_ok then
-    Once.rollback_journal()
-    restore_once_serials(hint_snapshot)
-    mark_force_dirty()
-    neuro_last_force_attempt_at = debounce_now
-    return
-  end
   local force = NeuroDispatcher.get_force_for_state(state_name)
   if not force then
     Once.rollback_journal()
@@ -680,10 +675,29 @@ local function _step_force_arming(state_name, now)
     return
   end
 
+  local hand_snapshot = state_name == "SELECTING_HAND" and force.decision_snapshot or nil
+  if hand_snapshot and not HandTx.snapshot_is_current(hand_snapshot) then
+    restore_once_serials(hint_snapshot)
+    Once.rollback_journal()
+    mark_force_dirty()
+    neuro_last_force_attempt_at = debounce_now
+    return
+  end
+
+  local _, registration_ok = register_valid_actions(state_name,
+    hand_snapshot and force.actions or nil)
+  if not registration_ok then
+    Once.rollback_journal()
+    restore_once_serials(hint_snapshot)
+    mark_force_dirty()
+    neuro_last_force_attempt_at = debounce_now
+    return
+  end
+
   emit_state_glossary(state_name)
   FactHints.flush_pending()
   neuro_last_force_attempt_at = debounce_now
-  do
+  if not hand_snapshot then
     local registrable = Utils.list_to_set(NeuroActions.get_valid_actions_for_state(state_name) or {})
     local kept = {}
     for _, name in ipairs(force.actions or {}) do
@@ -704,6 +718,7 @@ local function _step_force_arming(state_name, now)
     -- force.ephemeral_context = false to have the question remembered.
     ephemeral_context = force.ephemeral_context ~= false,
     decision_candidate = decision_candidate,
+    decision_snapshot = force.decision_snapshot,
   }
   if not force_arm(state_name, force.actions, build_action_set(force.actions), now, payload) then
     Once.rollback_journal()
@@ -747,6 +762,7 @@ local function _step_neuro_frame(dt)
   _neuro_guarded(errors, "bridge update", G.NEURO.update, G.NEURO, dt)
   _neuro_guarded(errors, "context delivery", ContextDelivery.step)
   _neuro_guarded(errors, "confirmation evidence delivery", ConfirmationEvidence.step_delivery)
+  _neuro_guarded(errors, "context review delivery", ContextReview.step_delivery)
   _neuro_guarded(errors, "force delivery", step_force_delivery)
   _neuro_guarded(errors, "staging", Staging.update, dt)
   _neuro_guarded(errors, "receipts", NeuroDispatcher.update_receipts)

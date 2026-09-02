@@ -50,7 +50,7 @@ do
 
   local Tuning = require("core.config");
   local Actions = require("core.actions")
-  Actions.is_action_valid = function(n) return n == "buy_from_shop" or n == "toggle_shop" end
+  Actions.is_action_valid = function(n) return n == "buy_from_shop" or n == "leave_shop" end
   local PlanGate = require("core.plan_gate")
   G.NEURO.econ_plan_ok = true
   G.NEURO.plan = { money = "hold", money_scope = PlanGate.current_economy_scope() }

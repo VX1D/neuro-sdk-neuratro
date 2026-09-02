@@ -343,10 +343,13 @@ function M.liveness_timeout(now)
     actions[i] = tostring(name)
   end
   table.sort(actions)
+  local HandTx = Utils.lazy_require("core.hand_transaction")
+  local hand_transaction_id = HandTx and HandTx.transaction_id and HandTx.transaction_id() or ""
   local fingerprint = table.concat({
     tostring(G.NEURO.decision_serial or 0),
     tostring(type(window) == "table" and window.state or ""),
     table.concat(actions, ","),
+    tostring(hand_transaction_id),
   }, "|")
   if G.NEURO.force_liveness_fingerprint == fingerprint then
     G.NEURO.force_liveness_repeat = (tonumber(G.NEURO.force_liveness_repeat) or 0) + 1
@@ -542,7 +545,7 @@ M.record_failure = Lifecycle.record_failure
 -- Neuro forget it when that force completes. context has no expiry, so it must never go there.
 function M.correct_optimistic(action, reason, action_id, correction)
   if not (G and G.NEURO) then return end
-  if (action == "use_card" or action == "use_directional_card") and (G.NEURO.pack_exit_pending == true
+  if (action == "choose_pack_card" or action == "choose_directional_pack_card") and (G.NEURO.pack_exit_pending == true
       or G.NEURO.pack_exit_pending == tostring(action_id)) then
     G.NEURO.pack_exit_pending = nil
   end

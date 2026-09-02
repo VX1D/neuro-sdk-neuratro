@@ -94,67 +94,67 @@ end
 
 do
   base("TAROT_PACK")
-  check("skip_booster: a missing pack area makes availability false",
-    Actions.is_action_valid("skip_booster") == false)
-  check("skip_booster: a missing pack area is not advertised",
-    advertised("TAROT_PACK", "skip_booster") == false)
+  check("skip_pack: a missing pack area makes availability false",
+    Actions.is_action_valid("skip_pack") == false)
+  check("skip_pack: a missing pack area is not advertised",
+    advertised("TAROT_PACK", "skip_pack") == false)
 
   base("TAROT_PACK", { pack_cards = { cards = { tarot() }, config = {} } })
-  check("skip_booster: a pack area without a callback makes availability false",
-    Actions.is_action_valid("skip_booster") == false)
-  check("skip_booster: a pack area without a callback is not advertised",
-    advertised("TAROT_PACK", "skip_booster") == false)
+  check("skip_pack: a pack area without a callback makes availability false",
+    Actions.is_action_valid("skip_pack") == false)
+  check("skip_pack: a pack area without a callback is not advertised",
+    advertised("TAROT_PACK", "skip_pack") == false)
 
   base("TAROT_PACK", { pack_cards = { cards = { tarot() }, config = {} },
     FUNCS = { get_poker_hand_info = function() end, skip_booster = function() end } })
-  check("skip_booster: a complete fixture makes availability true",
-    Actions.is_action_valid("skip_booster") == true)
-  check("skip_booster: a complete fixture returns an execution closure",
-    preflight_ok("skip_booster", {}))
-  check("skip_booster: a complete fixture is advertised",
-    advertised("TAROT_PACK", "skip_booster") == true)
+  check("skip_pack: a complete fixture makes availability true",
+    Actions.is_action_valid("skip_pack") == true)
+  check("skip_pack: a complete fixture returns an execution closure",
+    preflight_ok("skip_pack", {}))
+  check("skip_pack: a complete fixture is advertised",
+    advertised("TAROT_PACK", "skip_pack") == true)
 
   G.GAME.STOP_USE = 3
-  check("skip_booster: STOP_USE is guard-owned and availability stays true",
-    Actions.is_action_valid("skip_booster") == true)
-  check("skip_booster: STOP_USE defers force at the guard layer",
-    advertised("TAROT_PACK", "skip_booster") == false)
-  local _, err = Dispatcher.preflight("skip_booster", {})
-  check("skip_booster: STOP_USE makes preflight return the guard diagnostic",
+  check("skip_pack: STOP_USE is guard-owned and availability stays true",
+    Actions.is_action_valid("skip_pack") == true)
+  check("skip_pack: STOP_USE defers force at the guard layer",
+    advertised("TAROT_PACK", "skip_pack") == false)
+  local _, err = Dispatcher.preflight("skip_pack", {})
+  check("skip_pack: STOP_USE makes preflight return the guard diagnostic",
     err ~= nil and tostring(err):find("resolving", 1, true) ~= nil, tostring(err))
 end
 
 do
   base("SHOP", { shop_jokers = { cards = { joker("j_a", "Alpha") }, config = {} },
     shop_booster = { cards = {}, config = {} }, shop_vouchers = { cards = {}, config = {} } })
-  check("toggle_shop: missing G.shop makes availability false",
-    Actions.is_action_valid("toggle_shop") == false)
-  check("toggle_shop: missing G.shop is not advertised",
-    advertised("SHOP", "toggle_shop") == false)
+  check("leave_shop: missing G.shop makes availability false",
+    Actions.is_action_valid("leave_shop") == false)
+  check("leave_shop: missing G.shop is not advertised",
+    advertised("SHOP", "leave_shop") == false)
 
   base("SHOP", { shop_jokers = { cards = { joker("j_a", "Alpha") }, config = {} },
     shop_booster = { cards = {}, config = {} }, shop_vouchers = { cards = {}, config = {} },
     shop = {} })
-  check("toggle_shop: G.shop without a callback makes availability false",
-    Actions.is_action_valid("toggle_shop") == false)
-  check("toggle_shop: G.shop without a callback is not advertised",
-    advertised("SHOP", "toggle_shop") == false)
+  check("leave_shop: G.shop without a callback makes availability false",
+    Actions.is_action_valid("leave_shop") == false)
+  check("leave_shop: G.shop without a callback is not advertised",
+    advertised("SHOP", "leave_shop") == false)
 
   base("SHOP", { shop_jokers = { cards = { joker("j_a", "Alpha") }, config = {} },
     shop_booster = { cards = {}, config = {} }, shop_vouchers = { cards = {}, config = {} },
     shop = {}, FUNCS = { get_poker_hand_info = function() end, toggle_shop = function() end } })
-  check("toggle_shop: a complete fixture makes availability true",
-    Actions.is_action_valid("toggle_shop") == true)
-  check("toggle_shop: a complete fixture returns an execution closure",
-    preflight_ok("toggle_shop", {}))
-  check("toggle_shop: a complete fixture is advertised",
-    advertised("SHOP", "toggle_shop") == true)
+  check("leave_shop: a complete fixture makes availability true",
+    Actions.is_action_valid("leave_shop") == true)
+  check("leave_shop: a complete fixture returns an execution closure",
+    preflight_ok("leave_shop", {}))
+  check("leave_shop: a complete fixture is advertised",
+    advertised("SHOP", "leave_shop") == true)
 
-  G.CONTROLLER.locks.toggle_shop = true
-  check("toggle_shop: the lock is guard-owned and availability stays true",
-    Actions.is_action_valid("toggle_shop") == true)
-  check("toggle_shop: the lock suppresses force at the guard layer",
-    advertised("SHOP", "toggle_shop") == false)
+  G.CONTROLLER.locks.leave_shop = true
+  check("leave_shop: the lock is guard-owned and availability stays true",
+    Actions.is_action_valid("leave_shop") == true)
+  check("leave_shop: the lock suppresses force at the guard layer",
+    advertised("SHOP", "leave_shop") == false)
 end
 
 done()

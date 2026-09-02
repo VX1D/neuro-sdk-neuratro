@@ -61,14 +61,14 @@ end
 do
   mock_state("Small blind selectable", "BLIND_SELECT")
   G.consumeables = { cards = { tarot("The Hermit", 3) }, config = { card_limit = 2 } }
-  local blob = ContextCompact.build("BLIND_SELECT", { "use_card", "select_blind" }, { no_cache = true, split = "volatile" })
-  check("1: BLIND_SELECT + use_card renders C section",
+  local blob = ContextCompact.build("BLIND_SELECT", { "use_consumable", "select_blind" }, { no_cache = true, split = "volatile" })
+  check("1: BLIND_SELECT + use_consumable renders C section",
     blob:find('Consumables (area "consumeables", slots 1/2):', 1, true) ~= nil, blob)
   check("1: C row carries sell $", blob:find("Sell $3", 1, true) ~= nil, blob:match("Consumables[^\n]*\n[^\n]*"))
   local no_use = ContextCompact.build("BLIND_SELECT", { "select_blind" }, { no_cache = true, split = "volatile" })
   check("1: no use/sell in set -> no C section", no_use:find("Consumables (", 1, true) == nil)
   G.consumeables.cards[#G.consumeables.cards + 1] = tarot("The Emperor", 4)
-  local blob2 = ContextCompact.build("BLIND_SELECT", { "use_card", "select_blind" }, { no_cache = true, split = "volatile" })
+  local blob2 = ContextCompact.build("BLIND_SELECT", { "use_consumable", "select_blind" }, { no_cache = true, split = "volatile" })
   check("1: a consumable change moves the BLIND_SELECT context", blob ~= blob2)
 end
 
@@ -149,10 +149,10 @@ do
   G.OVERLAY_MENU = { get_UIE_by_ID = function(_, id) return (id == "run_setup_seed") and {} or nil end }
   G.P_CENTER_POOLS = { Stake = { { name = "White Stake", key = "stake_white" }, { name = "Red Stake", key = "stake_red" } } }
   local sk = CtxMisc.stake_list_line() or ""
-  check("8: stake list line", sk == "Stakes (pass the number as change_stake to_key; cumulative, a higher stake keeps every "
+  check("8: stake list line", sk == "Stakes (pass the number as select_stake to_key; cumulative, a higher stake keeps every "
     .. "lower stake's effect too): 1) White Stake -- none (baseline difficulty); 2) Red Stake -- Small Blind pays no reward.", sk)
   local blob = ContextCompact.build("RUN_SETUP", nil, { no_cache = true, split = "volatile" })
-  check("8: RUN_SETUP context carries STK line", blob:find("Stakes (pass the number as change_stake", 1, true) ~= nil, blob)
+  check("8: RUN_SETUP context carries STK line", blob:find("Stakes (pass the number as select_stake", 1, true) ~= nil, blob)
   G.OVERLAY_MENU = nil
   check("8: stake line no longer gated by overlay", CtxMisc.stake_list_line() ~= nil)
   G.P_CENTER_POOLS = nil
@@ -171,20 +171,20 @@ do
 end
 
 do
-  check("9: change_challenge_description in MENU", has(A.get_action_names_for_state("MENU"), "change_challenge_description"))
-  check("9: change_challenge_description not in RUN_SETUP", not has(A.get_action_names_for_state("RUN_SETUP"), "change_challenge_description"))
+  check("9: select_challenge in MENU", has(A.get_action_names_for_state("MENU"), "select_challenge"))
+  check("9: select_challenge not in RUN_SETUP", not has(A.get_action_names_for_state("RUN_SETUP"), "select_challenge"))
   mock_state("Normal: has G.GAME", "MENU")
   G.OVERLAY_MENU = { get_UIE_by_ID = function(_, id) return (id == "run_setup_seed") and {} or nil end }
   local rs = D.get_force_for_state("RUN_SETUP")
   check("9: run-setup force omits challenge-select action",
-    not has((rs or {}).actions, "change_challenge_description"))
-  check("9: run-setup force still offers start_setup_run", has((rs or {}).actions, "start_setup_run"))
+    not has((rs or {}).actions, "select_challenge"))
+  check("9: run-setup force still offers start_run", has((rs or {}).actions, "start_run"))
   G.OVERLAY_MENU = nil
   G.CHALLENGES = { { id = "c_omelette", name = "The Omelette" }, { id = "c_city", name = "The City" } }
   G.challenge_tab = nil
   local mf = D.get_force_for_state("MENU")
   check("9: MENU force lists challenge names in query", ((mf or {}).query or ""):find("The Omelette", 1, true) ~= nil, (mf or {}).query)
-  check("9: MENU force offers change_challenge_description", has((mf or {}).actions, "change_challenge_description"))
+  check("9: MENU force offers select_challenge", has((mf or {}).actions, "select_challenge"))
   check("9: start_challenge_run NOT offered before a selection", not has((mf or {}).actions, "start_challenge_run"))
   G.challenge_tab = G.CHALLENGES[1]
   local mf2 = D.get_force_for_state("MENU")

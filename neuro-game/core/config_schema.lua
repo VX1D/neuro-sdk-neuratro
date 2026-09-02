@@ -109,7 +109,7 @@ local entries = {
   string_value("NEURO_SELFTEST_FILTER", "SELFTEST FILTER", "SYSTEM", "", { runtime = true, panel = false }),
   toggle("NEURO_SMALL_REGRESSION", "SMALL REGRESSION", "SYSTEM", false, { runtime = true, restart_required = true }),
   toggle("NEURO_CRASH_GUARDS", "CRASH GUARDS", "SYSTEM", true, { runtime = true, restart_required = true }),
-  toggle("NEURO_CONFIRM_HAND", "CONFIRM HAND", "SYSTEM", true, { runtime = true }),
+  toggle("NEURO_CONFIRM_HAND", "HAND CONFIRMATION", "SYSTEM", true, { runtime = true }),
   toggle("NEURO_CONFIRM_REASON_ALWAYS", "CONFIRM REASON ALWAYS", "SYSTEM", true,
     { runtime = true, parent = "NEURO_CONFIRM_HAND" }),
 }

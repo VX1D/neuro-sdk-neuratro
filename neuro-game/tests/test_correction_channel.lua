@@ -61,7 +61,7 @@ local function neuro(b)
   G.NEURO = { enabled = true, decision_serial = 1, run_generation = 1, persona = "neuro",
     dispatcher = Dispatcher, actions = Actions, update = function() end,
     send_context = function(_, msg) retained[#retained + 1] = tostring(msg) return true end }
-  require("tests.helpers").stage_registered("SELECTING_HAND", { "buy_from_shop", "toggle_shop" })
+  require("tests.helpers").stage_registered("SELECTING_HAND", { "buy_from_shop", "leave_shop" })
   G.NEURO.force_inflight = false
   return b
 end
@@ -116,7 +116,7 @@ do
   local TD = require("tests.test_deadlock")
   local scenario
   for _, sc in ipairs(TD.SCENARIOS) do
-    if sc.state == "SHOP" and sc.desc:find("toggle_shop must survive", 1, true) then scenario = sc end
+    if sc.state == "SHOP" and sc.desc:find("leave_shop must survive", 1, true) then scenario = sc end
   end
   check("the shop fixture is present", scenario ~= nil)
   if scenario then
@@ -137,12 +137,12 @@ do
     require("core.transition_guard").reset()
     Enforce.reset_run_state()
     TxCache.reset()
-    require("tests.helpers").stage_registered("SHOP", { "toggle_shop" })
+    require("tests.helpers").stage_registered("SHOP", { "leave_shop" })
     G.NEURO.force_inflight = false
 
     local b = bridge()
     Dispatcher.route_message({ command = "action",
-      data = { id = "cc-3", name = "toggle_shop", data = "{}" } }, b)
+      data = { id = "cc-3", name = "leave_shop", data = "{}" } }, b)
     local last = b.results[#b.results]
     check("the confirmation is answered on the action result",
       last ~= nil and last.reason == "CONFIRMATION_REQUIRED", last and tostring(last.reason) or "none")

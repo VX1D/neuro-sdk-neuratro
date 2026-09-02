@@ -239,17 +239,17 @@ local function prepare_plan(data, required_fields, scope_snapshot, explicitly_wr
   end
 end
 
-local function handle_set_plan(data)
+local function handle_record_plan(data)
   return prepare_plan(data)
 end
 
-local function handle_set_joker_intents(data)
+local function handle_record_joker_roles(data)
   return prepare_joker_intents(data)
 end
 
 M.prepare_plan = prepare_plan
-M.handle_set_plan = handle_set_plan
-M.handle_set_joker_intents = handle_set_joker_intents
+M.handle_record_plan = handle_record_plan
+M.handle_record_joker_roles = handle_record_joker_roles
 
 if _G.NEURO_TEST then
   M.prepare_joker_intents = prepare_joker_intents

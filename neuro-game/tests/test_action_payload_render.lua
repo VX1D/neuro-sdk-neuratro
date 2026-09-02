@@ -44,7 +44,7 @@ end
 check("the sweep covered every registered action", swept == #Registry.names(), tostring(swept))
 check("the registry still has fieldless actions to protect", #fieldless >= 3, tostring(#fieldless))
 
-for _, name in ipairs({ "skip_booster", "skip_blind", "reroll_boss", "toggle_shop", "cash_out" }) do
+for _, name in ipairs({ "skip_pack", "skip_blind", "reroll_boss", "leave_shop", "cash_out" }) do
   check(name .. " is offered as " .. name .. "|{}",
     Registry.render(name, {}) == name .. "|{}", Registry.render(name, {}))
   check(name .. " renders the same with no payload argument at all",

@@ -145,7 +145,7 @@ G.FUNCS.use_card = function() return true end
 G.E_MANAGER = nil
 local rc_exec = Handle.handle_use_card({ area = "booster_pack", index = 1, _action_id = "rc-1" })
 local rc = rc_exec()
-check("receipt path returns an ActionReceipt", type(rc) == "table" and rc.name == "use_card",
+check("receipt path returns an ActionReceipt", type(rc) == "table" and rc.name == "choose_pack_card",
   tostring(rc))
 check("receipt path defers the enqueue until on_applied", #G.NEURO.purchase_showcase_queue == 0,
   tostring(#G.NEURO.purchase_showcase_queue))

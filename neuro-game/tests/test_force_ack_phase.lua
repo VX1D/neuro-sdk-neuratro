@@ -556,7 +556,7 @@ do
 
   answer(b, "buy_from_shop", BAD_BUY)
   tick_for(1)
-  local interleaved = answer(b, "set_plan", '{"hand_plan":"Flush line"}')
+  local interleaved = answer(b, "record_plan", '{"hand_plan":"Flush line"}')
   check("the interleaved answer really was accepted", interleaved.ok == true and interleaved.code == nil,
     tostring(interleaved.code) .. "/" .. tostring(interleaved.ok))
   tick_for(1)
@@ -598,12 +598,12 @@ do
   tick_for(10)
   local plan_payload = '{"hand_plan":"Flush line","build_plan":"Upgrade mult","money_plan":"Save $20"}'
   for i = 1, 3 do
-    local r = answer(b, "set_plan", plan_payload)
+    local r = answer(b, "record_plan", plan_payload)
     check("identical send " .. i .. " is still accepted", r.ok == true and r.code == nil,
       tostring(r.code) .. "/" .. tostring(r.ok))
     tick_for(1)
   end
-  local capped = answer(b, "set_plan", plan_payload)
+  local capped = answer(b, "record_plan", plan_payload)
   check("the fourth trips the repeat cap and is acknowledged, not refused",
     capped.ok == true and capped.code == "POLICY_ACKNOWLEDGED", tostring(capped.code))
   check("which parks the offer", phase() == Window.ACKNOWLEDGED, phase())
@@ -613,7 +613,7 @@ do
   check("a minute of ticks asks nothing while the budget holds",
     #forces == parked, #forces .. " forces after " .. parked)
 
-  local spent = answer(b, "set_plan", plan_payload)
+  local spent = answer(b, "record_plan", plan_payload)
   check("the second acknowledgement of this decision spends the budget",
     spent.ok == true and G.NEURO.force_last_result == "ack_exhausted",
     tostring(G.NEURO.force_last_result))
@@ -718,7 +718,7 @@ do
   local cancelled = {}
   for name in forces[1].actions:gmatch("[^,]+") do cancelled[name] = true end
   check("and the state it moves to shares a name with that offer, which is the production case",
-    cancelled.set_plan == true, forces[1].actions)
+    cancelled.record_plan == true, forces[1].actions)
 
   G.STATE = STATES.BLIND_SELECT
   G.NEURO.state = "BLIND_SELECT"

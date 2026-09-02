@@ -31,7 +31,7 @@ end
 
 world(2)
 local PlanGate = require("core.plan_gate")
-local PlanHandler = require("handlers.plan_handlers").handle_set_plan
+local PlanHandler = require("handlers.plan_handlers").handle_record_plan
 
 local function write_money_plan(text)
   local commit = PlanHandler({ money_plan = text })
@@ -45,7 +45,7 @@ check("a money_plan written with slots full is accepted and current",
     PlanGate.money_plan_is_current(G.NEURO.plan))
 
 G.consumeables.cards = { G.consumeables.cards[1] }
-PlanGate.mark_shop_changed("use_card")
+PlanGate.mark_shop_changed("use_consumable")
 check("freeing a consumable slot ages the note whose premise was that slot",
   not PlanGate.money_plan_is_current(G.NEURO.plan))
 

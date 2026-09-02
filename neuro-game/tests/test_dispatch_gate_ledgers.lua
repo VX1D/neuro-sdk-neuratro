@@ -167,7 +167,7 @@ do
   local TD = require("tests.test_deadlock")
   local scenario
   for _, sc in ipairs(TD.SCENARIOS) do
-    if sc.state == "SHOP" and sc.desc:find("toggle_shop must survive", 1, true) then scenario = sc end
+    if sc.state == "SHOP" and sc.desc:find("leave_shop must survive", 1, true) then scenario = sc end
   end
   check("the shop fixture the correction test needs is present", scenario ~= nil)
   if scenario then
@@ -187,18 +187,18 @@ do
     Enforce.reset_run_state()
 
     local b = bridge()
-    local ok_gate, _, _, code = Enforce.pre_action(b, "toggle_shop", nil)
-    check("the decision window refuses toggle_shop", ok_gate ~= true and code == "CONFIRMATION_REQUIRED",
+    local ok_gate, _, _, code = Enforce.pre_action(b, "leave_shop", nil)
+    check("the decision window refuses leave_shop", ok_gate ~= true and code == "CONFIRMATION_REQUIRED",
       tostring(code))
     local correction = tostring(Enforce.take_correction())
     check("the correction lead does not say wasn't applied when confirmation required",
       correction:find("wasn't applied", 1, true) == nil
-        and correction:find("toggle_shop needs its pending confirmation resolved first", 1, true) ~= nil, correction)
+        and correction:find("leave_shop needs its pending confirmation resolved first", 1, true) ~= nil, correction)
     check("and it names nothing beyond that past event",
       correction:find("Actions you can take now", 1, true) == nil, correction)
     local extra = 0
     for _, def in ipairs(Actions.get_valid_actions_for_state("SHOP") or {}) do
-      if def ~= "toggle_shop" and correction:find(def, 1, true) then extra = extra + 1 end
+      if def ~= "leave_shop" and correction:find(def, 1, true) then extra = extra + 1 end
     end
     check("no other callable action leaks into the retained frame", extra == 0, correction)
   end

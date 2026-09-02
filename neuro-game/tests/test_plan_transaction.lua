@@ -23,6 +23,7 @@ local function bridge()
     results = {}, contexts = {},
     send_action_result = function(self, id, ok, message, reason_code)
       self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason_code = reason_code }
+      return true, { status = "written", written_at = clock }
     end,
     send_context = function(self, message) self.contexts[#self.contexts + 1] = message end,
     unregister_actions = function() end,
@@ -165,6 +166,7 @@ do
     G.NEURO.held_plan_write ~= nil
       and G.NEURO.held_plan_write.values.build_plan == sell_payload.plan.build_plan
       and G.NEURO.held_plan_write.values.money_plan == sell_payload.plan.money_plan)
+  require("core.context_review").step_delivery()
   G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
   require("core.force_state").arm("SHOP", { "sell_card" }, { sell_card = true }, 1)
@@ -181,7 +183,7 @@ do
 end
 
 do
-  base("SHOP", { toggle_shop = true })
+  base("SHOP", { leave_shop = true })
   G.jokers.cards = { joker("j_core", "Core Joker") }
   G.NEURO.joker_intents = { j_core = { tag = "CORE" } }
   G.NEURO.shop_plan_revision_required = { build = true, money = true }
@@ -193,7 +195,7 @@ do
     G.NEURO.state = "BLIND_SELECT"
   end
   local b = bridge()
-  send("toggle_shop", "leave-inline", {
+  send("leave_shop", "leave-inline", {
     plan = { build_plan = "Keep Core Joker and add xMult.", money_plan = "Hold for interest." },
   }, b)
   check("toggle commits plan and executes once", b.results[1] and b.results[1].ok == true and leaves == 1
@@ -201,7 +203,7 @@ do
 end
 
 do
-  base("SHOP", { toggle_shop = true })
+  base("SHOP", { leave_shop = true })
   G.jokers.cards = { joker("j_core", "Core Joker") }
   G.NEURO.joker_intents = { j_core = { tag = "CORE" } }
   G.NEURO.shop_plan_revision_required = { build = true, money = true }
@@ -219,12 +221,12 @@ do
     G.NEURO.state = "BLIND_SELECT"
   end
   local b = bridge()
-  send("toggle_shop", "ack-order", {
+  send("leave_shop", "ack-order", {
     plan = { build_plan = "Keep Core Joker and add xMult.", money_plan = "Hold for interest." },
   }, b)
   DW.acknowledge = real_acknowledge
   check("decision windows acknowledge after the handler ran, not before",
-    order[1] == "exec" and order[2] == "acknowledge:toggle_shop", table.concat(order, ","))
+    order[1] == "exec" and order[2] == "acknowledge:leave_shop", table.concat(order, ","))
 end
 
 do

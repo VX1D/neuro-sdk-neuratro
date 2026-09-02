@@ -36,7 +36,7 @@ local function setup_decks_section(with_effects)
     normalize_text(selected_name), normalize_text(selected_key), #decks)
 
   if #decks > 0 then
-    lines[#lines + 1] = "Decks you can select (pass the key as change_selected_back back):"
+    lines[#lines + 1] = "Decks you can select (pass the key as select_deck back):"
     for i = 1, #decks do
       local d = decks[i]
       local key = normalize_text(d.key)
@@ -196,7 +196,7 @@ local function pack_section(state_name)
   local art = kind_name:match("^[AEIOUaeiou]") and "an" or "a"
   local lines = { string.format(
     "Opened %s %s pack -- pick %d card%s below (it is already paid for, so taking beats skipping). "
-    .. "It closes on its own after your pick(s); use skip_booster to forfeit the rest.",
+    .. "It closes on its own after your pick(s); use skip_pack to forfeit the rest.",
     art, kind_name, picks_left, picks_left == 1 and "" or "s") }
   if #bp.cards > 0 then
     lines[#lines + 1] = 'Cards in the pack (area "booster_pack"):'
@@ -220,7 +220,7 @@ local function stake_list_line()
     end
   end
   if #parts == 0 then return nil end
-  return "Stakes (pass the number as change_stake to_key; cumulative, a higher stake keeps every "
+  return "Stakes (pass the number as select_stake to_key; cumulative, a higher stake keeps every "
     .. "lower stake's effect too): " .. table.concat(parts, "; ") .. "."
 end
 

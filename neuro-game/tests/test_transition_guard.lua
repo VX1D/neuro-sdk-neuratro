@@ -14,13 +14,13 @@ G.GAME.STOP_USE = 0
 check("play_hand never blocked", not blocked("play_hand"))
 
 G.GAME.STOP_USE = 0
-check("use_card allowed when STOP_USE=0", not blocked("use_card"))
+check("use_consumable allowed when STOP_USE=0", not blocked("use_consumable"))
 G.GAME.STOP_USE = 4
-check("use_card blocked while STOP_USE>0", blocked("use_card"))
+check("use_consumable blocked while STOP_USE>0", blocked("use_consumable"))
 G.GAME.STOP_USE = 0
-check("use_card allowed again once STOP_USE clears", not blocked("use_card"))
+check("use_consumable allowed again once STOP_USE clears", not blocked("use_consumable"))
 
-for _, pair in ipairs({ { "toggle_shop", "toggle_shop" }, { "reroll_shop", "shop_reroll" }, { "skip_blind", "skip_blind" },
+for _, pair in ipairs({ { "leave_shop", "leave_shop" }, { "reroll_shop", "shop_reroll" }, { "skip_blind", "skip_blind" },
     { "select_blind", "skip_blind" } }) do
   local action, lock = pair[1], pair[2]
   G.CONTROLLER.locks = {}
@@ -43,35 +43,35 @@ CLOCK = 2000.0 + 1.5
 check("cash_out allowed after window elapses (1.5s > 1.0s)", not blocked("cash_out"))
 
 CLOCK = 2500.0
-check("skip_booster allowed before firing", not blocked("skip_booster"))
-Guard.mark("skip_booster")
-check("skip_booster blocked immediately after firing", blocked("skip_booster"))
+check("skip_pack allowed before firing", not blocked("skip_pack"))
+Guard.mark("skip_pack")
+check("skip_pack blocked immediately after firing", blocked("skip_pack"))
 CLOCK = 2500.0 + 0.5
-check("skip_booster still blocked mid-window (0.5s < 0.8s)", blocked("skip_booster"))
+check("skip_pack still blocked mid-window (0.5s < 0.8s)", blocked("skip_pack"))
 CLOCK = 2500.0 + 1.0
-check("skip_booster allowed after window elapses", not blocked("skip_booster"))
+check("skip_pack allowed after window elapses", not blocked("skip_pack"))
 
 CLOCK = 2600.0
 G.GAME.STOP_USE = 0
-check("skip_booster allowed when STOP_USE=0", not blocked("skip_booster"))
+check("skip_pack allowed when STOP_USE=0", not blocked("skip_pack"))
 G.GAME.STOP_USE = 4
-check("skip_booster blocked while STOP_USE>0 (co-gated with use_card)", blocked("skip_booster"))
-check("use_card also blocked while STOP_USE>0 (both settle together)", blocked("use_card"))
+check("skip_pack blocked while STOP_USE>0 (co-gated with use_consumable)", blocked("skip_pack"))
+check("use_consumable also blocked while STOP_USE>0 (both settle together)", blocked("use_consumable"))
 G.GAME.STOP_USE = 0
-check("skip_booster allowed again once STOP_USE clears", not blocked("skip_booster"))
+check("skip_pack allowed again once STOP_USE clears", not blocked("skip_pack"))
 
 CLOCK = 2800.0
-G.CONTROLLER.locks = { toggle_shop = true }
-check("leaked lock rejects while fresh", blocked("toggle_shop"))
+G.CONTROLLER.locks = { leave_shop = true }
+check("leaked lock rejects while fresh", blocked("leave_shop"))
 CLOCK = 2800.0 + 4.0
-check("leaked lock still rejects at 4s", blocked("toggle_shop"))
+check("leaked lock still rejects at 4s", blocked("leave_shop"))
 CLOCK = 2800.0 + 5.5
-check("leaked lock ignored after 5s (degrades, no permanent wedge)", not blocked("toggle_shop"))
-G.CONTROLLER.locks.toggle_shop = nil
+check("leaked lock ignored after 5s (degrades, no permanent wedge)", not blocked("leave_shop"))
+G.CONTROLLER.locks.leave_shop = nil
 CLOCK = 2800.0 + 6.0
-check("unlocked observation clears the leak tracker", not blocked("toggle_shop"))
-G.CONTROLLER.locks = { toggle_shop = true }
-check("fresh re-lock rejects again after a clear", blocked("toggle_shop"))
+check("unlocked observation clears the leak tracker", not blocked("leave_shop"))
+G.CONTROLLER.locks = { leave_shop = true }
+check("fresh re-lock rejects again after a clear", blocked("leave_shop"))
 G.CONTROLLER.locks = {}
 
 CLOCK = 3000.0
@@ -86,9 +86,9 @@ check("reroll_boss blocked within 0.5s window", blocked("reroll_boss"))
 CLOCK = 4000.0 + 0.6
 check("reroll_boss allowed after 0.5s (sequential Retcon rerolls unaffected)", not blocked("reroll_boss"))
 
-Guard.mark("use_card")
+Guard.mark("use_consumable")
 G.GAME.STOP_USE = 0
-check("use_card not latched by mark (STOP_USE governs it)", not blocked("use_card"))
+check("use_consumable not latched by mark (STOP_USE governs it)", not blocked("use_consumable"))
 
 CLOCK = 5000.0
 Guard.mark("cash_out")
@@ -99,31 +99,31 @@ check("reset clears the latch", not blocked("cash_out"))
 do
   Guard.reset()
   CLOCK = 2000.0
-  G.CONTROLLER.locks.toggle_shop = true
-  check("lock: held now -> blocked", blocked("toggle_shop"))
+  G.CONTROLLER.locks.leave_shop = true
+  check("lock: held now -> blocked", blocked("leave_shop"))
   CLOCK = 2002.0
-  check("lock: still held inside the window -> blocked", blocked("toggle_shop"))
+  check("lock: still held inside the window -> blocked", blocked("leave_shop"))
   CLOCK = 2006.0
-  check("lock: held past the escape while polled -> allowed", not blocked("toggle_shop"))
+  check("lock: held past the escape while polled -> allowed", not blocked("leave_shop"))
 
   CLOCK = 2100.0
-  check("lock: a genuine new lock after a polling gap is blocked again", blocked("toggle_shop"))
+  check("lock: a genuine new lock after a polling gap is blocked again", blocked("leave_shop"))
 
   CLOCK = 2101.0
-  G.CONTROLLER.locks.toggle_shop = nil
-  blocked("toggle_shop")
-  G.CONTROLLER.locks.toggle_shop = true
+  G.CONTROLLER.locks.leave_shop = nil
+  blocked("leave_shop")
+  G.CONTROLLER.locks.leave_shop = true
   CLOCK = 2102.0
-  check("lock: after a released observation the next lock blocks from scratch", blocked("toggle_shop"))
+  check("lock: after a released observation the next lock blocks from scratch", blocked("leave_shop"))
 
   Guard.reset()
   local escaped_at
   for i = 0, 20 do
     CLOCK = 3000.0 + i * 0.5
-    if not blocked("toggle_shop") then escaped_at = i * 0.5 break end
+    if not blocked("leave_shop") then escaped_at = i * 0.5 break end
   end
   check("lock: continuous polling still escapes at LOCK_LEAK_S", escaped_at == 5.0, tostring(escaped_at))
-  G.CONTROLLER.locks.toggle_shop = nil
+  G.CONTROLLER.locks.leave_shop = nil
   Guard.reset()
 end
 
@@ -137,7 +137,7 @@ do
   Guard.reset()
   G.GAME.STOP_USE = 4
   check("Guard.BUSY is exactly what reject_reason returns while blocked",
-    Guard.reject_reason("use_card") == Guard.BUSY)
+    Guard.reject_reason("use_consumable") == Guard.BUSY)
   G.GAME.STOP_USE = 0
 end
 

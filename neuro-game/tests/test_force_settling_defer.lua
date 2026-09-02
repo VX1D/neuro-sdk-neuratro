@@ -39,7 +39,7 @@ local function base(state)
     deck = { cards = {} },
     FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end,
       select_blind = function() end, skip_booster = function() end,
-      cash_out = function() end, toggle_shop = function() end },
+      cash_out = function() end, toggle_shop = function() end, use_card = function() end },
     CONTROLLER = { locks = {} },
     blind_select = {},
   }
@@ -60,7 +60,7 @@ do
   base("BLIND_SELECT")
   local full = signature("BLIND_SELECT")
   check("fixture reproduces the live BLIND_SELECT force",
-    full == "select_blind,sell_card,set_plan", tostring(full))
+    full == "select_blind,sell_card,record_plan", tostring(full))
 
   Guard.mark("select_blind")
   Router._guard_defer_at = nil
@@ -109,11 +109,11 @@ do
   local full = signature("SHOP")
   check("fixture builds a shop force", full and full:find("buy_from_shop", 1, true) ~= nil, tostring(full))
 
-  G.CONTROLLER.locks.toggle_shop = true
+  G.CONTROLLER.locks.leave_shop = true
   local sig = signature("SHOP")
   check("a locked forfeit action alone never defers the force",
     sig ~= nil and sig:find("buy_from_shop", 1, true) ~= nil
-      and sig:find("toggle_shop", 1, true) == nil, tostring(sig))
+      and sig:find("leave_shop", 1, true) == nil, tostring(sig))
 end
 
 do
@@ -138,14 +138,14 @@ do
   local sig = signature("SELECTING_HAND")
   check("a settling consumable does not defer while a hand can still be played",
     sig ~= nil and sig:find("play_hand", 1, true) ~= nil
-      and sig:find("use_card", 1, true) == nil, tostring(sig))
+      and sig:find("choose_pack_card", 1, true) == nil, tostring(sig))
 end
 
 do
   base("TAROT_PACK")
   G.pack_cards = { cards = { tarot() }, config = {} }
   local full = signature("TAROT_PACK")
-  check("fixture builds a pack force", full == "use_card,skip_booster", tostring(full))
+  check("fixture builds a pack force", full == "choose_pack_card,skip_pack", tostring(full))
 
   G.GAME.STOP_USE = 3
   check("a pack whose every action is settling defers", signature("TAROT_PACK") == nil)

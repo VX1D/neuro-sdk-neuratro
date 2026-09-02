@@ -10,7 +10,8 @@ local failed_action_warning = ForceHelpers.failed_action_warning
 local function force_pack(state_name)
   local pack_type = (state_name == "SMODS_BOOSTER_OPENED") and "BOOSTER" or state_name:gsub("_PACK", "")
   local actions, action_set, accepted = ForceHelpers.collect_actions(
-    { "use_card", "use_directional_card", "skip_booster", "sell_card" })
+    { "choose_pack_card", "choose_directional_pack_card", "use_consumable",
+      "use_directional_consumable", "skip_pack", "sell_card" })
 
   local bp = CardUtil.pack_area()
 
@@ -31,9 +32,9 @@ local function force_pack(state_name)
   if is_joker_pack and js.full then
     local has_neg_in_pack = CardUtil.area_has_negative(bp)
     slot_warn = ForceHelpers.joker_full_warn(js, has_neg_in_pack)
-    if action_set.sell_card and not action_set.use_card then
+    if action_set.sell_card and not action_set.choose_pack_card then
       sell_then_take = FactHints.emit("pack_sell_then_take",
-        "To keep a joker from this pack with slots full: sell_card one of your jokers first to free a slot, then use_card to take the pack joker (it becomes takeable once a slot opens). ")
+        "To keep a joker from this pack with slots full: sell_card one of your jokers first to free a slot, then choose_pack_card to take the pack joker (it becomes takeable once a slot opens). ")
     end
   end
 
@@ -69,7 +70,7 @@ local function force_pack(state_name)
           or ("pick " .. mn .. " to " .. mh .. " different hand positions")
         needs_sel[#needs_sel + 1] = string.format(
           "Card %d (%s) needs %d-%d hand cards. "
-          .. 'use_card|{"area":"booster_pack","index":%d,"hand_indices":[<%s>]}.',
+          .. 'choose_pack_card|{"area":"booster_pack","index":%d,"hand_indices":[<%s>]}.',
           i, nm, mn, mh, i, pick)
       end
     end
@@ -88,13 +89,13 @@ local function force_pack(state_name)
   end
 
   local take_hint = ""
-  if action_set.use_card or action_set.use_directional_card then
+  if action_set.choose_pack_card or action_set.choose_directional_pack_card then
     take_hint = FactHints.emit("pack_take",
       "When a card is takeable (you have a free slot or a hand target), taking it is almost always better than skipping. ")
   end
 
   local kind_hint = ""
-  if action_set.use_card or action_set.use_directional_card then
+  if action_set.choose_pack_card or action_set.choose_directional_pack_card then
     if is_standard then
       kind_hint = FactHints.emit("pack_std",
         "Playing cards go straight to your deck -- a Standard pick never needs a free slot. ")
@@ -105,14 +106,14 @@ local function force_pack(state_name)
   end
 
   local blocked_reason = ""
-  if not (action_set.use_card or action_set.use_directional_card)
+  if not (action_set.choose_pack_card or action_set.choose_directional_pack_card)
     and is_consumable_pack and bp and bp.cards and #bp.cards > 0 then
     blocked_reason = FactHints.emit("pack_blocked_cons",
-      "You can't take a card from this pack right now: a card that CREATES a joker/consumable needs an open slot (and a targeting card needs a valid hand target). Free a slot by using or selling an owned consumable/joker if you want it, otherwise skip_booster. ")
+      "You can't take a card from this pack right now: a card that CREATES a joker/consumable needs an open slot (and a targeting card needs a valid hand target). Free a slot by using or selling an owned consumable/joker if you want it, otherwise skip_pack. ")
   end
 
   local pack_scaling_hint = ""
-  if is_joker_pack and (action_set.use_card or action_set.use_directional_card)
+  if is_joker_pack and (action_set.choose_pack_card or action_set.choose_directional_pack_card)
     and Scoring.owned_xmult_state() == "none" then
     pack_scaling_hint = FactHints.emit("pack_scaling",
       "None of your jokers multiply your score -- prefer a joker whose text shows an X multiplier (e.g. 'X1.5 Mult'), or one that feeds a joker you own, over a flat +chips/+mult pick. ")
@@ -124,7 +125,7 @@ local function force_pack(state_name)
     if not has_planet and bp and bp.cards then
       for _, c in ipairs(bp.cards) do if CardUtil.card_set(c) == "Planet" then has_planet = true; break end end
     end
-    if has_planet and (action_set.use_card or action_set.use_directional_card) then
+    if has_planet and (action_set.choose_pack_card or action_set.choose_directional_pack_card) then
       planet_hint = FactHints.emit("pack_planet",
         "A Planet permanently levels ONE hand type -- level a type you actually play (see the Hand levels and played counts), not one you rarely make. "
         .. HandFacts.leveled_spread_note())
@@ -139,21 +140,28 @@ local function force_pack(state_name)
     return table.concat(out, " or ")
   end
   local move_bits = {}
-  if accepted.use_card then
-    local rendered = candidates("use_card")
+  if accepted.choose_pack_card then
+    local rendered = candidates("choose_pack_card")
     if rendered ~= "" then move_bits[#move_bits + 1] = rendered end
   end
-  if accepted.use_directional_card then
-    move_bits[#move_bits + 1] = ActionRegistry.prompt("use_directional_card")
+  if accepted.choose_directional_pack_card then
+    move_bits[#move_bits + 1] = ActionRegistry.prompt("choose_directional_pack_card")
   end
-  if accepted.skip_booster then
-    move_bits[#move_bits + 1] = ActionRegistry.render("skip_booster", {})
+  if accepted.skip_pack then
+    move_bits[#move_bits + 1] = ActionRegistry.render("skip_pack", {})
       .. " (take nothing from this pack and move on; the pack is already paid for, so skipping costs"
       .. " no money and no slot)"
   end
   if accepted.sell_card then
     local rendered = candidates("sell_card")
     if rendered ~= "" then move_bits[#move_bits + 1] = rendered end
+  end
+  if accepted.use_consumable then
+    local rendered = candidates("use_consumable")
+    if rendered ~= "" then move_bits[#move_bits + 1] = rendered end
+  end
+  if accepted.use_directional_consumable then
+    move_bits[#move_bits + 1] = ActionRegistry.prompt("use_directional_consumable")
   end
   local area_bits = { 'booster_pack = the cards in the pack ('
     .. ForceHelpers.index_range((bp and bp.cards) and #bp.cards or 0) .. ')' }
@@ -168,9 +176,9 @@ local function force_pack(state_name)
     or ""
 
   local plan_window = FactHints.plan_note("pack")
-  if action_set.skip_booster then
+  if action_set.skip_pack then
     plan_window = plan_window .. FactHints.emit("pack_pick_fit",
-      "Pick the card that fits your build and plan -- your jokers and hand levels are shown above. A Planet levels the hand you play most; a Tarot/Spectral/Joker should support your build, not just any card. If none of them do, skip_booster is a real option rather than a forfeit. ")
+      "Pick the card that fits your build and plan -- your jokers and hand levels are shown above. A Planet levels the hand you play most; a Tarot/Spectral/Joker should support your build, not just any card. If none of them do, skip_pack is a real option rather than a forfeit. ")
   end
 
   local bank_line = (G and G.GAME and G.GAME.dollars ~= nil)
