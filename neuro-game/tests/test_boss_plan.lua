@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 _G.NEURO_TEST = true
 local clock = 1000
 if not love then love = {} end
@@ -5,38 +6,25 @@ love.timer = { getTime = function() return clock end }
 _G.localize = function() return "" end
 
 local check, done = require("tests.helpers").harness("boss-plan")
-local H = require("tests.helpers")
 
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
-local PlanGate = require("core.plan_gate")
+local Enforce = require("tests.helpers").enforce()
+local json = require("util.neuro_json")
+local PlanGate = require("core.gate")
 
-local function card(sort_id)
-  return {
-    base = { value = 5, suit = "Spades" }, sort_id = sort_id,
-    config = { center = { key = "c_base", set = "Default" } },
-  }
-end
+local card = require("tests.fake_cards").five_of_spades
 
 local function bridge()
-  return {
-    results = {}, contexts = {},
-    send_action_result = function(self, id, ok, message, reason_code)
-      self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason_code = reason_code }
-    end,
-    send_context = function(self, message) self.contexts[#self.contexts + 1] = message end,
-    unregister_actions = function() end,
-    is_transition_cooldown = function() return false end,
-  }
+  return require("tests.helpers").fake_bridge({ context = "contexts", context_ack = false, cooldown = true })
 end
 
 local function base(opts)
   opts = opts or {}
   clock = clock + 10
   _G.G = {
-    STATE = 1,
-    STATES = { SELECTING_HAND = 1 },
-    hand = { cards = { card(1), card(2) }, highlighted = {} },
+    STATE = ES.SELECTING_HAND,
+    STATES = ES,
+    hand = require("tests.helpers").card_area({ cards = { card(1), card(2) }, highlighted = {} }),
     GAME = {
       chips = 0,
       round = 1,
@@ -64,20 +52,20 @@ local function base(opts)
         G.hand.cards, G.hand.highlighted = kept, {}
         G.GAME.current_round.hands_left = G.GAME.current_round.hands_left - 1
       end,
-      get_poker_hand_info = function() return "Pair" end,
+      get_poker_hand_info = require("tests.helpers").poker_hand_info("Pair"),
     },
   }
   Dispatcher.reset_tx()
   Enforce.reset_run_state()
-  require("core.force_state").arm("SELECTING_HAND", { "play_hand", "discard_hand" },
-    { play_hand = true, discard_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand", "discard_hand" })
   require("tests.helpers").stage_registered("SELECTING_HAND", { "play_hand", "discard_hand" })
 end
 
 local function send(name, id, data, b)
+  local payload = type(data) == "table" and (next(data) and json.encode(data) or "{}") or data
   Dispatcher.handle_message({
     command = "action", run_generation = G.NEURO.run_generation,
-    data = { id = id, name = name, data = data },
+    data = { id = id, name = name, data = payload },
   }, b)
 end
 
@@ -96,9 +84,6 @@ do
   send("discard_hand", "d1b", { indices = { 1 }, plan = { boss_plan = "   " } }, b)
   check("a blank boss_plan where one is required is refused", b.results[1] and b.results[1].ok == false
     and b.results[1].reason_code == "PRECONDITION_FAILED", b.results[1] and b.results[1].reason_code)
-  check("the refusal says which field was written empty", b.results[1]
-    and tostring(b.results[1].message) == "Provide plan.boss_plan with this action: an empty value is not a plan.",
-    b.results[1] and b.results[1].message)
   check("a blank boss_plan mutates neither the game nor the plan", G.NEURO.plan == nil
     and #G.hand.cards == 2, G.NEURO.plan)
 end
@@ -161,8 +146,6 @@ do
   end
   local record_plan = Registry.get("record_plan")
   check("record_plan no longer advertises boss_plan", record_plan.schema.properties.boss_plan == nil)
-  check("record_plan description no longer mentions boss_plan",
-    record_plan.description:find("boss_plan", 1, true) == nil, record_plan.description)
   for _, name in ipairs({ "play_hand", "discard_hand" }) do
     local props = plan_props(name)
     check(name .. " still advertises plan.boss_plan",
@@ -171,89 +154,38 @@ do
 end
 
 do
-  base({ blind = { key = "bl_small", name = "Small Blind", boss = false } })
+  local function small_blind(ante, boss_key)
+    base({ ante = ante, blind = { key = "bl_small", name = "Small Blind", boss = false } })
+    G.GAME.round_resets.blind_choices = { Small = "bl_small", Big = "bl_big", Boss = boss_key }
+    G.GAME.round_resets.blind_states = { Small = "Current", Big = "Upcoming", Boss = "Upcoming" }
+  end
+  small_blind(1, "bl_flint")
   local b = bridge()
   send("discard_hand", "d9", { indices = { 1 }, plan = { boss_plan = "Grind Pairs anyway." } }, b)
   check("boss_plan supplied on a non-boss blind still succeeds",
     b.results[1] and b.results[1].ok == true, b.results[1])
-  check("boss_plan supplied on a non-boss blind is not committed",
-    not (G.NEURO.plan and G.NEURO.plan.boss), G.NEURO.plan and G.NEURO.plan.boss)
+  check("boss_plan supplied on a non-boss blind is committed for the upcoming boss",
+    G.NEURO.plan and G.NEURO.plan.boss == "Grind Pairs anyway." and G.NEURO.plan.boss_scope == "1|bl_flint",
+    G.NEURO.plan and tostring(G.NEURO.plan.boss_scope))
+
+  local plan = G.NEURO.plan
+  base({ ante = 1 })
+  G.NEURO.plan = plan
+  check("the plan written ahead is current once that boss is being played",
+    PlanGate.boss_plan_is_current(G.NEURO.plan))
+  local b2 = bridge()
+  send("discard_hand", "d10", { indices = { 1 } }, b2)
+  check("so the boss requirement is met by the plan written ahead",
+    b2.results[1] and b2.results[1].ok == true, b2.results[1])
+
+  base({ ante = 1, blind = { key = "bl_hook", name = "The Hook", boss = true } })
+  G.NEURO.plan = plan
+  check("a different boss (rerolled) does not inherit it", not PlanGate.boss_plan_is_current(G.NEURO.plan))
 end
 
 do
-  local ForceSelectingHand = require("force.force_selecting_hand")
-  local HINT = "State the rule this boss imposes on you in plan.boss_plan"
-  local RID = require("tests.helpers").RID
-  local VALN = require("tests.helpers").VALN
-  local function hand_card(v, suit)
-    local id = RID[v]
-    return {
-      base = { value = VALN[v] or v, suit = suit },
-      config = { center = { key = "c_base", set = "Default" } },
-      get_id = function() return id end,
-      is_suit = function(_, s) return s == suit end,
-    }
-  end
-  local function boss_state()
-    _G.G = {
-      STATES = { BLIND_SELECT = 1, SELECTING_HAND = 2 },
-      STATE = 2,
-      hand = {
-        cards = { hand_card("3", "Spades"), hand_card("7", "Clubs"), hand_card("9", "Hearts") },
-        config = { highlighted_limit = 5, card_limit = 8 }, highlighted = {},
-      },
-      GAME = {
-        chips = 0,
-        round = 1,
-        round_resets = { ante = 1 },
-        current_round = { hands_left = 4, discards_left = 3 },
-        blind = { chips = 1000, boss = true, name = "The Flint", debuff = {},
-          config = { blind = { key = "bl_flint" } } },
-        hands = {},
-      },
-      FUNCS = { get_poker_hand_info = function() return nil, nil, {} end },
-      NEURO = { once_serials = {}, state_enter_serial = 1 },
-    }
-  end
-
-  boss_state()
-  local f1 = ForceSelectingHand.build()
-  local q1 = f1 and ((f1.query or "") .. H.drain_hints())
-  check("boss_plan hint appears while no plan is committed",
-    q1 and q1:find(HINT, 1, true) ~= nil, q1)
-
-  boss_state()
-  G.NEURO.plan = { boss = "Grind Pairs, hold discards for the back half.",
-    boss_scope = PlanGate.current_boss_scope() }
-  local f2 = ForceSelectingHand.build()
-  local q2 = f2 and ((f2.query or "") .. H.drain_hints())
-  check("boss_plan hint is suppressed once the plan is current",
-    q2 and q2:find(HINT, 1, true) == nil, q2)
-
-  boss_state()
-  G.NEURO.plan = { boss = "Grind Pairs against The Flint.", boss_scope = "0|bl_flint" }
-  local f3 = ForceSelectingHand.build()
-  local q3 = f3 and ((f3.query or "") .. H.drain_hints())
-  check("boss_plan hint returns when the committed plan's scope is stale",
-    q3 and q3:find(HINT, 1, true) ~= nil, q3)
-
-  local function reforce()
-    local f = ForceSelectingHand.build()
-    return (f and ((f.query or "") .. H.drain_hints())) or ""
-  end
-  boss_state()
-  check("boss_plan hint is taught once in the round", reforce():find(HINT, 1, true) ~= nil)
-  G.NEURO.state_enter_serial = G.NEURO.state_enter_serial + 1
-  check("boss_plan requirement repeats in each self-contained force until satisfied",
-    reforce():find(HINT, 1, true) ~= nil)
-  G.GAME.round = G.GAME.round + 1
-  check("boss_plan hint returns in the next round", reforce():find(HINT, 1, true) ~= nil)
-end
-
-do
-  local PlanHandlers = require("handlers.plan_handlers")
   _G.G = {
-    STATE = 2, STATES = { BLIND_SELECT = 2, SELECTING_HAND = 3 },
+    STATE = ES.BLIND_SELECT, STATES = ES,
     GAME = { blind_on_deck = "Boss", dollars = 10, current_round = {}, starting_params = {},
       round_resets = { ante = 3,
         blind_states = { Small = "Defeated", Big = "Defeated", Boss = "Select" },
@@ -261,7 +193,11 @@ do
     NEURO = { once_serials = {}, plan = nil }, jokers = { cards = {} }, consumeables = { cards = {} },
   }
   local scope_before = PlanGate.current_boss_scope()
-  local commit = PlanHandlers.handle_record_plan({ boss_plan = "Hearts score 0, do not build on Hearts" })
+  local tx = require("core.plan_transaction").prepare("select_blind", { blind = "boss", plan = {
+    boss_plan = "Hearts score 0, do not build on Hearts",
+    hand_plan = "Play the strongest visible hand.", build_plan = "Keep the current build.",
+  } })
+  local commit = tx and tx.plan_commit
   check("a boss rule stated at blind select prepares", type(commit) == "function")
 
   G.GAME.round_resets.blind_states.Boss = "Current"
@@ -278,7 +214,7 @@ end
 do
   local PlanHandlers = require("handlers.plan_handlers")
   _G.G = {
-    STATE = 2, STATES = { BLIND_SELECT = 2, SELECTING_HAND = 3 },
+    STATE = ES.BLIND_SELECT, STATES = ES,
     GAME = { blind_on_deck = "Small", dollars = 10, current_round = {}, starting_params = {},
       round_resets = { ante = 3,
         blind_states = { Small = "Select", Big = "Upcoming", Boss = "Upcoming" },

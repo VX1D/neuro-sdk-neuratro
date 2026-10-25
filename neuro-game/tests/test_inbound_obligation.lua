@@ -8,11 +8,10 @@ local check, done = require("tests.helpers").harness("inbound-obligation")
 
 local Bridge = require("core.bridge")
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
+local Enforce = require("tests.helpers").enforce()
 local Actions = require("core.actions")
-local ForceState = require("core.force_state")
 local Staging = require("core.staging")
-local TxCache = require("core.tx_cache")
+local TxCache = require("core.bridge").tx
 local ActionRegistry = require("core.action_registry")
 local json = require("util.neuro_json")
 
@@ -25,40 +24,6 @@ local id_slot = Harness.id_slot
 local feed, frames, run, action_line = H.feed, H.frames, H.run, H.action_line
 
 local PLAY = '{"indices":[1,2]}'
-
-local documented_drop_labels = {
-  route_no_message = true,
-  route_abandoned_id = true,
-  route_missing_action_id = true,
-  route_staged = true,
-  handle_no_command = true,
-  handle_abandon_command = true,
-  handle_abandon_malformed = true,
-  handle_abandoned_id = true,
-  handle_missing_action_id = true,
-  handle_prepared_generation_abort = true,
-  handle_reregister_all = true,
-  handle_reregister_no_state_actions = true,
-  handle_startup = true,
-  handle_non_action = true,
-  validate_message_non_action = true,
-  validate_message_abandoned_id = true,
-  validate_message_missing_action_id = true,
-}
-
-local function key_diff(a, b)
-  local out = {}
-  for key in pairs(a) do if not b[key] then out[#out + 1] = key end end
-  table.sort(out)
-  return table.concat(out, ",")
-end
-
-check("every dispatcher drop label is covered by the inbound obligation model",
-  key_diff(Dispatcher._test.drop_labels, documented_drop_labels) == "",
-  key_diff(Dispatcher._test.drop_labels, documented_drop_labels))
-check("the inbound obligation model names no obsolete dispatcher drop label",
-  key_diff(documented_drop_labels, Dispatcher._test.drop_labels) == "",
-  key_diff(documented_drop_labels, Dispatcher._test.drop_labels))
 
 local CASES = {
   { "a spec-exact action frame carrying no run_generation",
@@ -74,12 +39,12 @@ local CASES = {
       feed({ '{"command":"action","data":{"id":"sess-2","session_id":"OLD","name":"play_hand","data":' .. json.encode(PLAY) .. '}}' })
       H.bridge:poll_inbox()
     end, { ["sess-2"] = 1 } },
-  { "D2 a numeric id", function() feed({ action_line(42, "play_hand", "{}") }); H.bridge:poll_inbox() end,
-    { ["42"] = 1 } },
-  { "D2 a boolean id", function() feed({ action_line(true, "play_hand", "{}") }); H.bridge:poll_inbox() end,
-    { ["true"] = 1 } },
-  { "D2 an empty-string id", function() feed({ action_line("", "play_hand", "{}") }); H.bridge:poll_inbox() end,
-    { [""] = 1 } },
+  { "D2 a numeric id is silently dropped", function() feed({ action_line(42, "play_hand", "{}") }); H.bridge:poll_inbox() end,
+    {} },
+  { "D2 a boolean id is silently dropped", function() feed({ action_line(true, "play_hand", "{}") }); H.bridge:poll_inbox() end,
+    {} },
+  { "D2 an empty-string id is silently dropped", function() feed({ action_line("", "play_hand", "{}") }); H.bridge:poll_inbox() end,
+    {} },
   { "D2 no id at all, which cannot be addressed",
     function() feed({ '{"command":"action","data":{"name":"play_hand","data":"{}"}}' }); H.bridge:poll_inbox() end,
     {}, 0 },
@@ -117,15 +82,15 @@ local CASES = {
       feed({ '{"command":"neuro-bridge/abandon","data":{"ids":7}}', action_line("after-5b") })
       H.bridge:poll_inbox()
     end, { ["after-5b"] = 1 } },
-  { "a numeric id does not consume the ledger slot of the equal string id",
+  { "a numeric id is dropped without consuming the equal string id",
     function() feed({ action_line(7, "play_hand", "{}"), action_line("7") }); H.bridge:poll_inbox() end,
-    { ["7"] = 2 } },
-  { "a string id does not consume the ledger slot of the equal numeric id",
+    { ["7"] = 1 } },
+  { "a string id is answered while the equal numeric id is dropped",
     function() feed({ action_line("8"), action_line(8, "play_hand", "{}") }); H.bridge:poll_inbox() end,
-    { ["8"] = 2 } },
-  { "a boolean id does not consume the ledger slot of the string \"true\"",
+    { ["8"] = 1 } },
+  { "a boolean id is dropped without consuming the string \"true\"",
     function() feed({ action_line(true, "play_hand", "{}"), action_line("true") }); H.bridge:poll_inbox() end,
-    { ["true"] = 2 } },
+    { ["true"] = 1 } },
   { "an unregistered action name",
     function() feed({ action_line("unreg-1", "no_such_action", "{}") }); H.bridge:poll_inbox() end,
     { ["unreg-1"] = 1 } },
@@ -144,17 +109,17 @@ local CASES = {
   { "an action arriving while the operator has the model paused",
     function() H.bridge.llm_paused = true; feed({ action_line("pause-1") }); H.bridge:poll_inbox() end,
     { ["pause-1"] = 1 } },
-  { "a reconnect bumping the generation under a staged action",
+  { "a reconnect cancels a staged action without replaying it",
     function()
       feed({ action_line("recon-1") }); H.bridge:poll_inbox(); frames(2)
-      feed({ '{"command":"actions/reregister_all","transport_session":2}' }); H.bridge:poll_inbox()
+      feed({ '{"command":"neuro-bridge/reregister_all","transport_session":2}' }); H.bridge:poll_inbox()
     end, { ["recon-1"] = 1 } },
   { "a second action replacing a staged one",
     function() feed({ action_line("rep-1"), action_line("rep-2") }); H.bridge:poll_inbox() end,
     { ["rep-1"] = 1, ["rep-2"] = 1 } },
   { "the game state changing under a staged action",
     function()
-      feed({ action_line("state-1") }); H.bridge:poll_inbox(); frames(2); G.STATE = 987
+      feed({ action_line("state-1") }); H.bridge:poll_inbox(); frames(2); G.STATE = G.STATES.HAND_PLAYED
     end, { ["state-1"] = 1 } },
   { "an abandon frame for an id already staged",
     function()
@@ -164,15 +129,17 @@ local CASES = {
   { "D7 an outbox that refuses writes while the result is produced",
     function()
       feed({ action_line("io-1") })
-      local real_append = H.bridge.append_file
-      H.bridge.append_file = function() return false end
+      H.bridge._append = function() return 0 end
       H.bridge:poll_inbox(); frames(10)
-      H.bridge.append_file = real_append
+      H.bridge._append = nil
       H.bridge:update(0)
     end, { ["io-1"] = 1 } },
   { "an id 4000 bytes long",
     function() feed({ action_line(string.rep("z", 4000)) }); H.bridge:poll_inbox() end,
     { [string.rep("z", 4000)] = 1 } },
+  { "an id within the frame bound",
+    function() feed({ action_line(string.rep("x", 17000)) }); H.bridge:poll_inbox() end,
+    { [string.rep("x", 17000)] = 1 } },
   { "a receipt still in flight when the next action arrives",
     function()
       feed({ action_line("rc-1") }); H.bridge:poll_inbox(); frames(6)
@@ -181,7 +148,7 @@ local CASES = {
   { "non-action frames owe nothing",
     function()
       feed({ '{"command":"startup","data":{"session":{"sessionId":"s","characterId":"neuro"}}}',
-        '{"command":"actions/reregister_all","transport_session":1}',
+        '{"command":"neuro-bridge/reregister_all","transport_session":1}',
         '{"command":"neuro-bridge/nonsense"}', '{"command":"context","data":{"message":"hi"}}', '{}' })
       H.bridge:poll_inbox()
     end, {}, 0 },
@@ -219,7 +186,7 @@ end
 
 do
   local names = {}
-  for _, contract in ipairs(ActionRegistry.all()) do names[#names + 1] = contract.name end
+  for _, contract in ipairs(require("tests.helpers").registry_contracts()) do names[#names + 1] = contract.name end
   table.sort(names)
   check("the conforming sweep has an action catalog", #names > 10, #names)
   local payloads = { "{}", '{"indices":[1,2]}', '{"index":1}', '{"area":"jokers","index":1,"name":"Mock"}' }
@@ -251,22 +218,131 @@ do
   for _, pair in ipairs({ { 7, "7" }, { true, "true" }, { 1.5, "1.5" } }) do
     local a, b = pair[1], pair[2]
     TxCache.reset()
-    check("open/claim on " .. tostring(a) .. " leaves " .. tostring(b) .. " claimable",
-      TxCache.open(a, "play_hand", 0) == true and TxCache.claim(a) == true
-        and TxCache.open(b, "play_hand", 0) == true and TxCache.claim(b) == true)
-    TxCache.reset()
-    check("a verdict stored for " .. tostring(a) .. " is not replayed for " .. tostring(b),
-      (function()
-        TxCache.store(a, true, "for-a", "play_hand", nil)
-        return TxCache.get(a) ~= nil and TxCache.get(b) == nil
-      end)())
+    check("a non-string id " .. tostring(a) .. " books nothing",
+      TxCache.open(a, "play_hand", 0) == false
+        and TxCache.store(a, true, "for-a", "play_hand", nil) == false
+        and #TxCache.outstanding(0) == 0 and TxCache.get(a) == nil)
+    check("and the addressable string id " .. string.format("%q", b) .. " is unaffected",
+      TxCache.open(b, "play_hand", 0) == true and #TxCache.outstanding(0) == 1)
   end
   TxCache.reset()
-  TxCache.open(9, "play_hand", 0)
+  TxCache.open("9", "play_hand", 0)
   local due = TxCache.outstanding(0)
-  check("the sweep echoes the id with the type the frame carried",
-    #due == 1 and due[1].key == 9 and type(due[1].key) == "number",
+  check("the sweep echoes the id exactly as the frame carried it",
+    #due == 1 and due[1].key == "9" and type(due[1].key) == "string",
     #due == 1 and tostring(due[1].key) .. "/" .. type(due[1].key) or #due)
+  TxCache.reset()
+end
+
+local function result_ids(path)
+  local out = {}
+  for _, frame in ipairs(require("tests.helpers").outbox_frames(path, { command = "action/result" })) do
+    out[#out + 1] = frame.data.id
+  end
+  return out
+end
+
+do
+  TxCache.reset()
+  local sub = dir .. "/sweep"
+  os.execute("mkdir -p '" .. sub .. "'")
+  local b = Bridge:new({ enabled = true, fs_dir = sub })
+  b:set_message_handler(function() end)
+  CLOCK.t = 2000
+  G.TIMERS.REAL = CLOCK.t
+  b:_deliver_inbox_message({ command = "action", data = { id = "late-1", name = "play_hand", data = "{}" } })
+  b:answer_owed_results(Bridge.RESULT_DEADLINE_SECS)
+  check("an unanswered action is not paid before its deadline", #result_ids(sub .. "/neuro_outbox.jsonl") == 0)
+  CLOCK.t = CLOCK.t + Bridge.RESULT_DEADLINE_SECS
+  G.TIMERS.REAL = CLOCK.t
+  b:answer_owed_results(Bridge.RESULT_DEADLINE_SECS)
+  b:answer_owed_results(Bridge.RESULT_DEADLINE_SECS)
+  local ids = result_ids(sub .. "/neuro_outbox.jsonl")
+  check("the deadline sweep answers it exactly once", #ids == 1 and ids[1] == "late-1", #ids)
+  check("and a handler answering afterwards cannot add a second result",
+    b:send_action_result("late-1", false, "late") == false
+      and #result_ids(sub .. "/neuro_outbox.jsonl") == 1)
+  local prior = G.NEURO
+  G.NEURO = b
+  b._registered_sigs = b._registered_sigs or {}
+  b._registered_sigs.play_hand, b._registered_sigs.discard_hand = true, true
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand", "discard_hand" })
+  b:_deliver_inbox_message({ command = "action", data = { id = "late-2", name = "play_hand", data = "{}" } })
+  CLOCK.t = CLOCK.t + Bridge.RESULT_DEADLINE_SECS
+  G.TIMERS.REAL = CLOCK.t
+  b:answer_owed_results(Bridge.RESULT_DEADLINE_SECS)
+  local f = io.open(sub .. "/neuro_outbox.jsonl", "rb")
+  local raw = f and f:read("*a") or ""
+  if f then f:close() end
+  local unreg = raw:find('"actions/unregister"', 1, true)
+  local paid = raw:find('"late-2"', 1, true)
+  check("a swept success on the open force takes its whole offer off first (ActionWindowResponse.cs:20)",
+    unreg ~= nil and paid ~= nil and unreg < paid
+      and raw:find('"discard_hand"', unreg, true) ~= nil and require("core.window").current() == nil)
+  G.NEURO = prior
+  local wide = string.rep("\1", math.floor((Bridge.MAX_ACTION_ID_BYTES - 2) / 6))
+  check("the widest addressable id is still answered with its own verdict",
+    b:send_action_result(wide, false, "verdict") == true
+      and result_ids(sub .. "/neuro_outbox.jsonl")[3] == wide)
+  TxCache.reset()
+end
+
+do
+  local handled, window = 0, nil
+  local r = run(function()
+    feed({ action_line("dup-1", "help", "{}") }); H.bridge:poll_inbox(); frames(4)
+    local route = H.bridge.on_message
+    H.bridge:set_message_handler(function(msg) handled = handled + 1; return route(msg) end)
+    window = { phase = "forced", names = { "play_hand" }, set = { play_hand = true }, state = "SELECTING_HAND" }
+    H.bridge.force_window = window
+    feed({ action_line("dup-1", "help", "{}") }); H.bridge:poll_inbox()
+    feed({ action_line("dup-1", "help", "{}") }); H.bridge:poll_inbox()
+    H.bridge.force_window = nil
+  end)
+  check("a redelivered answered id gets no second result",
+    r.ok and (r.counts[id_slot("dup-1")] or 0) == 1, tostring(r.counts[id_slot("dup-1")]))
+  check("without re-executing or touching the open window",
+    handled == 0 and window.phase == "forced" and window.ended_by == nil, handled)
+end
+
+do
+  TxCache.reset()
+  local sub = dir .. "/owed_dup"
+  os.execute("mkdir -p '" .. sub .. "'")
+  local b = Bridge:new({ enabled = true, fs_dir = sub })
+  local handled = 0
+  b:set_message_handler(function() handled = handled + 1 end)
+  local frame = { command = "action", data = { id = "owed-dup", name = "help", data = "{}" } }
+  b:_deliver_inbox_message(frame)
+  b:_deliver_inbox_message(frame)
+  check("a redelivered id still owed its result reaches the dispatcher once", handled == 1, handled)
+  TxCache.reset()
+end
+
+do
+  TxCache.reset()
+  local sub = dir .. "/quit"
+  os.execute("mkdir -p '" .. sub .. "'")
+  local b = Bridge:new({ enabled = true, fs_dir = sub })
+  b:set_message_handler(function() end)
+  G.NEURO = b
+  b:register_actions({ { name = "play_hand", description = "play", schema = { type = "object" } } })
+  b:_deliver_inbox_message({ command = "action", data = { id = "quit-1", name = "play_hand", data = "{}" } })
+  b:_deliver_inbox_message({ command = "action", data = { id = "quit-2", name = "play_hand", data = "{}" } })
+  local quit_called = false
+  love.quit = function() quit_called = true end
+  require("core.bridge_init").hook_love_quit()
+  love.quit()
+  local ids = result_ids(sub .. "/neuro_outbox.jsonl")
+  table.sort(ids)
+  check("quit answers every outstanding action exactly once",
+    #ids == 2 and ids[1] == "quit-1" and ids[2] == "quit-2", #ids)
+  local f = io.open(sub .. "/neuro_outbox.jsonl", "rb")
+  local raw = f:read("*a")
+  f:close()
+  check("and withdraws the catalogue before the original quit runs",
+    raw:find('"actions/unregister"', 1, true) ~= nil and quit_called)
+  G.NEURO = H.bridge
   TxCache.reset()
 end
 
@@ -281,12 +357,9 @@ do
     #due == 1 and due[1].key == "no-handler-1", #due == 1 and tostring(due[1].key) or #due)
 
   local paid = {}
-  handlerless.send_action_result = function(_, id, ok, message)
-    paid[#paid + 1] = { id = id, ok = ok, message = message }
-    return true
-  end
+  handlerless.send_action_result = require("tests.helpers").result_log(paid, { "id", "ok", "message" }, true)
   handlerless:answer_owed_results(0, "swept")
-  check("119: and the deadline sweep pays it, so the client is never left waiting",
+  check("119: and the deadline sweep acknowledges it, so the client is never left waiting",
     #paid == 1 and paid[1].id == "no-handler-1" and paid[1].ok == true,
     #paid == 1 and tostring(paid[1].id) or #paid)
   TxCache.reset()

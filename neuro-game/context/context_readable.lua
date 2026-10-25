@@ -1,134 +1,191 @@
 local ContextReadable = {}
 
+
+local Utils = require("util.utils")
 local ContextCompact = require("context.context_compact")
 local CtxHelpers = require("context.ctx_helpers")
-
-local SUPPORTED = {
-  SELECTING_HAND = true, SHOP = true, BLIND_SELECT = true, ROUND_EVAL = true,
-  TAROT_PACK = true, PLANET_PACK = true, SPECTRAL_PACK = true, STANDARD_PACK = true,
-  BUFFOON_PACK = true, SMODS_BOOSTER_OPENED = true,
-  MENU = true, RUN_SETUP = true, GAME_OVER = true, SPLASH = true,
-}
-ContextReadable.SUPPORTED = SUPPORTED
+local StateDoc = require("context.state_doc")
 
 local VALUE_LONG = CtxHelpers.VALUE_LONG
 
-local function v_FRAME(line) local t = line:gsub("^FRAME|", ""); return (t ~= "" and t) or nil end
-local function v_RUN(line) local t = line:gsub("^RUN|", ""); return (t ~= "" and t) or nil end
-
-local HANDLERS = {
-  FRAME = v_FRAME, RUN = v_RUN,
-  STATE = function() return nil end,
-}
-
-local function line_id(line)
-  if line:find("^STATE:") then return "STATE" end
-  return line:match("^([A-Z][A-Z_0-9]*)[:|%[%(]")
-end
-
-local function process_lines(board, out)
-  for line in (board .. "\n"):gmatch("([^\n]*)\n") do
-    if line ~= "" then
-      local id = line_id(line)
-      local h = id and HANDLERS[id]
-      if h then
-        local s = h(line)
-        if s and s ~= "" then out[#out + 1] = s end
-      else
-        out[#out + 1] = line
-      end
-    end
-  end
-end
-
-local function verbalize(board)
-  local out = {}
-  process_lines(board, out)
-  return table.concat(out, "\n")
-end
+local TAGGED = { FRAME = "^FRAME|", RUN = "^RUN|", STATE = "^.*" }
 
 local function verbalize_sections(list)
   local out = {}
   for _, section in ipairs(list) do
-    if section and section ~= "" then process_lines(section, out) end
+    for line in ((section or "") .. "\n"):gmatch("([^\n]*)\n") do
+      if line ~= "" then
+        local tag = TAGGED[line:find("^STATE:") and "STATE" or line:match("^([A-Z][A-Z_0-9]*)[:|%[%(]")]
+        local s = tag and line:gsub(tag, "") or line
+        if s ~= "" then out[#out + 1] = s end
+      end
+    end
   end
   return table.concat(out, "\n")
 end
 
-function ContextReadable.structure_prose(s)
-  if type(s) ~= "string" or s == "" then return s end
-  s = s:gsub("Structure: pairs>=2:(%d+) trips>=3:(%d+) quads>=4:(%d+) top:(%S+) suit_max:(%d+) run_max:(%d+)%.",
-    function(p, t, q, top, sm, rm)
-      local topw = (top == "-" and "none") or (VALUE_LONG[top] or top)
-      return string.format(
-        "Shape: %s pair or better, %s three-of-a-kind or better, %s four-of-a-kind; highest repeated rank %s; most cards of one suit %s; longest run %s.",
-        p, t, q, topw, sm, rm)
-    end)
-  s = s:gsub("%(lv([%d%.]+) ([%d%.e%+]+)c x([%d%.e%+]+)%)", "(level %1, %2 chips x%3 mult)")
-  s = s:gsub("%(J([%dJ,]+) appl%a+%)", function(js)
-    local nums = js:gsub("J", ""):gsub(",", ", ")
-    local verb = js:find(",", 1, true) and "apply" or "applies"
-    return "(joker " .. nums .. " " .. verb .. ")"
-  end)
-  s = s:gsub("%(J([%dJ,]+) ([%+x][%d%.%+cmx ]*)%)", function(js, vals)
-    local nums = js:gsub("J", ""):gsub(",", ", ")
-    local parts = {}
-    for v in vals:gmatch("%S+") do
-      if v:find("^%+") and v:find("c$") then parts[#parts + 1] = v:gsub("c$", " chips")
-      elseif v:find("^%+") and v:find("m$") then parts[#parts + 1] = v:gsub("m$", " mult")
-      elseif v:find("^x") then parts[#parts + 1] = v .. " mult"
-      else parts[#parts + 1] = v end
+local function verbalize(board) return verbalize_sections({ board }) end
+
+local function cards_list(ix) return table.concat(ix, ", ") end
+
+local function attach(out, piece)
+  if piece == "" then return out end
+  if piece:sub(1, 1) == "(" and out:find("[%d%)]$") then return out .. " " .. piece end
+  return out .. piece
+end
+
+local function attach_all(out, pieces)
+  for _, p in ipairs(pieces) do out = attach(out, p) end
+  return out
+end
+
+local function faced_prose(d)
+  if not d.faced then return "" end
+  return string.format("; up to %d face card%s, dealt face down, would complete it too, so the real chance is higher",
+    d.faced, d.faced == 1 and "" or "s")
+end
+
+local DRAW_ASSUMPTION = "you discard as many of the others listed as you may"
+
+local function draw_prose(d, shared)
+  if type(d) ~= "table" then return "" end
+  local assumption = shared and "" or (" if " .. DRAW_ASSUMPTION)
+  if d.lo then
+    return string.format(
+      "(%d to %d of the %d draw-pile cards complete it, depending on which cards are face down; %d-%d%% chance to hit one%s%s)",
+      d.lo, d.n, d.m, d.plo, d.pct, assumption, faced_prose(d))
+  end
+  return string.format(
+    "(%d of the %d draw-pile cards complete it; %d%% chance to hit one%s%s)",
+    d.n, d.m, d.pct, assumption, faced_prose(d))
+end
+
+-- Debuffed cards add no card value, but the hand’s chips and mult still score.
+local function deb_text(deb)
+  if deb == "all" then return "all cards debuffed, adding nothing" end
+  return deb > 0 and (CtxHelpers.plural(deb, "card") .. " debuffed, adding nothing") or nil
+end
+
+local function floor_text(n) return n and ("this boss needs " .. n .. "+ cards played - add spare cards") or nil end
+
+local function paren(t) return t and ("(" .. t .. ")") or "" end
+
+local function zeroed_prose(z) return z and (" -- " .. z) or "" end
+
+local function ready_prose(ready)
+  local notes, holders = {}, {}
+  for i, r in ipairs(ready) do
+    local pre, post = { deb_text(r.deb), floor_text(r.floor) }, {}
+    for _, part in ipairs(r.chain) do post[#post + 1] = part end
+    notes[i] = { pre = pre, post = post }
+    for _, list in ipairs({ pre, post }) do
+      for _, t in pairs(list) do
+        holders[t] = holders[t] or {}
+        table.insert(holders[t], i)
+      end
     end
-    return "(joker " .. nums .. " adds " .. table.concat(parts, " ") .. ")"
-  end)
-  s = s:gsub("%(jokers: ([%+x][%d%.%+cmx ]*)%)", function(vals)
-    local parts = {}
-    for v in vals:gmatch("%S+") do
-      if v:find("^%+") and v:find("c$") then parts[#parts + 1] = v:gsub("c$", " chips")
-      elseif v:find("^%+") and v:find("m$") then parts[#parts + 1] = v:gsub("m$", " mult")
-      elseif v:find("^x") then parts[#parts + 1] = v .. " mult"
-      else parts[#parts + 1] = v end
+  end
+  local function inline(t) return (t and #holders[t] < 2) and paren(t) or "" end
+  local items, groups, by_key = {}, {}, {}
+  for i, r in ipairs(ready) do
+    local n = notes[i]
+    local pieces = {
+      #r.ix > 0 and (" (cards " .. cards_list(r.ix) .. ")") or "",
+      r.level and string.format("(level %g, %g chips x%g mult)", r.level.score_level, r.level.chips, r.level.mult) or "",
+      inline(n.pre[1]), inline(n.pre[2]),
+      r.cost and (" (" .. Utils.money(-r.cost) .. ")") or "", r.ox and " (OX: zeroes $ if played)" or "",
+    }
+    for _, t in ipairs(n.post) do pieces[#pieces + 1] = inline(t) end
+    items[i] = attach_all(r.name, pieces) .. zeroed_prose(r.zeroed)
+    for _, t in ipairs({ n.pre[1] or false, n.pre[2] or false, unpack(n.post) }) do
+      if t and #holders[t] >= 2 then
+        local key = table.concat(holders[t], ",")
+        local g = by_key[key]
+        if not g then
+          g = { idx = holders[t], notes = {}, seen = {} }
+          by_key[key] = g
+          groups[#groups + 1] = g
+        end
+        if not g.seen[t] then g.seen[t] = true; g.notes[#g.notes + 1] = t end
+      end
     end
-    return "(your jokers add " .. table.concat(parts, " ") .. ")"
-  end)
-  s = s:gsub("%(draw (%d+)/(%d+)=(%d+)%%%)",
-    "(%1 of the %2 draw-pile cards complete it; %3%% chance to hit one if you discard the others listed)")
-  s = s:gsub("%(discard at most (%d+)%)", " (you may discard at most %1 of them)")
-  s = s:gsub("keep%[([%d,]+)%]/other%[([%d,]+)%]", function(k, o)
-    return "keep cards " .. k:gsub(",", ", ") .. ", the others are " .. o:gsub(",", ", ")
-  end)
-  s = s:gsub("keep%[([%d,]+)%]", function(k) return "keep cards " .. k:gsub(",", ", ") end)
-  s = s:gsub("%[([%d,]+)%]", function(list) return " (cards " .. (list:gsub(",", ", ")) .. ")" end)
-  s = s:gsub("%((%d+) debuffed~0%)", "(%1 debuffed, score 0)")
-  s = s:gsub("%(all debuffed~0%)", "(all debuffed, score 0)")
-  s = s:gsub("%(play (%d+)%+ cards%)", "(this boss needs %1+ cards played - add spare cards)")
-  s = s:gsub("%(open draw%)", "(completes on either end)")
-  s = s:gsub("%(inside draw%)", "(needs one exact rank)")
-  s = s:gsub("Ready:", "Ready to play now:")
-  s = s:gsub("Close: near ", "One card away: ")
-  s = s:gsub("; near ", "; ")
-  s = s:gsub("%)%(", ") (")
-  s = s:gsub("(%d)%(", "%1 (")
-  return s
+  end
+  local out = table.concat(items, "; ") .. "."
+  for _, g in ipairs(groups) do
+    local names = {}
+    for k, i in ipairs(g.idx) do names[k] = ready[i].name end
+    local label = #g.idx == #ready and "Each of these" or CtxHelpers.join(names)
+    out = out .. " " .. label .. ": " .. table.concat(g.notes, "; ") .. "."
+  end
+  return out
+end
+
+local function close_prose(c, shared)
+  if not c.ix then return c.name .. zeroed_prose(c.zeroed) end
+  local lead = c.suit and string.format("Flush: %d %s", c.suit_count, c.suit) or c.name
+  local out = lead .. " keep cards " .. cards_list(c.ix)
+    .. (c.others and (", the others are " .. cards_list(c.others)) or "")
+  out = attach_all(out, {
+    c.cap and (" (you may discard at most " .. c.cap .. " of them)") or "",
+    draw_prose(c.draw, shared), paren(deb_text(c.deb)), paren(floor_text(c.floor)),
+    c.open == nil and "" or (c.open and " (completes on either end)" or " (needs one exact rank)"),
+  })
+  return out .. zeroed_prose(c.zeroed)
+end
+
+function ContextReadable.structure_prose(st)
+  if not st then return "" end
+  if st.hidden then return st.hidden end
+  local sh = st.shape
+  local out = (st.lead ~= "" and (st.lead:sub(1, -2) .. "\n") or "") .. string.format(
+    "- Shape: %d pair or better, %d three-of-a-kind or better, %d four-of-a-kind; highest repeated rank %s; most cards of one suit %d; longest run %d.",
+    sh.pairs, sh.trips, sh.quads, sh.top and (VALUE_LONG[sh.top] or sh.top) or "none", sh.max_suit, sh.max_run)
+  if st.debuffed > 0 then
+    out = out .. string.format(" %d card(s) DEBUFFED (they score 0).", st.debuffed)
+  end
+  if #st.ready > 0 then
+    out = out .. "\n- Ready to play now: " .. ready_prose(st.ready)
+    if st.splash then
+      out = out .. string.format(" All played cards score (Splash) -- you may still play at most %d.", st.splash)
+    end
+  end
+  if #st.close > 0 then
+    local figures = 0
+    for _, c in ipairs(st.close) do
+      if c.ix and type(c.draw) == "table" then figures = figures + 1 end
+    end
+    local shared = figures >= 2
+    local items = {}
+    for i, c in ipairs(st.close) do items[i] = close_prose(c, shared) end
+    out = out .. "\n- One card away: " .. table.concat(items, "; ") .. "."
+      .. (shared and (" Each chance to hit assumes " .. DRAW_ASSUMPTION .. ".") or "")
+  end
+  if st.facedown then
+    out = out .. " (This boss draws some cards face-down - your hand may change.)"
+  end
+  return out .. " "
+end
+
+function ContextReadable.blocks(state_name, allowed_actions)
+  local ok, sections = pcall(ContextCompact.build, state_name, allowed_actions,
+    { split = "state", return_list = true, blocks = true })
+  if not ok or type(sections) ~= "table" then return nil end
+  local out = {}
+  for _, section in ipairs(sections) do
+    out[#out + 1] = { heading = section.heading, text = verbalize_sections({ section.text }) }
+  end
+  return #out > 0 and out or nil
 end
 
 function ContextReadable.build(state_name, allowed_actions)
-  if not SUPPORTED[state_name] then return nil end
-  local ok, sections = pcall(ContextCompact.build, state_name, allowed_actions, { split = "state", no_cache = true, return_list = true })
-  if not ok or type(sections) ~= "table" or #sections == 0 then return nil end
-  local prose = verbalize_sections(sections)
-  if prose == "" then return nil end
-  return prose
+  local blocks = ContextReadable.blocks(state_name, allowed_actions)
+  return blocks and StateDoc.render(blocks) or nil
 end
 
 function ContextReadable.verbalize_stable(board)
   if type(board) ~= "string" or board == "" then return board end
   local ok, prose = pcall(verbalize, board)
   return (ok and prose ~= "" and prose) or board
-end
-
-if _G.NEURO_TEST then
-  ContextReadable._verbalize = verbalize
 end
 
 return ContextReadable

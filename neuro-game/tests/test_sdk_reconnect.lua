@@ -1,6 +1,4 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
 
 local check, done = require("tests.helpers").harness("sdk-reconnect")
 
@@ -8,30 +6,22 @@ local Config = require("core.config")
 local Bridge = require("core.bridge")
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
-local FS = require("core.force_state")
 local Lifecycle = require("core.neuro_lifecycle")
 local Orchestrator = require("core.orchestrator")
 local ContextCompact = require("context.context_compact")
 local TokenLegends = require("facts.token_legends")
-local Enforce = require("core.enforce")
+local Enforce = require("tests.helpers").enforce()
 local json = require("util.neuro_json")
+local Registry = require("core.action_registry")
 local TmpWork = require("tests.tmp_workdir")
 
 local play_card = require("tests.helpers").play_card
 
-local function make_joker(key, name, desc)
-  return {
-    cost = 4, sell_cost = 2, debuff = false,
-    ability = { set = "Joker", name = name, mult = 4 },
-    config = { center = { key = key, name = name, set = "Joker",
-      loc_txt = { name = name, description = desc or "+4 Mult" } } },
-  }
-end
+local make_joker = require("tests.fake_cards").make_joker
 
 local function selecting_hand_env(t)
   G.TIMERS.REAL = t
-  G.STATES = { SELECTING_HAND = 4, HAND_PLAYED = 5, MENU = 11 }
-  G.STATE = 4
+  require("tests.helpers").in_engine_state("SELECTING_HAND")
   G.STATE_COMPLETE = true
   G.SETTINGS = { GAMESPEED = 1 }
   G.OVERLAY_MENU = nil
@@ -49,25 +39,28 @@ local function selecting_hand_env(t)
     highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
   G.jokers = { cards = { make_joker("j_joker", "Joker") }, config = { card_limit = 5 } }
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.playbook_extra = nil
   G.shop_jokers = nil
   G.deck = { cards = {} }
   G.FUNCS = {
-    get_poker_hand_info = function(cards) return "Pair", {}, { Pair = { cards } }, cards end,
+    get_poker_hand_info = require("tests.engine_hand_info").stub("Pair"),
   }
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
   Enforce.reset_run_state()
-  ContextCompact.invalidate_cache()
 end
 
 local function mod_neuro(over)
   require("core.context_delivery").reset_transport()
-  local N = { enabled = true, persona = "neuro", emitted = {}, reg_log = {}, reg_defs = {},
-    unreg_log = {}, forces = {}, llm_paused = false, reserved_dollars = 0 }
+  local N = require("tests.helpers").started_bridge(require("tests.helpers").stub_bridge({ enabled = true, persona = "neuro",
+    emitted = {}, reg_log = {}, reg_defs = {}, unreg_log = {}, forces = {}, llm_paused = false, reserved_dollars = 0,
+    startup_calls = 0, _startup_complete = true, _bridge_init_complete = true, send_action_result = "noop", update = "noop" }))
   function N:send_context(msg, _silent, receipt)
     if self.llm_paused then if receipt then receipt.status = "rejected" end return false end
     self.emitted[#self.emitted + 1] = tostring(msg)
     if receipt then receipt.status = "written" end
+    return true
+  end
+  function N:send_startup()
+    self.startup_calls = self.startup_calls + 1
     return true
   end
   function N:register_actions(defs)
@@ -76,18 +69,18 @@ local function mod_neuro(over)
     for i, d in ipairs(defs or {}) do names[i] = d.name end
     self.reg_log[#self.reg_log + 1] = names
   end
-  function N:unregister_actions(names)
+  function N:withdraw_actions(names)
     local copy = {}
     for i, v in ipairs(names or {}) do copy[i] = v end
     self.unreg_log[#self.unreg_log + 1] = copy
+    return true
   end
   function N:force_actions(_ctx, _query, action_names)
     local copy = {}
     for i, v in ipairs(action_names or {}) do copy[i] = v end
     self.forces[#self.forces + 1] = copy
+    return true
   end
-  function N:send_action_result() end
-  function N:update() end
   if over then for k, v in pairs(over) do N[k] = v end end
   return N
 end
@@ -96,7 +89,7 @@ local transport_session = 0
 local function reregister(bridge)
   transport_session = transport_session + 1
   Dispatcher.route_message(
-    { command = "actions/reregister_all", transport_session = transport_session }, bridge)
+    { command = "neuro-bridge/reregister_all", transport_session = transport_session }, bridge)
 end
 
 local function same_value(left, right)
@@ -118,9 +111,6 @@ local function schema_for(defs, name)
 end
 
 do
-  if Config.set("NEURO_OUTBOX_TRUNCATE_ON_STARTUP", "off") == nil then
-    check("bridge: outbox truncation disabled for the fixture", false)
-  end
   local IPC_DIR = TmpWork.open("sdk_reconnect")
   os.execute("rm -rf " .. IPC_DIR)
   os.execute("mkdir -p " .. IPC_DIR)
@@ -129,16 +119,7 @@ do
   b:send_startup()
 
   local function context_frames()
-    local f = io.open(IPC_DIR .. "/" .. b.outbox_file, "rb")
-    if not f then return 0 end
-    local data = f:read("*a")
-    f:close()
-    local n = 0
-    for line in data:gmatch("[^\n]+") do
-      local ok, msg = pcall(json.decode, line)
-      if ok and msg and msg.command == "context" then n = n + 1 end
-    end
-    return n
+    return #require("tests.helpers").outbox_frames(IPC_DIR .. "/" .. b.outbox_file, { command = "context" })
   end
 
   b:send_context("RULES. one-shot reference text", true)
@@ -147,7 +128,7 @@ do
     context_frames() == 2, context_frames())
 
   local f = io.open(IPC_DIR .. "/" .. b.inbox_file, "ab")
-  f:write('{"command":"actions/reregister_all"}\n')
+  f:write('{"command":"neuro-bridge/reregister_all"}\n')
   f:close()
   b:poll_inbox()
 
@@ -160,9 +141,6 @@ do
 end
 
 do
-  if Config.set("NEURO_OUTBOX_TRUNCATE_ON_STARTUP", "off") == nil then
-    check("startup carry-over: outbox truncation disabled for the fixture", false)
-  end
   local IPC_DIR = TmpWork.open("startup_carry")
 
   local function run_fixture(inbox_lines)
@@ -174,54 +152,56 @@ do
 
     local seen = {}
     local b = Bridge:new({ enabled = true, fs_dir = IPC_DIR })
+    G.NEURO = b
     b:set_message_handler(function(msg)
-      local outbox = io.open(IPC_DIR .. "/" .. b.outbox_file, "rb")
-      local data = outbox and outbox:read("*a") or ""
-      if outbox then outbox:close() end
-      local first = data:match("^[^\n]*") or ""
-      seen[#seen + 1] = { command = msg.command, transport_session = msg.transport_session,
-        first_outbox_command = (json.decode(first ~= "" and first or "{}") or {}).command }
+      seen[#seen + 1] = { command = msg.command, transport_session = msg.transport_session }
     end)
     b:send_startup()
     b:poll_inbox()
-    return b, seen
+    local outbox = io.open(IPC_DIR .. "/" .. b.outbox_file, "rb")
+    local outbox_data = outbox and outbox:read("*a") or ""
+    if outbox then outbox:close() end
+    local records = {}
+    for line in outbox_data:gmatch("[^\n]+") do records[#records + 1] = json.decode(line) end
+    return b, seen, records
   end
 
-  local b, seen = run_fixture({ '{"command":"actions/reregister_all","transport_session":1}' })
-  check("startup carry-over: a reregister_all written before the mod booted reaches the handler",
-    #seen == 1 and seen[1].command == "actions/reregister_all", #seen)
-  check("startup carry-over: the frame keeps its transport_session",
-    seen[1] and seen[1].transport_session == 1, seen[1] and seen[1].transport_session)
-  check("startup carry-over: the frame is delivered only after startup is on the outbox",
-    seen[1] and seen[1].first_outbox_command == "startup",
-    seen[1] and tostring(seen[1].first_outbox_command))
-  check("startup carry-over: delivery resets the register memory",
+  local b, seen, records =
+    run_fixture({ '{"command":"neuro-bridge/reregister_all","transport_session":1}' })
+  check("startup carry-over: a pre-startup reconnect control is not dispatched",
+    #seen == 0, #seen)
+  check("startup carry-over: the newest transport session is remembered",
+    tostring(b.transport_session) == "1", tostring(b.transport_session))
+  check("startup carry-over: startup is the first public frame, tagged with the carried session",
+    #records >= 2 and records[1].command == "neuro-bridge/startup_answer"
+      and records[1].transport_session == "1" and records[2].command == "startup",
+    records[1] and tostring(records[1].command))
+  check("startup carry-over: startup resets the register memory",
     b._last_register_key == nil and b._force_full_register == true)
 
-  local _, stale = run_fixture({
-    '{"command":"actions/reregister_all","transport_session":1}',
+  local stale_bridge, stale = run_fixture({
+    '{"command":"neuro-bridge/reregister_all","transport_session":1}',
     '{"command":"action","data":{"id":"dead-1","name":"play_hand"},"run_generation":1}',
     '{"command":"neuro-bridge/abandon","data":{"ids":["dead-1"]}}',
   })
-  local carried_commands = {}
-  for _, entry in ipairs(stale) do carried_commands[#carried_commands + 1] = entry.command end
   check("startup carry-over: actions left by the dead session are not replayed",
-    #stale == 1 and stale[1].command == "actions/reregister_all",
-    table.concat(carried_commands, ","))
+    #stale == 0 and tostring(stale_bridge.transport_session) == "1",
+    #stale .. "/" .. tostring(stale_bridge.transport_session))
 
-  local _, folded = run_fixture({
-    '{"command":"actions/reregister_all","transport_session":1}',
-    '{"command":"actions/reregister_all","transport_session":2}',
+  local folded_bridge, folded = run_fixture({
+    '{"command":"neuro-bridge/reregister_all","transport_session":1}',
+    '{"command":"neuro-bridge/reregister_all","transport_session":2}',
   })
-  check("startup carry-over: only the newest reregister_all is carried",
-    #folded == 1 and folded[1].transport_session == 2,
-    #folded .. "/" .. tostring(folded[1] and folded[1].transport_session))
+  check("startup carry-over: only the newest reconnect stamp is remembered",
+    #folded == 0 and tostring(folded_bridge.transport_session) == "2",
+    #folded .. "/" .. tostring(folded_bridge.transport_session))
 
   local _, none = run_fixture({ '{"command":"action","data":{"id":"dead-2","name":"cash_out"}}' })
   check("startup carry-over: an inbox with nothing session-independent delivers nothing", #none == 0, #none)
 
   os.execute("rm -rf " .. IPC_DIR)
 end
+
 
 do
   selecting_hand_env(500)
@@ -231,32 +211,25 @@ do
     stable_refresh_due = false,
   })
   reregister(G.NEURO)
-  check("mod: reregister_all empties once_serials",
-    type(G.NEURO.once_serials) == "table" and next(G.NEURO.once_serials) == nil)
-  local fields = table.concat(require("core.lifecycle_registry").describe().run.fields, "|")
-  check("mod: rules_ctx_sig is no longer a delivery ledger", not fields:find("rules_ctx_sig", 1, true))
-  check("mod: stable_ctx_sig is no longer a delivery ledger", not fields:find("stable_ctx_sig", 1, true))
-  check("mod: stable_sig_cheap is no longer a delivery ledger", not fields:find("stable_sig_cheap", 1, true))
-  check("mod: reregister_all leaves no obsolete stable-refresh flag",
-    G.NEURO.stable_refresh_due == false)
+  check("mod: reregister_all keeps what was already delivered",
+    type(G.NEURO.once_serials) == "table" and G.NEURO.once_serials["gloss:readable_common"] ~= nil)
 end
 
 do
   selecting_hand_env(600)
   local N = mod_neuro({ once_serials = {} })
   G.NEURO = N
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   local first = #N.emitted
   check("glossary: first emission delivers the common legend",
     first > 0 and N.emitted[1] == TokenLegends.READABLE_COMMON)
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   check("glossary: a second call inside the session stays silent", #N.emitted == first)
 
   reregister(N)
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
-  check("glossary: reconnect re-delivers the common legend",
-    #N.emitted > first and N.emitted[first + 1] == TokenLegends.READABLE_COMMON,
-    tostring(N.emitted[first + 1]))
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
+  check("glossary: reconnect does not re-deliver the common legend she already has",
+    #N.emitted == first, tostring(N.emitted[first + 1]))
 end
 
 do
@@ -272,26 +245,26 @@ do
   end
   local function reregister_raw(session)
     Dispatcher.route_message(
-      { command = "actions/reregister_all", transport_session = session }, N)
+      { command = "neuro-bridge/reregister_all", transport_session = session }, N)
   end
 
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   check("the legend lands once on the first pass", glossary_count() == 1, glossary_count())
 
   reregister_raw(1)
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
-  check("a reconnect the counter DOES notice re-delivers the legend",
-    glossary_count() == 2, glossary_count())
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
+  check("a reconnect the counter DOES notice still keeps the legend delivered",
+    glossary_count() == 1, glossary_count())
 
   reregister_raw(1)
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
-  check("a repeated stamp still re-delivers the legend, so reference material never rides the gate",
-    glossary_count() == 3, glossary_count())
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
+  check("a repeated stamp does not re-deliver reference material",
+    glossary_count() == 1, glossary_count())
 
   local before = glossary_count()
   for ante = 1, 8 do
     G.GAME.round_resets.ante = ante
-    for _ = 1, 10 do Orchestrator._emit_state_glossary("SELECTING_HAND") end
+    for _ = 1, 10 do require("core.window")._test.emit_glossary("SELECTING_HAND") end
   end
   check("without a reconnect the legend stays booked for the whole session (#184)",
     glossary_count() == before, glossary_count())
@@ -317,56 +290,49 @@ do
     end
     return n
   end
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("rules: first stable emission carries the rules head", rules_heads() == 1, rules_heads())
   N.stable_refresh_due = true
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("rules: an unchanged board does not repeat the rules head", rules_heads() == 1, rules_heads())
 
   reregister(N)
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
-  check("rules: reconnect re-delivers the rules head", rules_heads() == 2, rules_heads())
+  require("core.window").emit_rules("SELECTING_HAND")
+  check("rules: reconnect does not re-deliver the rules head", rules_heads() == 1, rules_heads())
 end
 
 do
   selecting_hand_env(800)
-  G.NEURO = mod_neuro({
-    force_sent_at = 800, force_dirty = false,
-  })
-  require("core.force_state").arm("SELECTING_HAND", { "cash_out" }, { cash_out = true }, 1)
+  G.NEURO = mod_neuro({})
+  local dead = require("tests.helpers").open_force("SELECTING_HAND", { "cash_out" })
   reregister(G.NEURO)
-  check("reconnect closes the force left open on the dead socket",
-    G.NEURO.force_inflight == false)
-  check("reconnect closes the dead force's window",
-    require("core.force_state").window_is_open() == false)
-  check("reconnect requests a re-arm", G.NEURO.force_dirty == true)
+  check("reconnect closes the dead force's window", require("core.window").current() == nil)
   check("reconnect does not unregister the dead force's actions",
     #G.NEURO.unreg_log == 0, tostring(#G.NEURO.unreg_log))
-  check("reconnect records the reason", G.NEURO.force_last_result == "reconnect")
+  check("reconnect records the reason", dead.phase == "ended" and dead.ended_by == "reset", tostring(dead.ended_by))
 end
 
 do
   selecting_hand_env(850)
-  G.STATE = 5
-  G.NEURO = mod_neuro({})
+  G.STATE = G.STATES.HAND_PLAYED
+  G.NEURO = mod_neuro({ once_serials = { ["gloss:readable_common"] = "session" } })
   reregister(G.NEURO)
-  check("reconnect in a transient state registers nothing",
-    #G.NEURO.reg_log == 0, tostring(#G.NEURO.reg_log))
-  check("reconnect in a transient state still resets the context ledger",
-    type(G.NEURO.once_serials) == "table" and next(G.NEURO.once_serials) == nil)
-  G.STATE = 4
+  check("reconnect re-registers the catalogue at once, whatever the state (BEST_PRACTICES.md:44)",
+    #G.NEURO.reg_log == 1, tostring(#G.NEURO.reg_log))
+  check("reconnect in a transient state keeps the context ledger too",
+    type(G.NEURO.once_serials) == "table" and G.NEURO.once_serials["gloss:readable_common"] ~= nil)
+  G.STATE = G.STATES.SELECTING_HAND
 end
 
 do
   selecting_hand_env(900)
   local N = mod_neuro({
     dispatcher = Dispatcher, actions = Actions,
-    force_sent_at = 900, force_dirty = false,
     state = "SELECTING_HAND", last_action_at = 0, once_serials = {},
   })
   G.NEURO = N
-  require("core.force_state").arm("SELECTING_HAND", { "cash_out" }, { cash_out = true }, 1)
-  require("core.tx_cache").reset()
+  require("tests.helpers").open_force("SELECTING_HAND", { "cash_out" })
+  require("core.bridge").tx.reset()
   reregister(N)
 
   local elapsed = 0
@@ -404,27 +370,17 @@ do
   selecting_hand_env(1000)
   local N = mod_neuro({ dispatcher = Dispatcher, actions = Actions, state = "SELECTING_HAND" })
   G.NEURO = N
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1000)
-  FS.mark_sent(1000)
-  G.STATE = 5
-  FS.invalidate("stall", 1000)
-  check("invalidation explicitly withdraws and quarantines the force's actions",
-    #N.unreg_log == 1 and FS.cancel_blocks("play_hand", 1000) == true, #N.unreg_log)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
+  G.STATE = G.STATES.HAND_PLAYED
+  require("core.window").withdraw("stall", 1000)
+  check("withdrawal unregisters a sent force's actions",
+    #N.unreg_log == 1 and require("core.window").current() == nil, tostring(#N.unreg_log))
   check("a transient state re-registers nothing (the pass-2 gate holds)",
     #N.reg_log == 0, tostring(#N.reg_log))
-  check("the re-arm request survives the transient state", N.force_dirty == true)
 
-  G.STATE = 4
-  G.TIMERS.REAL = 1000 + FS.CANCEL_SETTLE
+  G.STATE = G.STATES.SELECTING_HAND
   Orchestrator._step_state_transition("SELECTING_HAND", true, "HAND_PLAYED")
-  local restored = false
-  for _, names in ipairs(N.reg_log) do
-    for _, n in ipairs(names) do
-      if n == "play_hand" then restored = true end
-    end
-  end
-  check("the state transition re-registers the action set",
-    restored == true, tostring(#N.reg_log))
+  check("the state transition leaves the withdrawn force terminal", require("core.window").current() == nil)
 end
 
 do
@@ -433,17 +389,89 @@ do
   local N = mod_neuro({})
   G.NEURO = N
 
-  Orchestrator.register_valid_actions("SELECTING_HAND")
+  require("core.window").register_catalogue()
   local normal_defs = N.reg_defs[#N.reg_defs]
   local normal_schema = schema_for(normal_defs, "play_hand")
   local normal_indices = normal_schema and normal_schema.properties and normal_schema.properties.indices
-  check("schema: normal registration applies legality narrowing",
-    normal_indices and normal_indices.minItems == 2 and normal_indices.maxItems == 2)
+  local normal_detail = normal_indices
+    and (tostring(normal_indices.minItems) .. "/"
+      .. type(normal_indices.maxItems) .. "/" .. tostring(normal_indices.maxItems))
+    or "missing"
+  check("schema: normal registration advertises the run's selection bounds",
+    normal_indices and normal_indices.minItems == 1 and normal_indices.maxItems ~= nil,
+    normal_detail)
+  local advertised = {}
+  for _, def in ipairs(Registry.definitions()) do
+    for i = 1, #(normal_defs or {}) do
+      if normal_defs[i].name == def.name then advertised[#advertised + 1] = def end
+    end
+  end
+  check("schema: Registry.definitions agrees with the stable registration catalogue",
+    #advertised == #(normal_defs or {}) and same_value(advertised, normal_defs), tostring(#normal_defs))
+
+  local live_def = Registry.display("play_hand")
+  local live_schema = live_def and live_def.schema
+  local live_indices = live_schema and live_schema.properties and live_schema.properties.indices
+  local live_detail = live_indices
+    and (tostring(live_indices.minItems) .. "/" .. type(live_indices.maxItems)
+      .. "/" .. tostring(live_indices.maxItems))
+    or "missing"
+  check("schema: Registry.get exposes the current selecting-hand bounds",
+    live_indices and live_indices.minItems == 2
+      and type(live_indices.maxItems) == "number" and live_indices.maxItems == 2,
+    live_detail)
 
   reregister(N)
   local reconnect_defs = N.reg_defs[#N.reg_defs]
-  check("schema: reconnect registers the same narrowed definitions",
+  check("schema: reconnect registers the same stable definitions",
     #N.reg_defs == 2 and same_value(reconnect_defs, normal_defs), tostring(#N.reg_defs))
+end
+
+do
+  local IPC_DIR = TmpWork.open("run_restart_withdrawal")
+  os.execute("rm -rf " .. IPC_DIR)
+  os.execute("mkdir -p " .. IPC_DIR)
+  local b = Bridge:new({ enabled = true, fs_dir = IPC_DIR })
+  G.NEURO = b
+  b.transport_session = 7
+  b.run_generation = 1
+  b.decision_serial = 1
+  check("restart: startup succeeds", b:send_startup() == true)
+  check("restart: the catalogue registers", b:register_actions({
+    { name = "play_hand", description = "Play.", schema = { type = "object" } },
+    { name = "discard_hand", description = "Discard.", schema = { type = "object" } },
+  }) == true)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand", "discard_hand" })
+  check("restart: the open force reaches the wire",
+    b:force_actions("SELECTING_HAND", "Choose.", { "play_hand", "discard_hand" }) == true)
+
+  local function frames()
+    local out = {}
+    local f = assert(io.open(IPC_DIR .. "/" .. b.outbox_file, "rb"))
+    for line in f:lines() do
+      local ok, msg = pcall(json.decode, line)
+      assert(ok and type(msg) == "table")
+      out[#out + 1] = msg
+    end
+    f:close()
+    return out
+  end
+  local before = #frames()
+  Lifecycle.withdraw_open_force()
+  Lifecycle.bump_run_generation("run restarted")
+  Lifecycle.reset_run_state(true)
+  local after = frames()
+  local unregistered, marker = nil, false
+  for i = before + 1, #after do
+    if after[i].command == "actions/unregister" then unregistered = after[i].data.action_names end
+    if tostring(after[i].command):find("run_restart", 1, true) then marker = true end
+  end
+  check("restart: the old run's forced actions are unregistered on the wire",
+    unregistered ~= nil and table.concat(unregistered, ",") == "discard_hand,play_hand",
+    unregistered and table.concat(unregistered, ",") or "none")
+  check("restart: no private restart marker is written", marker == false)
+  check("restart: the bridge carries no restart-marker machinery", b.mark_run_restart == nil)
+  os.execute("rm -rf " .. IPC_DIR)
 end
 
 TmpWork.close()

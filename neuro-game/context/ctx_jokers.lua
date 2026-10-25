@@ -7,16 +7,14 @@ local SemanticRegistry = require("core.semantic_registry")
 local JokerObservations = require("facts.joker_observations")
 local GameFacts = require("facts.game_facts")
 local normalize_text = CtxHelpers.normalize_text
+local clause_separators = CtxHelpers.clause_separators
 local joker_tags = CtxHelpers.joker_tags
 local safe_name_or = Utils.safe_name_or
 local humanize_effect = CtxHelpers.humanize_effect
 local humanize_flags = CtxHelpers.humanize_flags
-local strip_dot = CtxHelpers.strip_dot
 
-local function sell_offered()
-  local ok, Legality = pcall(require, "facts.boss.legality")
-  if not (ok and Legality and Legality.sell_blocked_now) then return true end
-  local ok_b, blocked = pcall(Legality.sell_blocked_now)
+local function sell_offered(card)
+  local ok_b, blocked = pcall(require("facts.boss.legality").sell_blocked_now, card)
   return not (ok_b and blocked)
 end
 
@@ -25,24 +23,17 @@ local function unsellable(flags)
 end
 
 local function provenance_mark(marks, provenance)
-  local mark = {}
-  if type(provenance) == "table" then
-    mark.ante = tostring(provenance.ante or "?")
-    mark.decision = tostring(provenance.decision_serial or "?")
-    mark.sig = mark.ante .. "@" .. mark.decision
-    mark.label = string.format(" (written by you, Ante %s, decision %s)", mark.ante, mark.decision)
-  end
-  marks[#marks + 1] = mark
+  marks[#marks + 1] = FactHints.plan_mark(provenance)
   return "\1" .. #marks .. "\2"
 end
 
-local function joker_row_prose(idx, name, effect_str, flags, sell, tag, note, bought, provenance, marks)
+local function joker_row_prose(card, idx, name, effect_str, flags, sell, tag, note, bought, provenance, marks)
   local s = idx .. ". " .. name
   local he = (effect_str ~= "-" and effect_str ~= "") and humanize_effect(effect_str, true) or ""
   if he and he ~= "" then s = s .. " -- " .. he end
   local hf = humanize_flags(flags)
   if hf and hf ~= "" and hf ~= "-" then s = s .. " [" .. hf .. "]" end
-  if sell_offered() and not unsellable(flags) then
+  if sell_offered(card) and not unsellable(flags) then
     if bought and bought ~= "" then
       s = s .. " (bought " .. bought .. ", sell " .. sell .. ")"
     else
@@ -102,10 +93,7 @@ local function append_sorted(out, list)
   for _, s in ipairs(list) do out[#out + 1] = s end
 end
 
-local function join(list, last)
-  if #list <= 1 then return list[1] or "" end
-  return table.concat(list, ", ", 1, #list - 1) .. (last or " and ") .. list[#list]
-end
+local join = CtxHelpers.join
 
 local function preamble(led, has_ceiling, partial_roster)
   local scopes = {}
@@ -139,14 +127,9 @@ local function ceiling_sentence(led, rows)
     end
   end
   if #parts == 0 then return nil end
-  local sources = {}
-  for _, src in ipairs(led.sources) do
-    local name = normalize_text(src.name)
-    local figure = amount(src.kind, src.total.n)
-    local why = src.why
-    if why and why_restates_row(rows, name, figure, why) then why = nil end
-    sources[#sources + 1] = name .. " " .. figure .. (why and (" -- " .. why) or "")
-  end
+  local sources = CtxHelpers.ledger_gated_sources(led, function(g, figure)
+    return why_restates_row(rows, g.name, figure, g.why)
+  end)
   table.sort(sources)
   local s = "a further " .. join(parts, " and ")
     .. " more from jokers gated on something other than the hand type"
@@ -156,14 +139,52 @@ local function ceiling_sentence(led, rows)
   return s
 end
 
-local function held_count_unreadable(led)
-  if not (led.covered and led.covered.held_card) then return false end
+local function dormant_sentence(led)
+  local parts = {}
+  for _, d in ipairs(led.dormant or {}) do
+    parts[#parts + 1] = normalize_text(d.name) .. " " .. amount(d.kind, d.total.n)
+      .. (d.why and (" -- its condition (" .. d.why .. ") does not hold") or "")
+  end
+  if #parts == 0 then return nil end
+  table.sort(parts)
+  return "not on this hand: " .. table.concat(parts, "; ")
+end
+
+local function met_sentence(led, rows)
+  local named, parts = {}, {}
+  for _, m in ipairs(led.met or {}) do named[m.name] = (named[m.name] or 0) + 1 end
+  for _, m in ipairs(led.met) do
+    local label = normalize_text(m.name) .. ((named[m.name] > 1 and m.slot) and (" (#" .. m.slot .. ")") or "")
+    local figure = amount(m.kind, m.total.n)
+    local cond = m.why
+    if cond and why_restates_row(rows, normalize_text(m.name), figure, cond) then cond = nil end
+    local why
+    if m.rescored then why = cond else why = "its condition holds now" .. (cond and (": " .. cond) or "") end
+    parts[#parts + 1] = label .. " " .. figure .. (why and (" -- " .. why) or "")
+  end
+  if #parts == 0 then return nil end
+  table.sort(parts)
+  return "also paid on the next hand you play, whatever it is: " .. table.concat(parts, "; ")
+end
+
+-- This ceiling must not reveal a hidden held card’s rank.
+local function held_count_unreadable(ledger)
+  if not (ledger.covered and ledger.covered.held_card) then return false end
   local cards = G and G.hand and G.hand.cards
   if type(cards) ~= "table" then return false end
   for _, card in ipairs(cards) do
-    if CardUtil.is_face_down(card) then return true end
+    if CardUtil.is_hidden(card) then return true end
   end
   return false
+end
+
+local function bonus_list(m, c, x, xc)
+  local out = {}
+  if m ~= 0 then out[#out + 1] = Utils.signed(m) .. " Mult" end
+  if c ~= 0 then out[#out + 1] = Utils.signed(c) .. " Chips" end
+  if x ~= 1 then out[#out + 1] = Utils.fmt_xmult(x) .. " Mult" end
+  if xc ~= 1 then out[#out + 1] = Utils.fmt_xmult(xc) .. " Chips" end
+  return out
 end
 
 local function jk_all_prose(agg, roster_only, rows)
@@ -180,33 +201,20 @@ local function jk_all_prose(agg, roster_only, rows)
     end
     if #up > 0 then out[#out + 1] = "always on " .. table.concat(up, ", ") end
   end
+  local met = led and met_sentence(led, rows)
+  if met then out[#out + 1] = met end
 
   local types = {}
   for t in pairs(agg.cond_by_type or {}) do types[#types + 1] = t end
   table.sort(types)
   for _, t in ipairs(types) do
     local b = agg.cond_by_type[t]
-    local acc_m, acc_c = b.acc_mult or 0, b.acc_chips or 0
-    local acc_x = (tonumber(b.acc_xmult) or 0) ~= 0 and b.acc_xmult or 1
-    local acc_xc = (tonumber(b.acc_xchips) or 0) ~= 0 and b.acc_xchips or 1
-    local con_m = (b.mult or 0) - acc_m
-    local con_c = (b.chips or 0) - acc_c
-    local con_x = (b.xmult or 1) / acc_x
-    local con_xc = (b.xchips or 1) / acc_xc
-    local cp = {}
-    if con_m ~= 0 then cp[#cp + 1] = Utils.signed(con_m) .. " Mult" end
-    if con_c ~= 0 then cp[#cp + 1] = Utils.signed(con_c) .. " Chips" end
-    if con_x ~= 1 then cp[#cp + 1] = Utils.fmt_xmult(con_x) .. " Mult" end
-    if con_xc ~= 1 then cp[#cp + 1] = Utils.fmt_xmult(con_xc) .. " Chips" end
+    local cp = bonus_list(b.con_mult or 0, b.con_chips or 0, b.con_xmult or 1, b.con_xchips or 1)
     if #cp > 0 and ((b.njokers or 0) >= 2 or not roster_only) then
       out[#out + 1] = "if the hand contains a " .. t .. ": " .. table.concat(cp, ", ")
     end
     if b.accumulator then
-      local ap = {}
-      if acc_m ~= 0 then ap[#ap + 1] = Utils.signed(acc_m) .. " Mult" end
-      if acc_c ~= 0 then ap[#ap + 1] = Utils.signed(acc_c) .. " Chips" end
-      if acc_x ~= 1 then ap[#ap + 1] = Utils.fmt_xmult(acc_x) .. " Mult" end
-      if acc_xc ~= 1 then ap[#ap + 1] = Utils.fmt_xmult(acc_xc) .. " Chips" end
+      local ap = bonus_list(b.acc_mult or 0, b.acc_chips or 0, b.acc_xmult or 1, b.acc_xchips or 1)
       if #ap > 0 then
         out[#out + 1] = "if the hand you play is exactly " .. t
           .. " (containing one is not enough): " .. table.concat(ap, ", ")
@@ -221,6 +229,11 @@ local function jk_all_prose(agg, roster_only, rows)
       out[#out + 1] = ceiling
       has_ceiling = true
     end
+  end
+
+  if led and not roster_only then
+    local dormant = dormant_sentence(led)
+    if dormant then out[#out + 1] = dormant end
   end
 
   local retrig = {}
@@ -243,43 +256,58 @@ local function jk_all_prose(agg, roster_only, rows)
   return preamble(led or { covered = {}, refused = {} }, has_ceiling, agg.hidden_jokers)
     .. table.concat(out, "; ") .. "."
 end
+local function hands_paid(cond)
+  if not cond then return "on every hand" end
+  if cond.exact then return "on a " .. cond.hand_type end
+  return "on hands that contain a " .. cond.hand_type
+end
 
-local function order_gap_prose(gap)
-  local parts = {}
-  for _, b in ipairs(gap.behind) do
-    parts[#parts + 1] = normalize_text(safe_name_or(b.card)) .. " (" .. b.index .. ") "
-      .. Utils.signed(b.mult) .. " Mult"
+local UNIT = { mult = "Mult", chips = "Chips" }
+local BOUND = { [""] = "", at_most = "up to ", at_least = "at least " }
+
+local function group_prose(group)
+  local unit = UNIT[group.add]
+  local parts, clauses, by_cond = {}, {}, {}
+  local pivot = normalize_text(safe_name_or(group.pivot.card))
+  for _, b in ipairs(group.behind) do
+    local name = normalize_text(safe_name_or(b.card))
+    parts[#parts + 1] = name .. " (slot " .. b.index .. ") " .. BOUND[b.bound or ""] .. Utils.signed(b.amount) .. " " .. unit
+    local cond = hands_paid(b.cond)
+    if not by_cond[cond] then
+      by_cond[cond] = { cond = cond, items = {} }
+      clauses[#clauses + 1] = by_cond[cond]
+    end
+    local items = by_cond[cond].items
+    items[#items + 1] = name .. " " .. BOUND[b.gain_bound or ""] .. Utils.signed(b.gain) .. " " .. unit
   end
   local many = #parts > 1
-  return "Joker order: " .. table.concat(parts, "; ") .. (many and " sit" or " sits")
-    .. " right of " .. normalize_text(safe_name_or(gap.pivot.card)) .. " (" .. gap.pivot.index
-    .. "), so its " .. Utils.fmt_xmult(gap.pivot.xmult) .. " Mult does not multiply "
-    .. (many and "them." or "it.")
+  local gains = {}
+  for _, c in ipairs(clauses) do gains[#gains + 1] = join(c.items) .. " more " .. c.cond end
+  local gain = many and ("they would add " .. table.concat(gains, "; "))
+    or (normalize_text(safe_name_or(group.behind[1].card)) .. " would add "
+      .. BOUND[group.behind[1].gain_bound or ""] .. Utils.signed(group.behind[1].gain) .. " " .. unit .. " more " .. clauses[1].cond)
+  return table.concat(parts, "; ") .. (many and " sit" or " sits")
+    .. " right of " .. pivot .. " (slot " .. group.pivot.index
+    .. "), so its " .. Utils.fmt_xmult(group.pivot.factor) .. " " .. unit .. (group.pivot.floor and " or more" or "")
+    .. " does not multiply "
+    .. (many and "them" or "it") .. ". Left of " .. pivot .. ", " .. gain .. "."
+end
+
+local function order_gap_prose(gap)
+  local out = {}
+  for _, group in ipairs(gap.groups) do out[#out + 1] = group_prose(group) end
+  return "Joker order: " .. table.concat(out, " ")
 end
 
 local function order_gap_text()
   if not (G and G.NEURO) then return nil end
   local gap = Scoring.joker_order_gap()
   if not gap then return nil end
-  local round = tonumber(G.GAME and G.GAME.round) or 0
-  local text = FactHints.emit(
-    "joker_order_gap:" .. gap.signature .. "@" .. round,
-    order_gap_prose(gap) .. " ")
-  if type(text) ~= "string" or text == "" then return nil end
-  return (text:gsub("%s+$", ""))
+  return (order_gap_prose(gap):gsub("%s+$", ""))
 end
 
 local function resolve_provenance(lines, first_row, marks)
-  local counts, top, top_n, unattributed = {}, nil, 0, false
-  for _, m in ipairs(marks) do
-    if m.sig then
-      counts[m.sig] = (counts[m.sig] or 0) + 1
-      if counts[m.sig] > top_n then top, top_n = m, counts[m.sig] end
-    else
-      unattributed = true
-    end
-  end
-  local hoist = (not unattributed) and top_n >= 2
+  local top, top_n, hoist = FactHints.plan_mark_hoist(marks)
   for i = first_row, #lines do
     lines[i] = lines[i]:gsub("\1(%d+)\2", function(n)
       local m = marks[tonumber(n)] or {}
@@ -296,29 +324,24 @@ local AGG_SILENT = { ROUND_EVAL = true }
 local function jokers_section(state_name)
   if not G or not G.jokers or not G.jokers.cards then return nil end
 
-  if #G.jokers.cards == 0 then
-    local slots = CardUtil.slot_status_text(CardUtil.joker_slot_status())
-    local sold_run = tonumber(G.NEURO and G.NEURO.jokers_sold_run) or 0
-    return "Your jokers (" .. slots .. "; " .. sold_run .. " sold this run): none."
-  end
-
   for _, card in ipairs(G.jokers.cards) do Utils.refresh_dynamic_joker(card) end
+  local head = "Your jokers (" .. CardUtil.slot_status_text(CardUtil.joker_slot_status()) .. "; "
+    .. (tonumber(G.NEURO and G.NEURO.jokers_sold_run) or 0) .. " sold this run)"
+  if #G.jokers.cards == 0 then return head .. ": none." end
 
-  local slots = CardUtil.slot_status_text(CardUtil.joker_slot_status())
-  local sold_run = tonumber(G.NEURO and G.NEURO.jokers_sold_run) or 0
-  local lines = { "Your jokers (" .. slots .. "; " .. sold_run .. " sold this run):" }
+  local lines = { "## " .. head }
   local in_shop = require("core.state").get_state_name() == "SHOP"
   local has_hidden = false
   local rows = {}
   local marks = {}
   local first_row = #lines + 1
   for i, card in ipairs(G.jokers.cards) do
-    if CardUtil.is_face_down(card) then
+    if CardUtil.is_hidden(card) then
       has_hidden = true
       lines[#lines + 1] = i .. ". face-down (hidden)"
     else
       local name = normalize_text(safe_name_or(card))
-      local effect_str = SemanticRegistry.render("owned_joker_row", card):gsub(",", ";")
+      local effect_str = clause_separators(SemanticRegistry.render("owned_joker_row", card))
       local copied = copied_numbers(card)
       if copied then effect_str = effect_str .. "; copying " .. copied end
       local flg = joker_tags(card)
@@ -328,7 +351,7 @@ local function jokers_section(state_name)
       local bought_cost = G.NEURO and G.NEURO.joker_bought_cost
         and G.NEURO.joker_bought_cost[card.sort_id]
       local bought = (bought_cost ~= nil) and Utils.money(bought_cost) or nil
-      local row = joker_row_prose(i, name, effect_str, flg, Utils.money(card.sell_cost), tag, note,
+      local row = joker_row_prose(card, i, name, effect_str, flg, Utils.money(card.sell_cost), tag, note,
         bought, entry and entry.provenance, marks)
       rows[name] = (rows[name] or "") .. " " .. row:gsub("\1%d+\2", ""):lower()
       lines[#lines + 1] = row
@@ -341,10 +364,16 @@ local function jokers_section(state_name)
   local observed = JokerObservations.roster_line(G.jokers.cards)
   if observed then lines[#lines + 1] = observed end
 
+  local chain = FactHints.copy_chain()
+  if chain then lines[#lines + 1] = "- Joker copy order: " .. chain .. ". Order matters." end
+  if (Scoring.owned_xmult_state() or "none") == "none" then
+    lines[#lines + 1] = "- Of the jokers here, none is an xMult."
+  end
+
   local hand_in_play = (state_name ~= nil) and (state_name == "SELECTING_HAND")
     or (state_name == nil and GameFacts.hand_can_score())
   local silent = state_name ~= nil and AGG_SILENT[state_name]
-  local agg = (not silent) and Scoring.joker_summary(nil, { public_only = true }) or nil
+  local agg = (not silent) and Scoring.joker_summary(nil) or nil
   if agg then
     local prose = jk_all_prose(agg, not hand_in_play, rows)
     if prose and prose ~= "" then lines[#lines + 1] = prose end
@@ -357,52 +386,8 @@ local function jokers_section(state_name)
   return table.concat(lines, "\n")
 end
 
-local function joker_descriptions_section()
-  if not G or not G.jokers or not G.jokers.cards or #G.jokers.cards == 0 then
-    return nil
-  end
-  local lines = { "Joker details:" }
-  for i, card in ipairs(G.jokers.cards) do
-    if CardUtil.is_face_down(card) then
-      lines[#lines + 1] = i .. ". face-down (hidden)"
-    else
-      local name = normalize_text(safe_name_or(card))
-      local desc = SemanticRegistry.render("card_description_full", card)
-      local s = i .. ". " .. name
-      if desc and desc ~= "-" and desc ~= "" then s = s .. " -- " .. strip_dot(desc:gsub(";%s*", ", ")) end
-      lines[#lines + 1] = s .. "."
-    end
-  end
-  return table.concat(lines, "\n")
-end
 
-local function playbook_section(include_full_desc)
-  if not (G and G.playbook_extra and G.playbook_extra.cards and #G.playbook_extra.cards > 0) then
-    return nil
-  end
+local M = { jokers_section = jokers_section }
 
-  local lines = { "Playbook jokers:" }
-  for i, card in ipairs(G.playbook_extra.cards) do
-    local name = normalize_text(safe_name_or(card))
-    local effect_str = SemanticRegistry.render("readable_joker", card):gsub(",", ";")
-    local row = joker_row_prose(i, name, effect_str, joker_tags(card), Utils.money(card.sell_cost))
-    if include_full_desc then
-      local desc = SemanticRegistry.render("card_description_full", card)
-      if desc and desc ~= "-" and desc ~= "" then
-        local desc_h = desc:gsub(";%s*", ", ")
-        if not row:find(desc_h, 1, true) then row = row .. ". " .. desc_h end
-      end
-    end
-    lines[#lines + 1] = row
-  end
-
-  return table.concat(lines, "\n")
-end
-
-local M = { jokers_section = jokers_section, playbook_section = playbook_section }
-
-if rawget(_G, "NEURO_TEST") then
-  M.joker_descriptions_section = joker_descriptions_section
-end
 
 return M

@@ -1,16 +1,7 @@
 local M = {}
 local CONTRACTS = {
-  c_death = { mode = "ordered_pair", left_role = "copy_from", right_role = "apply_to" },
+  c_death = { mode = "ordered_pair", left_role = "apply_to", right_role = "copy_from" },
 }
 
-local function key(card)
-  return card and card.config and card.config.center and card.config.center.key
-end
-
-function M.get(card) return CONTRACTS[key(card)] end
-function M.register(center_key, contract)
-  if type(center_key) ~= "string" or type(contract) ~= "table" then return false end
-  CONTRACTS[center_key] = contract
-  return true
-end
+function M.get(card) return CONTRACTS[require("facts.card_util").center_key(card)] end
 return M

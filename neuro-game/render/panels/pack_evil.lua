@@ -18,16 +18,15 @@ local M = {
   CROWN_JOLT = true,
   ENTRY = { 1.9, 0.9, 40 },
   DISSOLVE = { { 0.95, 0.55, 0.12, 1 }, { 0.72, 0.09, 0.05, 1 } },
-  MARK_HEAD_UNITS = 26, -- clears the slot_mark knife above the title band
+  MARK_HEAD_UNITS = 26,
 }
-
 
 function M.frame(h, g)
   local cn = h.cn
   local x, y, w = g.x, g.y, g.w
   local a = g.a
   Prims.cornice_crenel(x, y, w, cn(1), h.bg, h.GOLD, a, true)
-  lg.setColor(h.pg[1], h.pg[2], h.pg[3], 0.05 * (0.8 + 0.2 * h.pulse) * a)
+  set_col(h.pg, 0.05 * (0.8 + 0.2 * h.pulse) * a)
   lg.ellipse("fill", x + math.floor(w * 0.30), y + math.floor(g.title_h * 0.55),
     math.floor(w * 0.28), math.floor(g.title_h * 0.42))
   set_col(h.GOLD, 0.08 * a)
@@ -54,7 +53,7 @@ function M.slot(h, sg, st, scan)
     Prims.niche(sg.x, sg.y, sg.w, sg.h, u, h.GOLD, h.pg, h.pulse, 0.5 * sg.a, true)
   elseif st == "highlighted" then
     Prims.niche(sg.x, sg.y, sg.w, sg.h, u, h.GOLD, h.pg, 0.5 + 0.5 * h.pulse, sg.a, true)
-    lg.setColor(h.ACC[1], h.ACC[2], h.ACC[3], (0.10 + 0.06 * scan) * sg.a)
+    set_col(h.ACC, (0.10 + 0.06 * scan) * sg.a)
     lg.rectangle("fill", sg.x, sg.y, sg.w, sg.h)
     set_col(h.GOLD, (0.80 + 0.15 * scan) * sg.a)
     lg.setLineWidth(cn(2))
@@ -167,11 +166,8 @@ function M.crown(h, hg, cw01)
   end
   if hg.cf > 0 then
     for k = 1, 3 do
-      local ang = h.now * 1.6 + k * 2.0944
-      local px = hg.cx + math.cos(ang) * hg.w * 0.60
-      local py = hg.cy + math.sin(ang) * hg.h * 0.45
-      Prims.draw_glint(px, py, cn(2), h.GOLD,
-        (0.35 + 0.4 * Prims.twinkle01(h.now, k)) * hg.cf * a, h.ACC, true)
+      local px, py, tw = h.orbit(hg, h.now, k)
+      Prims.draw_glint(px, py, cn(2), h.GOLD, tw * a, h.ACC, true)
     end
   end
 end

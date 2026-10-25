@@ -1,8 +1,7 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
+require("tests.stubs").setup({ love = "lazy" })
+local ES = require("tests.engine_cards").states()
 
 local Actions = require("core.actions")
-local Enforce = require("core.enforce")
 local CardUtil = require("facts.card_util")
 local H = require("handlers.plan_handlers").handle_record_joker_roles
 
@@ -15,9 +14,9 @@ end
 
 local function shop(jokers, intents)
   _G.G = {
-    STATE = 2, STATES = { SHOP = 2, BLIND_SELECT = 3 },
+    STATE = ES.SHOP, STATES = ES,
     GAME = { round_resets = { ante = 2 }, dollars = 4, modifiers = {}, current_round = {} },
-    NEURO = { _decision_windows = {}, joker_intents = intents or {}, run_generation = 1,
+    NEURO = { joker_intents = intents or {}, run_generation = 1,
       shop_entry_dollars = 4, shop_visit_epoch = 1 },
     jokers = { cards = jokers, config = { card_limit = 5 } },
     shop = { cards = {} },
@@ -40,24 +39,31 @@ end
 shop({})
 check("an empty roster leaves leave_shop on the list", offered("leave_shop"))
 
+local Dispatcher = require("core.dispatcher")
 shop({ jk("j_blueprint", 101, "Blueprint"), jk("j_ice_cream", 102, "Ice Cream") })
 check("untagged jokers count", CardUtil.untagged_joker_count() == 2, CardUtil.untagged_joker_count())
-check("an untagged roster takes leave_shop off the offered list", not offered("leave_shop"))
-check("record_joker_roles stays offered so the requirement is satisfiable", offered("record_joker_roles"))
+check("an untagged roster keeps leave_shop on the list", offered("leave_shop"))
+check("record_joker_roles stays usable so the requirement is satisfiable either way", offered("record_joker_roles"))
 check("other shop actions are untouched", offered("sell_card") and offered("reroll_shop"))
+local bare, why = Dispatcher.preflight("leave_shop", {})
+check("leaving with untagged jokers is refused and changes nothing", bare == nil, tostring(bare))
+check("the refusal states the fact and names the intents way out",
+  type(why) == "string" and why:find("these jokers carry none: 1, 2.", 1, true) ~= nil
+    and why:find("`intents`", 1, true) ~= nil, tostring(why))
 
 tag(1, "CORE")
-check("a partly tagged roster still withholds leave_shop", not offered("leave_shop"))
+local partial, partial_why = Dispatcher.preflight("leave_shop", {})
+check("a partly tagged roster names only the joker still untagged",
+  partial == nil and tostring(partial_why):find("these jokers carry none: 2.", 1, true) ~= nil, tostring(partial_why))
+local covered = Dispatcher.preflight("leave_shop", { intents = { { index = 2, tag = "SCALING" } } })
+check("leave_shop carrying the missing tag is admitted", type(covered) == "function", tostring(covered))
+covered()
+check("running it records the carried tag before leaving", CardUtil.untagged_joker_count() == 0,
+  CardUtil.untagged_joker_count())
 
 tag(2, "SCALING")
-check("leave_shop returns once every joker carries a tag", offered("leave_shop"),
+check("leave_shop stays on the list once every joker carries a tag", offered("leave_shop"),
   table.concat(Actions.get_valid_actions_for_state("SHOP"), ","))
-
-shop({ jk("j_blueprint", 101, "Blueprint") })
-local ok, msg = Enforce.pre_action(nil, "leave_shop")
-check("a late leave_shop is refused", ok == false)
-check("the refusal states the fact and names the way out",
-  type(msg) == "string" and msg:find("carry no tag", 1, true) ~= nil
-    and msg:find("record_joker_roles", 1, true) ~= nil, msg)
+check("and it is admitted without intents", type(Dispatcher.preflight("leave_shop", {})) == "function")
 
 done()

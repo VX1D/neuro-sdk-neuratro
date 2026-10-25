@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 _G.NEURO_TEST = true
 if not love then
   love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
@@ -28,7 +29,8 @@ local function BUS() return joker("j_ride_the_bus", "Ride the Bus", { mult = 5 }
 
 local function board(cards, round)
   _G.G = {
-    STATE = 5, STATES = { SHOP = 5, SELECTING_HAND = 2 }, STATE_COMPLETE = true,
+    P_CENTERS = require("tests.engine_centers").centers(),
+    STATE = ES.SHOP, STATES = ES, STATE_COMPLETE = true,
     TIMERS = { REAL = 100 }, FUNCS = {},
     NEURO = { enabled = true, run_generation = 1, jokers_sold_run = 0,
       once_serials = {}, session_once_serials = {} },
@@ -39,18 +41,15 @@ local function board(cards, round)
     consumeables = { cards = {}, config = { card_limit = 2 } },
     deck = { cards = {} },
   }
-  ContextCompact.invalidate_cache()
   FactHints.reset_pending()
 end
 
 local function frame()
-  ContextCompact.invalidate_cache()
   FactHints.reset_pending()
   pcall(ContextCompact.build, "SHOP", nil,
-    { split = "stable", full_jokers = true, no_cache = true, return_list = true })
-  ContextCompact.invalidate_cache()
+    { split = "stable", return_list = true })
   local force = ContextCompact.build("SHOP", { "buy_from_shop" },
-    { split = "volatile", no_cache = true, force_phase = true }) or ""
+    { split = "volatile" }) or ""
   local hint = H.drain_hints()
   local at = force:find("Joker order:", 1, true)
   local line = at and (force:sub(at):match("^[^\n]*"):gsub("%s+$", "")) or nil
@@ -63,10 +62,12 @@ local function order_line()
 end
 
 local GOLD_ONE =
-  "Joker order: Popcorn (4) +16 Mult sits right of Ramen (3), so its x1.84 Mult does not multiply it."
+  "Joker order: Popcorn (slot 4) +16 Mult sits right of Ramen (slot 3), so its x1.84 Mult does not multiply it."
+  .. " Left of Ramen, Popcorn would add +13.44 Mult more on every hand."
 local GOLD_TWO =
-  "Joker order: Popcorn (2) +16 Mult; Ride the Bus (3) +5 Mult sit right of Ramen (1),"
-  .. " so its x1.84 Mult does not multiply them."
+  "Joker order: Popcorn (slot 2) +16 Mult; Ride the Bus (slot 3) up to +5 Mult sit right of Ramen (slot 1),"
+  .. " so its x1.84 Mult does not multiply them. Left of Ramen, they would add Popcorn +13.44 Mult"
+  .. " and Ride the Bus up to +4.2 Mult more on every hand."
 
 board({ FORTUNE(), CARTO(), RAMEN(), POPCORN(), SLY() })
 local line_one, force_one, hint_one = frame()
@@ -106,8 +107,9 @@ do
   c[4], c[5] = c[5], c[4]
   local line_alt = order_line()
   check("O6c a different broken arrangement is a different fact and lands inside the same round",
-    line_alt == "Joker order: Popcorn (5) +16 Mult sits right of Ramen (3),"
-      .. " so its x1.84 Mult does not multiply it.", line_alt or "(no line)")
+    line_alt == "Joker order: Popcorn (slot 5) +16 Mult sits right of Ramen (slot 3),"
+      .. " so its x1.84 Mult does not multiply it. Left of Ramen, Popcorn would add +13.44 Mult more"
+      .. " on every hand.", line_alt or "(no line)")
 end
 
 board({ RAMEN(), SLY() })
@@ -132,11 +134,11 @@ do
   board({ FORTUNE(), CARTO(), RAMEN(), POPCORN(), SLY() })
   local gap = Scoring.joker_order_gap()
   check("the fact reports the leftmost multiplier as the pivot",
-    gap ~= nil and gap.pivot.index == 3 and gap.pivot.xmult == 1.84,
-    gap and (gap.pivot.index .. "/" .. tostring(gap.pivot.xmult)) or "nil")
+    gap ~= nil and gap.groups[1].pivot.index == 3 and gap.groups[1].pivot.factor == 1.84,
+    gap and (gap.groups[1].pivot.index .. "/" .. tostring(gap.groups[1].pivot.factor)) or "nil")
   check("the +Mult standing left of the multiplier is not counted as behind it",
-    gap ~= nil and #gap.behind == 1 and gap.behind[1].index == 4,
-    gap and #gap.behind or "nil")
+    gap ~= nil and #gap.groups[1].behind == 1 and gap.groups[1].behind[1].index == 4,
+    gap and #gap.groups[1].behind or "nil")
 end
 
 board({ RAMEN(), joker("j_greedy_joker", "Greedy Joker", { t_mult = 3 }, "Diamond cards give +3 Mult when scored") })
@@ -162,10 +164,9 @@ end
 
 do
   board({ FORTUNE(), CARTO(), RAMEN(), POPCORN(), SLY() })
-  ContextCompact.invalidate_cache()
   FactHints.reset_pending()
   pcall(ContextCompact.build, "SHOP", nil,
-    { split = "stable", full_jokers = true, no_cache = true, return_list = true })
+    { split = "stable", return_list = true })
   FactHints.reset_pending()
   local recovered = order_line()
   check("a discarded build leaves the fact unspent -- the next frame still delivers it",
@@ -175,7 +176,7 @@ end
 do
   board({ FORTUNE(), CARTO(), RAMEN(), POPCORN(), SLY() }, 7)
   check("O17a run 1 round 7 delivers the fact", order_line() == GOLD_ONE)
-  G.NEURO.once_serials = {}          -- what a run reset really does
+  G.NEURO.once_serials = {}
   G.NEURO.run_generation = 2
   local next_run = order_line()
   check("O17b the same arrangement in the same round number of the NEXT run is delivered again",
@@ -185,7 +186,7 @@ end
 do
   local Dispatcher = require("core.dispatcher")
   local Actions = require("core.actions")
-  local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, GAME_OVER = 4, MENU = 11 }
+  local STATES = require("tests.engine_cards").states()
   local wire = {}
 
   local function count_sub(s, sub)
@@ -198,55 +199,23 @@ do
     return n
   end
 
-  _G.G = {
-    STATE = STATES.SHOP, STATES = STATES, STATE_COMPLETE = true,
-    TIMERS = { REAL = 1000 }, SETTINGS = { GAMESPEED = 1 },
-    GAME = {
-      dollars = 20, blind_on_deck = "Small", round = 11, chips = 0, STOP_USE = 0,
-      current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
-      round_resets = { ante = 4,
-        blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_club" },
-        blind_states = { Small = "Select", Big = "Upcoming", Boss = "Upcoming" } },
-      blind = { name = "Big Blind" }, used_vouchers = {}, modifiers = {}, pack_choices = 2,
-      consumeable_usage_total = { tarot = 0 },
-      hands = { Pair = { visible = true, level = 1, chips = 10, mult = 2, played = 0 } },
-    },
-    P_BLINDS = { bl_small = { key = "bl_small", name = "Small Blind" },
-      bl_big = { key = "bl_big", name = "Big Blind" },
-      bl_club = { key = "bl_club", name = "The Club" } },
-    jokers = { cards = { RAMEN(), POPCORN() }, config = { card_limit = 5 } },
-    consumeables = { cards = {}, config = { card_limit = 2 } },
-    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-    deck = { cards = {} },
-    shop_jokers = { cards = {}, config = { card_limit = 2 } },
-    shop_vouchers = { cards = {}, config = { card_limit = 1 } },
-    shop_booster = { cards = {}, config = { card_limit = 2 } },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end,
-      select_blind = function() end },
-    CONTROLLER = { locks = {} },
-    blind_select = {},
-    E_MANAGER = { queues = {} },
-  }
-  G.NEURO = {
-    enabled = true, persona = "neuro", run_generation = 1,
-    dispatcher = Dispatcher, actions = Actions,
-    _decision_windows = {}, once_serials = {}, session_once_serials = {},
-    decision_serial = 1, state_enter_serial = 1, reserved_dollars = 0,
-    jokers_sold_run = 0,
-    update = function() end,
-    send_action_result = function() end,
-  }
+  H.orch_board({ kind = "club", state = "SHOP", states = STATES, edit = function(g)
+    g.GAME.consumeable_usage_total = { tarot = 0 }
+    g.GAME.hands.Pair.played = 0
+    g.jokers.cards = { RAMEN(), POPCORN() }
+    g.shop = {}
+  end })
+  G.NEURO = H.orch_neuro({ dispatcher = Dispatcher, actions = Actions, session_once_serials = {},
+    jokers_sold_run = 0, send_action_result = "noop" })
   function G.NEURO:send_context(msg, _silent) wire[#wire + 1] = tostring(msg) return true end
   function G.NEURO:register_actions() end
-  function G.NEURO:unregister_actions() end
   function G.NEURO:force_actions(ctx, query)
     wire[#wire + 1] = tostring(ctx)
     wire[#wire + 1] = tostring(query)
   end
 
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
   FactHints.reset_pending()
-  ContextCompact.invalidate_cache()
   local Orchestrator = require("core.orchestrator")
   Orchestrator.reset_run_state()
 
@@ -255,23 +224,21 @@ do
     for _ = 1, n do
       G.TIMERS.REAL = G.TIMERS.REAL + 0.1
       pcall(Orchestrator.update, 0.1)
-      if require("core.force_state").window_is_open() then forced = true end
+      if require("core.window").current() ~= nil then forced = true end
     end
   end
 
-  ticks(200)   -- 20 s inside the round the arrangement was created in
+  ticks(200)
   local phase1 = table.concat(wire, "\n")
   check("the SHOP force actually shipped (the run is meaningful)",
     forced and #wire > 0, "forced=" .. tostring(forced) .. " msgs=" .. #wire)
   check("the order fact REACHES the model in the round its arrangement exists",
     count_sub(phase1, "Joker order:") == 1,
     "count=" .. count_sub(phase1, "Joker order:") .. "\n" .. phase1)
-  check("and only once over 20 s of ticks, not once per rebuild",
-    count_sub(phase1, "Joker order:") == 1, tostring(count_sub(phase1, "Joker order:")))
   check("the delivered wording is the same fact the unit checks pin",
     phase1:find("so its x1.84 Mult does not multiply it.", 1, true) ~= nil, phase1)
 
-  require("core.force_state").clear_force_state()
+  require("core.window").reset()
   Orchestrator.reset_run_state()
 end
 
@@ -283,7 +250,7 @@ do
       config = { center = { key = key, set = "Joker" } } }
   end
   local function facing_board(f1, f2)
-    _G.G = { GAME = { probabilities = { normal = 1 } },
+    _G.G = { P_CENTERS = require("tests.engine_centers").centers(), GAME = { probabilities = { normal = 1 } },
       jokers = { cards = { jk("j_hologram", 2, nil, f1), jk("j_joker", nil, 4, f2) } },
       hand = { cards = {} }, deck = { cards = {} }, playing_cards = {} }
   end

@@ -1,12 +1,11 @@
 rawset(_G, "NEURO_TEST", true)
 if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.G = {}
+_G.G = { P_CENTERS = require("tests.engine_centers").centers() }
 
 local check, done = require("tests.helpers").harness("joker-hidden-subtotal")
 
 local LB = require("tests.fixtures.live_board")
 local CtxJokers = require("context.ctx_jokers")
-local Compact = require("context.context_compact")
 
 local QUALIFIER = "Joker bonuses from the jokers you can see"
 local PLAIN = "Joker bonuses (current values"
@@ -26,7 +25,6 @@ local function section(keys, hidden, state)
     if hidden and hidden[i] then roster[i].facing = "back" end
   end
   G.jokers = { cards = roster, config = { card_limit = 5 } }
-  Compact.invalidate_cache()
   return tostring(CtxJokers.jokers_section(state or "SELECTING_HAND"))
 end
 
@@ -63,10 +61,10 @@ local ACORN = { "j_hologram", "j_baron", "j_scary_face", "j_fibonacci", "j_odd_t
 local ALL_DOWN = { [1] = true, [2] = true, [3] = true, [4] = true, [5] = true }
 
 local acorn = section(ACORN, ALL_DOWN)
-check("a fully hidden roster still carries the aggregate",
-  acorn:find("Joker bonuses", 1, true) ~= nil, acorn)
-check("a fully hidden roster still states the hidden rows' contribution (Baron)",
-  agg_line(acorn):find("Baron", 1, true) ~= nil, agg_line(acorn))
+check("a fully hidden roster does not leak an aggregate",
+  acorn:find("Joker bonuses", 1, true) == nil, acorn)
+check("a fully hidden roster does not reveal hidden joker contribution",
+  agg_line(acorn):find("Baron", 1, true) == nil, agg_line(acorn))
 check("a fully hidden roster is NOT qualified -- nothing is left out of its figures",
   acorn:find(QUALIFIER, 1, true) == nil, agg_line(acorn))
 check("every row is still rendered as face-down (hidden)",

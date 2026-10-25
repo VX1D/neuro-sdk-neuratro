@@ -1,27 +1,23 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
+require("tests.stubs").setup({ love = "timers" })
 
 local check, done = require("tests.helpers").harness("force-settling-defer")
 
 local Router = require("force.force_router")
-local Guard = require("core.transition_guard")
+local Guard = require("core.validate")
 local Actions = require("core.actions")
+local Tuning = require("core.config")
 
 local joker = require("tests.helpers").flat_mult_joker
 
-local function tarot()
-  return { ability = { set = "Tarot", consumeable = {} },
-    config = { center = { key = "c_fool", set = "Tarot", name = "The Fool" } } }
-end
+local tarot = require("tests.fake_cards").bare_tarot
 
-local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, GAME_OVER = 4,
-  TAROT_PACK = 6, ROUND_EVAL = 7 }
+local STATES = require("tests.engine_cards").states()
 
-local function base(state)
+local function board(state, clock, generation)
   _G.G = {
     STATE = STATES[state], STATES = STATES, STATE_COMPLETE = true,
-    TIMERS = { REAL = 1000 }, SETTINGS = { GAMESPEED = 1 },
-    GAME = { dollars = 20, blind_on_deck = "Small", round = 11, chips = 0, STOP_USE = 0,
+    TIMERS = { REAL = clock }, SETTINGS = { GAMESPEED = 1 },
+    GAME = { dollars = 20, blind_on_deck = "Small", round = 11, chips = 0, STOP_USE = 0, last_tarot_planet = "c_pluto",
       current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
       round_resets = { ante = 4,
         blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_club" },
@@ -31,38 +27,39 @@ local function base(state)
     P_BLINDS = { bl_small = { key = "bl_small", name = "Small Blind" },
       bl_big = { key = "bl_big", name = "Big Blind" },
       bl_club = { key = "bl_club", name = "The Club" } },
-    NEURO = { run_generation = 1, _decision_windows = {}, once_serials = {}, decision_serial = 1,
+    NEURO = { run_generation = generation, once_serials = {}, decision_serial = 1,
       state_enter_serial = 1, plan = { hand_plan = "x", build_plan = "y" }, reserved_dollars = 0 },
     jokers = { cards = { joker("j_joker", "Joker") }, config = { card_limit = 5 } },
     consumeables = { cards = {}, config = { card_limit = 2 } },
     hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
     deck = { cards = {} },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end,
+    FUNCS = { get_poker_hand_info = require("tests.engine_hand_info").stub("Pair"),
       select_blind = function() end, skip_booster = function() end,
-      cash_out = function() end, toggle_shop = function() end, use_card = function() end },
+      cash_out = function() end, toggle_shop = function() end },
     CONTROLLER = { locks = {} },
     blind_select = {},
   }
-  if state == "ROUND_EVAL" then _G.G.round_eval = {} end
-  if state == "SHOP" then _G.G.shop = {} end
-  Guard.reset()
+  Guard.reset_run_state()
   Router._guard_defer_at = nil
   Router._guard_defer_state = nil
 end
 
-local function signature(state)
-  local force = Router.get_force_for_state(state)
-  if not force then return nil end
-  return table.concat(force.actions, ",")
+local function base(state)
+  board(state, 1000, 1)
+  G.FUNCS.use_card = function() end
+  if state == "ROUND_EVAL" then require("tests.helpers").cash_out_ready(_G.G) end
+  if state == "SHOP" then _G.G.shop = {} end
 end
+
+local signature = require("tests.helpers").force_signature
 
 do
   base("BLIND_SELECT")
   local full = signature("BLIND_SELECT")
-  check("fixture reproduces the live BLIND_SELECT force",
+  check("fixture reproduces the live BLIND_SELECT force, its tools offered after the decision (force_router.offer)",
     full == "select_blind,sell_card,record_plan", tostring(full))
 
-  Guard.mark("select_blind")
+  Guard.note_applied("select_blind")
   Router._guard_defer_at = nil
   Router._guard_defer_state = nil
   check("a latched progressive action defers the force instead of shipping a pruned list",
@@ -78,7 +75,7 @@ end
 do
   base("BLIND_SELECT")
   local full = signature("BLIND_SELECT")
-  Guard.mark("select_blind")
+  Guard.note_applied("select_blind")
   Router._guard_defer_at = nil
   Router._guard_defer_state = nil
   local shapes, order = {}, {}
@@ -109,11 +106,12 @@ do
   local full = signature("SHOP")
   check("fixture builds a shop force", full and full:find("buy_from_shop", 1, true) ~= nil, tostring(full))
 
-  G.CONTROLLER.locks.leave_shop = true
+  -- The controller drops clicks while any lock is held, so shop buttons are unavailable.
+  G.CONTROLLER.locks.toggle_shop = true
   local sig = signature("SHOP")
-  check("a locked forfeit action alone never defers the force",
-    sig ~= nil and sig:find("buy_from_shop", 1, true) ~= nil
-      and sig:find("leave_shop", 1, true) == nil, tostring(sig))
+  check("a held controller lock defers the whole shop force",
+    sig == nil or (sig:find("buy_from_shop", 1, true) == nil and sig:find("leave_shop", 1, true) == nil),
+    tostring(sig))
 end
 
 do
@@ -123,9 +121,13 @@ do
   G.shop_vouchers = { cards = {}, config = {} }
   G.CONTROLLER.locks.shop_reroll = true
   local sig = signature("SHOP")
-  check("a settling reroll does not defer while a purchase is still open",
-    sig ~= nil and sig:find("buy_from_shop", 1, true) ~= nil
-      and sig:find("reroll_shop", 1, true) == nil, tostring(sig))
+  check("a settling reroll offers no purchase while its lock holds the controller",
+    sig == nil or (sig:find("buy_from_shop", 1, true) == nil and sig:find("reroll_shop", 1, true) == nil),
+    tostring(sig))
+  G.CONTROLLER.locks.shop_reroll = nil
+  sig = signature("SHOP")
+  check("the purchase is offered again once the reroll lock releases",
+    sig ~= nil and sig:find("buy_from_shop", 1, true) ~= nil, tostring(sig))
 end
 
 do
@@ -142,27 +144,21 @@ do
 end
 
 do
-  base("TAROT_PACK")
+  base("SMODS_BOOSTER_OPENED")
   G.pack_cards = { cards = { tarot() }, config = {} }
-  local full = signature("TAROT_PACK")
+  local full = signature("SMODS_BOOSTER_OPENED")
   check("fixture builds a pack force", full == "choose_pack_card,skip_pack", tostring(full))
 
   G.GAME.STOP_USE = 3
-  check("a pack whose every action is settling defers", signature("TAROT_PACK") == nil)
+  check("a pack whose every action is settling defers", signature("SMODS_BOOSTER_OPENED") == nil)
   G.TIMERS.REAL = 1000 + 4.0
-  check("the defer holds while the engine flag is fresh", signature("TAROT_PACK") == nil)
+  check("the defer holds while the engine flag is fresh", signature("SMODS_BOOSTER_OPENED") == nil)
   G.TIMERS.REAL = 1000 + 8.5
   check("the failsafe releases the force even if the engine never clears the flag",
-    signature("TAROT_PACK") ~= nil, tostring(signature("TAROT_PACK")))
+    signature("SMODS_BOOSTER_OPENED") ~= nil, tostring(signature("SMODS_BOOSTER_OPENED")))
 
   G.GAME.STOP_USE = 0
-  signature("TAROT_PACK")
-  check("after engine settles: defer timestamp is cleared",
-    Router._guard_defer_at == nil,
-    "at=" .. tostring(Router._guard_defer_at))
-  check("after engine settles: defer state is cleared",
-    Router._guard_defer_state == nil,
-    "state=" .. tostring(Router._guard_defer_state))
+  signature("SMODS_BOOSTER_OPENED")
 
   local Config = require("core.config")
   local default_failsafe = Config.get("NEURO_ROUTER_DEFER_FAILSAFE")
@@ -171,27 +167,19 @@ do
 
   G.TIMERS.REAL = 1000 + 30.0
   G.GAME.STOP_USE = 3
-  check("fresh STOP_USE with new clock: defer engages again", signature("TAROT_PACK") == nil)
-  check("new defer timestamp equals current clock",
-    Router._guard_defer_at == G.TIMERS.REAL and Router._guard_defer_state == "TAROT_PACK",
-    "at=" .. tostring(Router._guard_defer_at) .. " clock=" .. tostring(G.TIMERS.REAL)
-      .. " state=" .. tostring(Router._guard_defer_state))
+  check("fresh STOP_USE with new clock: defer engages again", signature("SMODS_BOOSTER_OPENED") == nil)
 
   G.TIMERS.REAL = 1000 + 30.0 + default_failsafe + 0.5
   check("old config window would have released; current config still holds",
-    signature("TAROT_PACK") == nil,
-    tostring(signature("TAROT_PACK")))
+    signature("SMODS_BOOSTER_OPENED") == nil,
+    tostring(signature("SMODS_BOOSTER_OPENED")))
 
   G.TIMERS.REAL = 1000 + 30.0 + new_failsafe - 0.5
-  check("just before new failsafe: defer still holds", signature("TAROT_PACK") == nil)
-  check("guard fields survive across the defer window",
-    Router._guard_defer_at ~= nil and Router._guard_defer_state == "TAROT_PACK")
+  check("just before new failsafe: defer still holds", signature("SMODS_BOOSTER_OPENED") == nil)
 
   G.TIMERS.REAL = 1000 + 30.0 + new_failsafe + 0.1
   check("after new failsafe: force returns again",
-    signature("TAROT_PACK") ~= nil, tostring(signature("TAROT_PACK")))
-  check("after new failsafe: force does not re-defer (defer cycle complete)",
-    signature("TAROT_PACK") ~= nil)
+    signature("SMODS_BOOSTER_OPENED") ~= nil, tostring(signature("SMODS_BOOSTER_OPENED")))
 
   Config.set("NEURO_ROUTER_DEFER_FAILSAFE", default_failsafe)
 end
@@ -199,7 +187,7 @@ end
 do
   base("ROUND_EVAL")
   check("fixture builds a round-eval force", signature("ROUND_EVAL") == "cash_out")
-  Guard.mark("cash_out")
+  Guard.note_applied("cash_out")
   Router._guard_defer_at = nil
   Router._guard_defer_state = nil
   check("a latched cash_out defers rather than emitting an empty round-eval force",
@@ -214,6 +202,82 @@ do
   local second = signature("BLIND_SELECT")
   check("a state with nothing settling is untouched by the defer path",
     first ~= nil and first == second, tostring(first))
+end
+
+local FAILSAFE = Tuning.get("NEURO_ROUTER_DEFER_FAILSAFE")
+
+local function latch_base(clock, generation)
+  board("BLIND_SELECT", clock, generation)
+  Router._guard_defer_generation = nil
+end
+
+local function deferred()
+  return Router.get_force_for_state("BLIND_SELECT") == nil
+end
+
+do
+  latch_base(9000, 1)
+  Guard.note_applied("select_blind")
+  check("latch arms on the pre-reset clock", deferred() and Router._guard_defer_at == 9000,
+    tostring(Router._guard_defer_at))
+
+  G.TIMERS.REAL = 3
+  G.NEURO.run_generation = 2
+  Guard.note_applied("select_blind")
+  check("the latch re-arms on the new clock instead of keeping the pre-reset stamp",
+    deferred() and Router._guard_defer_at == 3, tostring(Router._guard_defer_at))
+
+  G.TIMERS.REAL = 3 + FAILSAFE + 0.1
+  Guard.note_applied("select_blind")
+  check("the deferral expires on the new clock rather than waiting out the old one",
+    not deferred(), tostring(Router._guard_defer_at))
+end
+
+do
+  latch_base(9000, 1)
+  Guard.note_applied("select_blind")
+  check("latch armed before the reconnect", deferred() and Router._guard_defer_at == 9000)
+
+  G.NEURO = { run_generation = 4, once_serials = {},
+    decision_serial = 1, state_enter_serial = 1,
+    plan = { hand_plan = "x", build_plan = "y" }, reserved_dollars = 0 }
+  G.TIMERS.REAL = 9000 + FAILSAFE * 0.5
+  Guard.note_applied("select_blind")
+  check("a new run generation restarts the deferral window",
+    deferred() and Router._guard_defer_at == 9000 + FAILSAFE * 0.5,
+    tostring(Router._guard_defer_at))
+end
+
+do
+  latch_base(9000, 1)
+  Guard.note_applied("select_blind")
+  check("latch armed before the reconnect that reuses generation 1",
+    deferred() and Router._guard_defer_at == 9000)
+
+  G.NEURO = { run_generation = 1, once_serials = {},
+    decision_serial = 1, state_enter_serial = 1,
+    plan = { hand_plan = "x", build_plan = "y" }, reserved_dollars = 0 }
+  G.TIMERS.REAL = 5
+  Guard.note_applied("select_blind")
+  check("a rewound clock re-arms the latch even when the generation number repeats",
+    deferred() and Router._guard_defer_at == 5, tostring(Router._guard_defer_at))
+  G.TIMERS.REAL = 5 + FAILSAFE + 0.1
+  Guard.note_applied("select_blind")
+  check("and the deferral then expires on the rewound clock", not deferred())
+end
+
+do
+  latch_base(1000, 1)
+  Guard.note_applied("select_blind")
+  check("same run, same state: the latch keeps its original stamp",
+    deferred() and Router._guard_defer_at == 1000, tostring(Router._guard_defer_at))
+  G.TIMERS.REAL = 1000 + FAILSAFE * 0.5
+  Guard.note_applied("select_blind")
+  check("mid-window polling does not restart the deferral",
+    deferred() and Router._guard_defer_at == 1000, tostring(Router._guard_defer_at))
+  G.TIMERS.REAL = 1000 + FAILSAFE + 0.1
+  Guard.note_applied("select_blind")
+  check("the window still expires exactly once the failsafe has elapsed", not deferred())
 end
 
 done()

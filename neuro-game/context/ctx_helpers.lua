@@ -4,15 +4,8 @@ local flatten_description = Utils.flatten_description
 
 local function normalize_flat(value)
   if value == nil then return "" end
-  local s = value
-  if type(s) == "table" then
-    s = flatten_description(s) or ""
-  else
-    s = tostring(s)
-  end
-  s = s:gsub("[\r\n]+", " ")
-  s = s:gsub("|", "/")
-  return s
+  local s = type(value) == "table" and (flatten_description(value) or "") or tostring(value)
+  return (s:gsub("[\r\n]+", " "):gsub("|", "/"))
 end
 
 local function tidy(s)
@@ -20,116 +13,93 @@ local function tidy(s)
   return s:match("^%s*(.-)%s*$") or s
 end
 
+local function clause_separators(s)
+  local prev
+  repeat prev = s; s = s:gsub("(%d),(%d%d%d)", "%1\3%2") until s == prev
+  return (s:gsub(",", ";"):gsub("\3", ","))
+end
+
 local function normalize_text(value)
-  return tidy(normalize_flat(value):gsub(",", ";"))
+  return tidy(clause_separators(normalize_flat(value)))
 end
 
 local function normalize_prose(value)
   return tidy(normalize_flat(value))
 end
 
-local NUMERIC_EFFECTS = require("facts.numeric_effects")
-local function effect_parts(ability)
-  local out = {}
-  if type(ability) ~= "table" then return out end
-  for _, e in ipairs(NUMERIC_EFFECTS) do
-    out[#out + 1] = NUMERIC_EFFECTS.label(ability, e)
-  end
-  return out
-end
-
-local function joker_tags(card)
-  if not card then return "-" end
+local function sticker_tags(card, tags)
   local ability = card.ability or {}
-  local tags = {}
-  if card.debuff then tags[#tags + 1] = "DEBUFFED(inactive)" end
   if ability.eternal then tags[#tags + 1] = "eternal(unsellable)" end
   if ability.perishable then
     local tally = ability.perish_tally
-    if tally and tally <= 0 then
+    if tally <= 0 then
       tags[#tags + 1] = "perishable(DEBUFFED_now)"
-    elseif tally and tally == 1 then
+    elseif tally == 1 then
       tags[#tags + 1] = "perishable(DEBUFFED_END_OF_ROUND)"
-    elseif tally then
-      tags[#tags + 1] = "perishable(rounds_left=" .. tostring(tally) .. ")"
     else
-      tags[#tags + 1] = "perishable"
+      tags[#tags + 1] = "perishable(rounds_left=" .. tostring(tally) .. ")"
     end
   end
   if ability.rental then
     local rate = (G and G.GAME and tonumber(G.GAME.rental_rate)) or 3
-    tags[#tags + 1] = "rental($" .. rate .. "_per_round)"
+    tags[#tags + 1] = "rental(" .. Utils.money(rate) .. "_per_round)"
   end
+  return tags
+end
+
+local function joker_tags(card)
+  if not card then return "-" end
+  local tags = {}
+  if card.debuff then tags[#tags + 1] = "DEBUFFED(inactive)" end
+  sticker_tags(card, tags)
   local et = CardUtil.edition_tag(card.edition)
   if et ~= "" then tags[#tags + 1] = et end
   if #tags == 0 then return "-" end
   return normalize_text(table.concat(tags, "/"))
 end
 
-local function ability_signature(ability)
-  if type(ability) ~= "table" then return "-" end
-  local parts = {}
-  for _, e in ipairs(NUMERIC_EFFECTS) do
-    if not e.nest then
-      local v = ability[e.field]
-      if v and v ~= e.skip then parts[#parts + 1] = e.field .. "=" .. tostring(v) end
-    end
-  end
-  if type(ability.extra) == "table" then
-    local xkeys = {}
-    for k, v in pairs(ability.extra) do if type(v) == "number" then xkeys[#xkeys + 1] = k end end
-    table.sort(xkeys)
-    for _, k in ipairs(xkeys) do parts[#parts + 1] = "x." .. k .. "=" .. tostring(ability.extra[k]) end
-  elseif type(ability.extra) == "number" then
-    parts[#parts + 1] = "x=" .. tostring(ability.extra)
-  end
-  if ability.perish_tally then parts[#parts + 1] = "pt=" .. tostring(ability.perish_tally) end
-  if #parts == 0 then return "-" end
-  return table.concat(parts, ";")
-end
 
-local function money(v)
-  local s = tostring(v or "?")
-  local neg = s:match("^%-(.+)$")
-  return neg and ("-$" .. neg) or ("$" .. s)
-end
-
-local function plural(n, w)
-  return tostring(n) .. " " .. (tostring(n) == "1" and w or (w .. "s"))
-end
+local plural = require("facts.text").plural
 
 local function strip_dot(s) return (tostring(s or "")):gsub("%s*%.%s*$", "") end
+local function end_sentence(s)
+  s = tostring(s or "")
+  return s:find("[%.%?!]$") and s or (s .. ".")
+end
 
 local function yn(v) return v and "yes" or "no" end
 
-local function decode_payout(econ)
-  if not econ then return nil end
-  local n = require("util.utils").fmt_num
-  return string.format("$%s (blind $%s + hands $%s + discards $%s + interest $%s); money jokers/tags add more",
-    n(econ.projected_total or 0), n(econ.blind_reward or 0), n(econ.hands_bonus or 0),
-    n(econ.discard_bonus or 0), n(econ.interest or 0))
-end
-
 local VALUE_LONG = { A = "Ace", K = "King", Q = "Queen", J = "Jack" }
-local SUIT_LONG = { H = "Hearts", D = "Diamonds", C = "Clubs", S = "Spades" }
 
-local function resolve(v)
-  if type(v) == "function" then return v() end
-  return v
-end
+local resolve = CardUtil.resolve_field
 
 local function mod_desc(short)
   if type(short) ~= "string" or short == "" then return nil end
-  for _, r in pairs(CardUtil.ENHANCEMENTS) do
-    if resolve(r.short) == short then return resolve(r.desc) end
-  end
-  for _, r in pairs(CardUtil.SEALS) do
-    if resolve(r.short) == short then return resolve(r.desc) end
+  for _, registry in ipairs({ CardUtil.ENHANCEMENTS, CardUtil.SEALS }) do
+    for _, r in pairs(registry) do
+      if resolve(r.short) == short then return resolve(r.desc) end
+    end
   end
   for _, e in ipairs(CardUtil.EDITIONS) do
     if resolve(e.tag) == short then return resolve(e.desc) end
   end
   return nil
+end
+
+local function modifier_desc(short)
+  for _, r in pairs(CardUtil.SEALS) do
+    if resolve(r.short) == short then
+      local d = resolve(r.desc)
+      return r.name .. " Seal" .. (d and (": " .. d) or "")
+    end
+  end
+  for _, e in ipairs(CardUtil.EDITIONS) do
+    if resolve(e.tag) == short then
+      local d = type(e.desc) == "function" and e.desc("playing") or e.desc
+      return e.name .. (d and (": " .. d) or "")
+    end
+  end
+  return mod_desc(short)
 end
 
 local _edition_map = nil
@@ -165,21 +135,11 @@ local function split_top(s, sep)
   return out
 end
 
-local function split_plus(s) return split_top(s, "+") end
-
 local function decode_card(tok)
-  local segs = split_plus(tok)
+  local segs = split_top(tok, "+")
   local head = segs[1] or tok
-  local out
-  local val, suit = head:match("^(.-)([HDCS])$")
-  if head == "FD" then
-    out = "face-down (hidden)"
-  elseif val and suit and val ~= "" then
-    out = (VALUE_LONG[val] or val) .. " of " .. (SUIT_LONG[suit] or suit)
-  else
-    local hd = mod_desc(head)
-    out = hd and ((head:match("^[%w!]+") or "Special") .. " card (" .. hd .. ")") or (head:gsub("_", " "))
-  end
+  local hd = mod_desc(head)
+  local out = hd and ((head:match("^[%w!]+") or "Special") .. " Card (" .. hd .. ")") or (head:gsub("_", " "))
   local mlist = {}
   for i = 2, #segs do
     local m = segs[i]
@@ -188,7 +148,7 @@ local function decode_card(tok)
     elseif m == "USED" then mlist[#mlist + 1] = "played earlier this ante; debuffed by The Pillar this round"
     elseif m:match("^perma%d+c$") then
       mlist[#mlist + 1] = "permanently +" .. m:match("^perma(%d+)c$") .. " chips (already counted in the chips it scores)"
-    else mlist[#mlist + 1] = mod_desc(m) or (m:gsub("_", " ")) end
+    else mlist[#mlist + 1] = modifier_desc(m) or (m:gsub("_", " ")) end
   end
   if #mlist > 0 then out = out .. " (" .. table.concat(mlist, ", ") .. ")" end
   return out
@@ -203,7 +163,7 @@ local function expand_extra(inner)
   inner, c = inner:gsub("%+([%-%d%.]+)M/(%a+)%-card", "+%1 Mult per %2 card"); n = n + c
   inner, c = inner:gsub("%+([%-%d%.]+)C/(%a+)%-card", "+%1 Chips per %2 card"); n = n + c
   inner, c = inner:gsub("jh=([%-%d]+)", "+%1 hands"); n = n + c
-  inner, c = inner:gsub("%$/r=([%-%d]+)", "$%1 per round"); n = n + c
+  inner, c = inner:gsub("%$/r=([%-%d]+)", function(v) return Utils.money(v) .. " per round" end); n = n + c
   inner, c = inner:gsub("s=(%a+)", "suit %1"); n = n + c
   inner, c = inner:gsub("song=(%w+)", "song %1"); n = n + c
   if n == 0 then return "[" .. inner .. "]" end
@@ -248,7 +208,7 @@ local function humanize_flag(t)
   if n then return "perishable, " .. n .. " rounds left" end
   if t == "perishable" then return "perishable" end
   n = t:match("^rental%(%$(%d+)_per_round%)$")
-  if n then return "rental, $" .. n .. " per round" end
+  if n then return "rental, " .. Utils.money(n) .. " per round" end
   local ehead = t:match("^[%w]+%(")
   if ehead then
     local labeled = edition_map()[ehead]
@@ -257,40 +217,42 @@ local function humanize_flag(t)
   return mod_desc(t) or (t:gsub("_", " "))
 end
 
-local function split_slash(s) return split_top(s, "/") end
-
 local function humanize_flags(s)
   if not s or s == "" or s == "-" then return s end
   local parts = {}
-  for _, t in ipairs(split_slash(s)) do
+  for _, t in ipairs(split_top(s, "/")) do
     if t ~= "" then parts[#parts + 1] = humanize_flag(t) end
   end
   return table.concat(parts, ", ")
 end
 
+local function sticker_flags(card)
+  if type(card) ~= "table" then return nil end
+  local tags = sticker_tags(card, {})
+  if #tags == 0 then return nil end
+  return humanize_flags(normalize_text(table.concat(tags, "/")))
+end
+
 local function has_action(action_set, name)
-  if not action_set or not name then return false end
-  return not not action_set[name]
+  return not not (action_set and name and action_set[name])
 end
 
-local VALUE_SHORT = {
-  Ace = "A", King = "K", Queen = "Q", Jack = "J",
-  ["10"] = "10", ["9"] = "9", ["8"] = "8", ["7"] = "7",
-  ["6"] = "6", ["5"] = "5", ["4"] = "4", ["3"] = "3", ["2"] = "2",
-}
-
-local SUIT_SHORT = {
-  Hearts = "H", Diamonds = "D", Clubs = "C", Spades = "S",
-}
-
-local function short_value(v)
-  if not v then return "?" end
-  return VALUE_SHORT[v] or v
+local function offers(action_set, name)
+  if type(action_set) == "table" and next(action_set) then return has_action(action_set, name) end
+  return not not require("core.actions").is_action_valid(name)
 end
 
-local function short_suit(s)
-  if not s then return "?" end
-  return SUIT_SHORT[s] or s
+local function can_line(label, action_set, names, fact)
+  for _, name in ipairs(names) do
+    if offers(action_set, name) then return "Can " .. label .. ": " .. yn(fact ~= false) end
+  end
+  local Actions = require("core.actions")
+  -- An overlay blocks every action; state its blocker once per frame rather than on each line.
+  if Actions.overlay_block_reason(names[1]) then return "Can " .. label .. ": no" end
+  local reason = Actions.unavailable_reason(names[1])
+  reason = type(reason) == "string" and strip_dot(reason:match("^[^;]*")) or ""
+  if reason == "" then return "Can " .. label .. ": no" end
+  return "Can " .. label .. ": no -- " .. reason:sub(1, 1):lower() .. reason:sub(2)
 end
 
 local function short_enh(card)
@@ -299,14 +261,42 @@ local function short_enh(card)
   return CardUtil.enhancement_short(enh)
 end
 
-local function short_seal(card)
-  if not card then return "" end
-  return CardUtil.seal_short(card.seal) or ""
-end
+local function short_seal(card) return card and CardUtil.seal_short(card.seal) or "" end
 
 local function short_edition(card)
   if not card then return "" end
   return CardUtil.edition_tag(card.edition)
+end
+
+local function hidden_row(idx, card, area)
+  return idx .. ". " .. require("facts.public_card_identity").label(card, area, idx) .. " -- identity and effect hidden."
+end
+
+local function effect_tail(eff, suffix, desc)
+  if suffix ~= "" then eff = (eff ~= "" and (eff .. "; " .. suffix)) or suffix end
+  local out = (eff ~= "") and (" -- " .. eff) or ""
+  if desc and desc ~= "" and not (eff ~= "" and eff:find(desc, 1, true)) then out = end_sentence(out) .. " " .. desc end
+  return out
+end
+
+local function row_effect(card, kind)
+  local SemanticRegistry = require("core.semantic_registry")
+  local raw_eff = SemanticRegistry.render(kind, card)
+  local suffix = CardUtil.planet_run_state_suffix(card):gsub("^; ", "")
+  local desc = SemanticRegistry.render("card_description_full", card)
+  if desc == "" or desc == raw_eff then
+    desc = nil
+  else
+    local nd = desc:lower():gsub("[^%w]", "")
+    local ne = raw_eff:lower():gsub("[^%w]", "")
+    if nd ~= "" and ne:find(nd, 1, true) then desc = nil end
+  end
+  return raw_eff, suffix, desc
+end
+
+local function join(list, last)
+  if #list <= 1 then return list[1] or "" end
+  return table.concat(list, ", ", 1, #list - 1) .. (last or " and ") .. list[#list]
 end
 
 local KIND_UNIT = { xmult = " Mult", mult = " Mult", chips = " Chips", xchips = " Chips" }
@@ -323,14 +313,45 @@ local function quantity_clause(kind, q)
   return s
 end
 
-local function ledger_gated_sources(led)
-  local out = {}
-  if not led then return out end
-  for _, src in ipairs(led.sources) do
-    out[#out + 1] = normalize_text(src.name) .. " " .. quantity_amount(src.kind, src.total.n)
-      .. (src.why and (" -- " .. src.why) or "")
+local function ledger_source_groups(led)
+  local out, by_key, named = {}, {}, {}
+  for _, src in ipairs(led and led.sources or {}) do
+    local key = table.concat({ src.name, src.kind, tostring(src.total.n), tostring(src.why) }, "|")
+    local group = by_key[key]
+    if not group then
+      group = { name = normalize_text(src.name), kind = src.kind, total = src.total, why = src.why, slots = {} }
+      by_key[key], out[#out + 1] = group, group
+      named[group.name] = (named[group.name] or 0) + 1
+    end
+    if src.slot then group.slots[#group.slots + 1] = src.slot end
+  end
+  for _, group in ipairs(out) do
+    group.label, group.each = group.name, #group.slots > 1
+    if group.each or named[group.name] > 1 then
+      table.sort(group.slots)
+      group.label = group.name .. " (" .. table.concat(group.slots, ", ") .. ")"
+    end
   end
   return out
 end
 
-return { normalize_text = normalize_text, normalize_prose = normalize_prose, effect_parts = effect_parts, ability_signature = ability_signature, joker_tags = joker_tags, has_action = has_action, short_value = short_value, short_suit = short_suit, short_enh = short_enh, short_seal = short_seal, short_edition = short_edition, money = money, plural = plural, strip_dot = strip_dot, yn = yn, decode_payout = decode_payout, decode_card = decode_card, VALUE_LONG = VALUE_LONG, humanize_effect = humanize_effect, humanize_flags = humanize_flags, quantity_amount = quantity_amount, quantity_clause = quantity_clause, ledger_gated_sources = ledger_gated_sources }
+local function ledger_gated_sources(led, drop_why)
+  local out = {}
+  for _, g in ipairs(ledger_source_groups(led)) do
+    local figure = quantity_amount(g.kind, g.total.n)
+    local why = g.why
+    if why and drop_why and drop_why(g, figure) then why = nil end
+    out[#out + 1] = g.label .. " " .. figure .. (g.each and " each" or "") .. (why and (" -- " .. why) or "")
+  end
+  return out
+end
+
+local function target_count(card)
+  local lo, hi = CardUtil.consumable_target_range(card)
+  if not (hi and hi > 0) then return nil end
+  local n = (lo == hi) and tostring(lo) or (tostring(lo) .. " to " .. tostring(hi))
+  return n .. (n == "1" and " card" or " cards")
+end
+
+local M = { target_count = target_count, row_effect = row_effect, join = join, hidden_row = hidden_row, effect_tail = effect_tail, clause_separators = clause_separators, normalize_text = normalize_text, normalize_prose = normalize_prose, joker_tags = joker_tags, sticker_flags = sticker_flags, has_action = has_action, offers = offers, can_line = can_line, short_enh = short_enh, short_seal = short_seal, short_edition = short_edition, plural = plural, strip_dot = strip_dot, end_sentence = end_sentence, yn = yn, decode_card = decode_card, VALUE_LONG = VALUE_LONG, humanize_effect = humanize_effect, humanize_flags = humanize_flags, quantity_amount = quantity_amount, quantity_clause = quantity_clause, ledger_gated_sources = ledger_gated_sources }
+return M

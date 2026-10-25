@@ -8,5 +8,5 @@ global_usage = "allow"
 
 # test-harness specific:
 unused_variable = "allow"   # mock callbacks intentionally ignore args
-divide_by_zero = "allow"    # tests/test_json_wire.lua exercises inf/nan wire encoding on purpose
+divide_by_zero = "allow"
 bad_string_escape = "allow" # tests/test_force_roundtrip.lua embeds raw byte-escape fixtures

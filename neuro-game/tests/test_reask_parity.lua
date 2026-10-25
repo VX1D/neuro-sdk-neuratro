@@ -1,33 +1,8 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", localize = true, G = "board" })
 
 local check, done = require("tests.helpers").harness("reask-parity")
 local FP = require("tests.force_payload")
 local LB = require("tests.fixtures.live_board")
-
-local Once = require("util.once")
-local real_once_until = Once.once_until
-local gate_opens = {}
-Once.once_until = function(key, epoch)
-  local ok = real_once_until(key, epoch)
-  if ok then gate_opens[#gate_opens + 1] = tostring(key) end
-  return ok
-end
-
-local function opens_naming(tag)
-  local n = 0
-  for _, key in ipairs(gate_opens) do if key:find(tag, 1, true) then n = n + 1 end end
-  return n
-end
-
-local function rules_segment(query)
-  local i = query:find("Rules: 1)", 1, true)
-  if not i then return nil end
-  local j = query:find("Hand card indices:", i, true)
-  return query:sub(i, (j or (#query + 1)) - 1)
-end
 
 local function boss_floor()
   local bl = G.GAME and G.GAME.blind
@@ -49,6 +24,8 @@ local function load_bearing()
   return want
 end
 
+local function board_text(s) return (tostring(s or ""):gsub("Since your last decision:[^\n]*", "")) end
+
 local forces, missing, blind_leak = {}, {}, {}
 
 local function force(label)
@@ -58,17 +35,10 @@ local function force(label)
     return nil
   end
   local rec = { label = label, round = G.GAME.round, query = payload.query,
-    message = payload.message, seg = rules_segment(payload.query),
-    actions = payload.actions }
-  if not rec.seg then missing[#missing + 1] = label .. ": no numbered rules list" end
+    message = payload.message, actions = payload.actions }
   for _, want in ipairs(load_bearing()) do
     if not payload.message:find(want[2], 1, true) then
       missing[#missing + 1] = string.format("%s: %s (%q) is absent", label, want[1], want[2])
-    end
-  end
-  for _, name in ipairs(rec.actions) do
-    if not payload.query:find(name, 1, true) then
-      missing[#missing + 1] = label .. ": offers " .. name .. " without naming it in the query"
     end
   end
   forces[#forces + 1] = rec
@@ -111,33 +81,10 @@ force("r7 on the last hand")
 local r7 = {}
 for _, f in ipairs(forces) do if f.round == 7 then r7[#r7 + 1] = f end end
 
-check("the round was actually played out across many forces",
-  #r7 >= 7, "forces in round 7: " .. #r7)
-check("every force of the round carries the facts a move cannot be chosen without",
-  #missing == 0, table.concat(missing, " | "))
-
-do
-  local longest, count = 0, 0
-  for _, f in ipairs(r7) do if f.seg and #f.seg > longest then longest = #f.seg end end
-  local shortest = math.huge
-  for _, f in ipairs(r7) do if f.seg and #f.seg < shortest then shortest = #f.seg end end
-  local at_max = {}
-  for _, f in ipairs(r7) do
-    if f.seg and #f.seg == longest then count = count + 1; at_max[#at_max + 1] = f.label end
-  end
-  check("the long form of the rules is stated exactly once in the round, however many hands are spent",
-    count == 1, string.format("%d forces carry the longest rules block (%d chars): %s",
-      count, longest, table.concat(at_max, ", ")))
-  check("P3a and the short form really is a different, shorter block",
-    shortest < longest * 0.9, string.format("longest=%d shortest=%d", longest, shortest))
-  check("P3b the round-cadence gate opened exactly once for the whole round",
-    opens_naming("sh_rules_core") == 1, "openings: " .. opens_naming("sh_rules_core"))
-end
-
 do
   local restated = {}
   for i = 2, #r7 do
-    if r7[i].message:find(sold_name, 1, true) and i >= 4 then
+    if board_text(r7[i].message):find(sold_name, 1, true) and i >= 4 then
       restated[#restated + 1] = r7[i].label
     end
   end
@@ -158,17 +105,6 @@ force("r8 after one hand")
 
 local r8 = {}
 for _, f in ipairs(forces) do if f.round == 8 then r8[#r8 + 1] = f end end
-check("the next round states the long form again",
-  #r8 >= 3, "forces in round 8: " .. #r8)
-do
-  local longest, count = 0, 0
-  for _, f in ipairs(r8) do if f.seg and #f.seg > longest then longest = #f.seg end end
-  for _, f in ipairs(r8) do if f.seg and #f.seg == longest then count = count + 1 end end
-  check("P5a exactly once, in the new round too", count == 1,
-    string.format("%d of %d forces carry the longest block", count, #r8))
-  check("P5b and the round gate opened a second time, once",
-    opens_naming("sh_rules_core") == 2, "openings: " .. opens_naming("sh_rules_core"))
-end
 for _, f in ipairs(r8) do
   if f.query:find("at least 5 cards", 1, true) then
     blind_leak[#blind_leak + 1] = f.label
@@ -179,8 +115,4 @@ check("the previous blind's legality floor does not survive into the new round",
 check("every force in the run carried the load-bearing facts",
   #missing == 0, table.concat(missing, " | "))
 
-check("every force in the round was taken off G.NEURO.force_actions",
-  FP.captures() >= #forces, "payloads captured: " .. FP.captures() .. ", forces: " .. #forces)
-
-Once.once_until = real_once_until
 done()

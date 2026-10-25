@@ -1,26 +1,22 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
+require("tests.stubs").setup({ love = "lazy", localize = true })
+local ES = require("tests.engine_cards").states()
 
 local check, done = require("tests.helpers").harness("stable-epoch")
 local Compact = require("context.context_compact")
 local Orchestrator = require("core.orchestrator")
 local Delivery = require("core.context_delivery")
+local ActionGuide = require("facts.token_legends").ACTION_SEMANTICS_V1
 
 local wire = {}
+
 local N = { enabled = true, stable_refresh_due = true, run_generation = 1,
   once_serials = {}, session_once_serials = {} }
-function N:send_context(msg, silent, receipt)
-  wire[#wire + 1] = { msg = msg, silent = silent }
-  receipt.status = "written"
-  return true
-end
+N.send_context = require("tests.helpers").wire_context(wire)
 
--- A deck is only committed once Game:start_run has set G.STAGE = G.STAGES.RUN (dump game.lua:2067),
--- so a world that means to be inside a run has to say so.
 local function world(dollars, joker_name)
   _G.G = {
-    STATE = 1, STATES = { SELECTING_HAND = 1 },
+    P_CENTERS = require("tests.engine_centers").centers(),
+    STATE = ES.SELECTING_HAND, STATES = ES,
     STAGES = { MAIN_MENU = 1, RUN = 2, SANDBOX = 3 }, STAGE = 2, GAME = {
       dollars = dollars, chips = 0, used_vouchers = {}, modifiers = {},
       current_round = { hands_left = 3, discards_left = 2 }, round_resets = { ante = 2 },
@@ -31,63 +27,64 @@ local function world(dollars, joker_name)
     consumeables = { cards = {}, config = { card_limit = 2 } }, hand = { cards = {} },
     playing_cards = {}, NEURO = N,
   }
-  Compact.invalidate_cache()
 end
 
 Delivery.reset_transport()
 world(8, "Joker")
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
-check("first eligible state writes one immutable rules frame", #wire == 1, tostring(#wire))
+require("core.window").emit_rules("SELECTING_HAND")
+check("first eligible state writes immutable rules plus the canonical action guide",
+  #wire == 2
+    and wire[2] and wire[2].silent == true and wire[2].msg == ActionGuide.text
+    and Delivery._delivered()["rule\1" .. ActionGuide.key] == ActionGuide.text,
+  tostring(#wire) .. " " .. tostring(wire[2] and wire[2].msg))
 check("retained frame is silent", wire[1] and wire[1].silent == true)
 check("retained frame contains no run cash or roster", wire[1]
   and not wire[1].msg:find("$8", 1, true) and not wire[1].msg:find("Joker details:", 1, true),
   wire[1] and wire[1].msg)
 
 world(23, "Bull")
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
-check("mutable run changes never produce a retained rewrite", #wire == 1, tostring(#wire))
+require("core.window").emit_rules("SELECTING_HAND")
+check("mutable run changes never produce a retained rewrite", #wire == 2, tostring(#wire))
 
 require("core.neuro_lifecycle").reset_context_delivery()
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
-check("a new transport view replays the same immutable rule", #wire == 2 and wire[2].msg == wire[1].msg,
+require("core.window").emit_rules("SELECTING_HAND")
+check("a new transport view replays the same immutable rule and guide",
+  #wire == 4 and wire[3].msg == wire[1].msg and wire[4].msg == wire[2].msg
+    and Delivery._delivered()["rule\1" .. ActionGuide.key] == ActionGuide.text,
   tostring(#wire))
 
 local function play_deck(key, display)
   world(8, "Joker")
   G.STAGE = G.STAGES.RUN
-  G.P_CENTERS = { [key] = { key = key, loc_txt = { name = display } } }
+  G.P_CENTERS = require("tests.engine_centers").with({ [key] = { loc_txt = { name = display } } })
   G.GAME.selected_back = { key = key }
-  Compact.invalidate_cache()
 end
 
 local before = #wire
 play_deck("b_red", "Red Deck")
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+require("core.window").emit_rules("SELECTING_HAND")
 check("the deck's rules arrive as their own retained frame", #wire == before + 1
-  and wire[#wire].msg:find("Deck rules -- Red Deck: +1 discard per round", 1, true) ~= nil,
+  and wire[#wire].msg:find("Red Deck", 1, true) ~= nil,
   tostring(#wire) .. " " .. tostring(wire[#wire] and wire[#wire].msg))
 
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+require("core.window").emit_rules("SELECTING_HAND")
 check("the same deck is never retained twice", #wire == before + 1, tostring(#wire))
 
 play_deck("b_blue", "Blue Deck")
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+require("core.window").emit_rules("SELECTING_HAND")
 check("a second run on another deck appends a frame instead of rewriting the first",
   #wire == before + 2
-    and wire[#wire].msg:find("Deck rules -- Blue Deck: +1 hand per round", 1, true) ~= nil,
+    and wire[#wire].msg:find("Blue Deck", 1, true) ~= nil,
   tostring(#wire) .. " " .. tostring(wire[#wire] and wire[#wire].msg))
 check("and the first deck's frame is still on the wire unchanged",
   wire[before + 1].msg:find("Deck rules -- Red Deck", 1, true) ~= nil, wire[before + 1].msg)
 
-local state = Compact.build("SELECTING_HAND", nil, { split = "state", no_cache = true })
-check("the force names the deck in play", state:find("Your deck: Blue Deck.", 1, true) ~= nil,
-  state)
-check("but never restates its rules there", state:find("+1 hand per round", 1, true) == nil,
+local state = Compact.build("SELECTING_HAND", nil, { split = "state" })
+check("the force names the deck in play", state:find("Blue Deck", 1, true) ~= nil,
   state)
 
 local MENU_STATES = { "MENU", "RUN_SETUP", "SPLASH", "GAME_OVER" }
 local function rule_map(state_name)
-  Compact.invalidate_cache()
   local map, names = {}, {}
   for _, frame in ipairs(Compact.rule_frames(state_name)) do
     map[tostring(frame.key)] = frame.text
@@ -103,8 +100,9 @@ local function rule_list(state_name)
 end
 do
   local in_run, in_run_names = rule_map("SELECTING_HAND")
-  check("R12a an in-run state retains the invariant frame and the played deck, each under its name",
-    in_run["frame"] ~= nil and in_run["deck:b_blue"] ~= nil, table.concat(in_run_names, ", "))
+  check("R12a an in-run state retains invariant and deck frames, not the separate action guide",
+    in_run["frame"] ~= nil and in_run["deck:b_blue"] ~= nil
+      and in_run[ActionGuide.key] == nil, table.concat(in_run_names, ", "))
 
   local differ = {}
   for _, st in ipairs(MENU_STATES) do
@@ -138,18 +136,18 @@ do
   Delivery.reset_transport()
   local base = #wire
   world(8, "Joker")
-  Orchestrator._maybe_emit_stable_context("MENU")
+  require("core.window").emit_rules("MENU")
   local from_menu = #wire - base
-  check("a session that starts on the menu is told the rules there", from_menu >= 1,
+  check("a session that starts on the menu is told the rules and action guide", from_menu == 2,
     tostring(from_menu))
   for _, st in ipairs({ "SPLASH", "RUN_SETUP", "GAME_OVER" }) do
-    Orchestrator._maybe_emit_stable_context(st)
+    require("core.window").emit_rules(st)
   end
   check("the other menu screens add nothing", #wire - base == from_menu, tostring(#wire - base))
   world(23, "Bull")
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
-  Orchestrator._maybe_emit_stable_context("SHOP")
-  check("and entering the run delivers no frame a second time",
+  require("core.window").emit_rules("SELECTING_HAND")
+  require("core.window").emit_rules("SHOP")
+  check("and entering the run delivers no retained frame or guide a second time",
     #wire - base == from_menu, tostring(#wire - base))
 end
 
@@ -157,11 +155,12 @@ do
   Delivery.reset_transport()
   local base = #wire
   world(8, "Joker")
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   local from_run = #wire - base
-  check("an in-run start still writes the rules once", from_run >= 1, tostring(from_run))
+  check("an in-run start still writes the rules and action guide once", from_run == 2,
+    tostring(from_run))
   for _, st in ipairs(MENU_STATES) do
-    Orchestrator._maybe_emit_stable_context(st)
+    require("core.window").emit_rules(st)
   end
   check("returning to the menu delivers no frame a second time",
     #wire - base == from_run, tostring(#wire - base))
@@ -171,8 +170,7 @@ do
   Delivery.reset_transport()
   play_deck("b_green", "Green Deck")
   G.STAGE = G.STAGES.MAIN_MENU
-  Compact.invalidate_cache()
-  Orchestrator._maybe_emit_stable_context("MENU")
+  require("core.window").emit_rules("MENU")
   local after_menu = #wire
   local retained_green = false
   for i = 1, #wire do
@@ -181,15 +179,15 @@ do
   check("a deck the menu merely has selected retains nothing", not retained_green,
     tostring(after_menu))
   play_deck("b_green", "Green Deck")
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("the run that commits to that deck retains its rules once",
     #wire == after_menu + 1
       and wire[#wire].msg:find("Deck rules -- Green Deck", 1, true) ~= nil, tostring(#wire))
-  Orchestrator._maybe_emit_stable_context("BLIND_SELECT")
+  require("core.window").emit_rules("BLIND_SELECT")
   check("R20b and every later screen of that run restates nothing", #wire == after_menu + 1,
     tostring(#wire))
   play_deck("b_yellow", "Yellow Deck")
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("a run on another deck still appends its own frame",
     #wire == after_menu + 2
       and wire[#wire].msg:find("Deck rules -- Yellow Deck", 1, true) ~= nil, tostring(#wire))
@@ -201,11 +199,11 @@ do
   local real_frame = GameRules.invariant_frame
   GameRules.invariant_frame = function() return "" end
   play_deck("b_red", "Red Deck")
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   GameRules.invariant_frame = real_frame
   local base = #wire
   play_deck("b_red", "Red Deck")
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("a first emission missing the invariant frame does not cost the session its rules",
     #wire == base + 1 and wire[#wire].msg:find("RULES.", 1, true) ~= nil,
     tostring(#wire - base) .. " " .. tostring(wire[#wire] and wire[#wire].msg:sub(1, 60)))

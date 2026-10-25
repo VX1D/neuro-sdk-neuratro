@@ -18,7 +18,7 @@ local function frame(ctx, g)
     fr = premix(_wash_frame, th.FR, g.wash, wash_a)
   end
   Prims.panel_shell(g.x, g.y, g.w, g.h, g.rad, 1, 1, 0.55 * a, bg, bg_a, a)
-  love.graphics.setColor(fr[1], fr[2], fr[3], 0.90 * a)
+  set_col(fr, 0.90 * a)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", g.x, g.y, g.w, g.h, g.rad, g.rad)
   set_col(th.pg, 0.035 * a)

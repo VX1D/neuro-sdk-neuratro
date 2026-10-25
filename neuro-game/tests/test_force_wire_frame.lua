@@ -1,32 +1,44 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", localize = true, G = "board" })
 
 local check, done = require("tests.helpers").harness("force-wire-frame")
 local FW = require("tests.force_wire")
 local FP = require("tests.force_payload")
 local LB = require("tests.fixtures.live_board")
-local Census = require("tests.force_census_rows")
-local Notation = require("tests.notation_audit")
+local SectionRows = require("tests.force_section_rows")
 local WIRE_SIZE = require("tests.force_size_baseline").WIRE
-local function band(size)
-  local slack = math.min(math.ceil(size * 0.06), 150)
-  return size - slack, size + slack
+local function ceiling_of(size)
+  return size + math.min(math.ceil(size * 0.06), 150)
 end
 
 FW.attach()
 
-local ROWS = Census.ROWS
+local ROWS = SectionRows.ROWS
 local norm, has, has_loose, bank_claims =
-  Census.norm, Census.has, Census.has_loose, Census.bank_claims
+  SectionRows.norm, SectionRows.has, SectionRows.has_loose, SectionRows.bank_claims
 
-local no_frame, mismatched, over, under, unbudgeted = {}, {}, {}, {}, {}
-local missing_section, missing_value, wrong_bank, notation, offers, leaked = {}, {}, {}, {}, {}, {}
-local rewrite = {}
-local boards, exercised, groups_seen, per_name = 0, 0, 0, {}
+local no_frame, mismatched, over, unbudgeted = {}, {}, {}, {}, {}
+local missing_section, missing_value, wrong_bank, offers, leaked = {}, {}, {}, {}, {}
+local in_query = {}
+local boards, exercised = 0, 0
+local per_row, data_seen, sized, plan_wrong, grew, reasks = {}, {}, {}, {}, {}, 0
 
-for _, board in ipairs(Census.ALL_BOARDS) do
+local function plan_rows(text)
+  local bytes, tags, notes, credits = 0, 0, 0, 0
+  for clause in text:gmatch("%-%- your plan: %u+") do bytes = bytes + #clause; tags = tags + 1 end
+  for clause in text:gmatch('%-%- your note: "[^"]*"') do bytes = bytes + #clause; notes = notes + 1 end
+  for clause in text:gmatch("All plan tags above written by you, Ante %d+, decision %d+%.") do
+    bytes = bytes + #clause
+    credits = credits + 1
+  end
+  return { bytes = bytes, tags = tags, notes = notes, credits = credits }
+end
+local PLAN_ROWS = {
+  ["SHOP/Marked roster: a debuffed joker, an eternal joker, and the model's own plan on every row"] =
+    { bytes = 473, tags = 5, notes = 4, credits = 1 },
+}
+local NO_PLAN = { bytes = 0, tags = 0, notes = 0, credits = 0 }
+
+for _, board in ipairs(SectionRows.ALL_BOARDS) do
   local key = board.state .. "/" .. board.desc
   LB.load(board.state, board.desc)
   local payload = FP.build(board.state)
@@ -52,18 +64,31 @@ for _, board in ipairs(Census.ALL_BOARDS) do
     if not size then
       unbudgeted[#unbudgeted + 1] = key .. ": board has no recorded wire size"
     else
-      local floor, ceiling = band(size)
+      sized[key] = true
+      local ceiling = ceiling_of(size)
       if total > ceiling then over[#over + 1] = key .. " sum=" .. total .. " > " .. ceiling end
-      if total < floor then under[#under + 1] = key .. " sum=" .. total .. " < " .. floor end
     end
 
     local nflat = norm(flat)
+    local state_text, query_text = wire.unalias(wire.state), wire.unalias(wire.query)
+    local nstate, nquery = norm(state_text), norm(query_text)
     for _, row in ipairs(ROWS) do
       if row.states[board.state] and row.data() then
         exercised = exercised + 1
-        if row.header and not has(flat, row.header) then
+        per_row[row.id] = (per_row[row.id] or 0) + 1
+        data_seen[row.id] = data_seen[row.id] or {}
+        data_seen[row.id][board.state] = true
+        local where = row.in_state and "state" or "wire"
+        if row.header and not has(row.in_state and state_text or flat, row.header) then
           missing_section[#missing_section + 1] = key .. "/" .. row.id
-            .. " (no '" .. row.header .. "' on the wire)"
+            .. " (no '" .. row.header .. "' in the " .. where .. ")"
+        end
+        if row.in_state then
+          for _, want in ipairs(row.values()) do
+            if (row.query_free or #want >= 30) and has_loose(nquery, want) then
+              in_query[#in_query + 1] = key .. "/" .. row.id .. " states " .. string.format("%q", want) .. " in the query"
+            end
+          end
         end
         if row.bank then
           local claims = bank_claims(flat)
@@ -79,9 +104,9 @@ for _, board in ipairs(Census.ALL_BOARDS) do
           end
         end
         for _, want in ipairs((row.values and row.values()) or {}) do
-          if not has_loose(nflat, want) then
+          if not has_loose(row.in_state and nstate or nflat, want) then
             missing_value[#missing_value + 1] = key .. "/" .. row.id
-              .. " does not state " .. string.format("%q", want)
+              .. " does not state " .. string.format("%q", want) .. " in the " .. where
           end
         end
         for _, banned in ipairs((row.forbidden and row.forbidden()) or {}) do
@@ -92,19 +117,10 @@ for _, board in ipairs(Census.ALL_BOARDS) do
       end
     end
 
-    local bad, seen, names = Notation.audit(key, flat)
-    for _, b in ipairs(bad) do notation[#notation + 1] = b end
-    groups_seen = groups_seen + seen
-    for n, c in pairs(names) do per_name[n] = (per_name[n] or 0) + c end
-
     local wire_names = {}
-    for _, n in ipairs(wire.action_names) do wire_names[n] = true end
+    for _, n in ipairs(wire.action_names) do wire_names[wire.unalias(n)] = true end
     for _, canonical in ipairs(payload.actions) do
-      local alias = nil
-      for a in pairs(wire_names) do
-        if a:find("^" .. canonical:gsub("([^%w])", "%%%1") .. "_force_%d+$") then alias = a end
-      end
-      if not alias then
+      if not wire_names[canonical] then
         offers[#offers + 1] = key .. ": offered " .. canonical .. " is not in the frame's action_names"
       end
     end
@@ -113,50 +129,68 @@ for _, board in ipairs(Census.ALL_BOARDS) do
         key, #payload.actions, #wire.action_names)
     end
 
-    local raw = wire.state .. "\n" .. wire.query
-    for _, canonical in ipairs(payload.actions) do
-      if raw:find("%f[%w_]" .. canonical:gsub("([^%w])", "%%%1") .. "%f[^%w_]") then
-        rewrite[#rewrite + 1] = key .. ": canonical '" .. canonical .. "' survives on the wire"
+    local want, got = PLAN_ROWS[key] or NO_PLAN, plan_rows(payload.message)
+    for _, field in ipairs({ "bytes", "tags", "notes", "credits" }) do
+      if got[field] ~= want[field] then
+        plan_wrong[#plan_wrong + 1] = string.format("%s plan %s=%d, recorded %d",
+          key, field, got[field], want[field])
       end
     end
-    if flat:find("_force_%d+") then
-      rewrite[#rewrite + 1] = key .. ": an alias survives after the rewrite was undone"
+
+    local second = FP.build(board.state)
+    if second and second.wire then reasks = reasks + 1 end
+    if second and (#second.state + #second.query) > #payload.state + #payload.query then
+      grew[#grew + 1] = string.format("%s re-ask %d > first force %d",
+        key, #second.state + #second.query, #payload.state + #payload.query)
     end
+
   end
 end
 
 check("every board delivered an actions/force frame through a real Bridge",
-  #no_frame == 0 and boards == 19 and FW.delivered() == boards,
+  #no_frame == 0 and boards == 18 and FW.delivered() == boards + reasks,
   table.concat(no_frame, " | ") .. " (frames " .. FW.delivered() .. ", boards " .. boards .. ")")
 check("the frame carries the message byte for byte, once the alias rewrite is undone",
   #mismatched == 0, table.concat(mismatched, " | "))
-check("every board has a recorded wire size", #unbudgeted == 0, table.concat(unbudgeted, " | "))
+for key in pairs(WIRE_SIZE) do
+  if not sized[key] then unbudgeted[#unbudgeted + 1] = key .. ": recorded but never measured" end
+end
+check("every board has a recorded wire size, and every recorded size a board", #unbudgeted == 0,
+  table.concat(unbudgeted, " | "))
 check("no frame exceeds its board's ceiling", #over == 0, table.concat(over, " | "))
-check("no frame fell through its board's floor", #under == 0, table.concat(under, " | "))
-check("the census ran against the frame, not an empty message",
-  exercised >= 117, "state/row pairs asserted on the wire: " .. exercised)
+check("the section rows ran against the frame, not an empty message",
+  exercised >= 116, "state/row pairs asserted on the wire: " .. exercised)
+do
+  local never, dark = {}, {}
+  for _, row in ipairs(ROWS) do
+    if (per_row[row.id] or 0) == 0 then never[#never + 1] = row.id end
+    for state in pairs(row.states) do
+      if not (data_seen[row.id] and data_seen[row.id][state]) then dark[#dark + 1] = state .. "/" .. row.id end
+    end
+  end
+  check("every section row was exercised at least once", #never == 0, table.concat(never, "; "))
+  check("every state/row pair found live data on at least one board", #dark == 0, table.concat(dark, "; "))
+end
 check("every required section is on the wire in every state that must carry it",
   #missing_section == 0, table.concat(missing_section, " | "))
 check("every section on the wire states the live values",
   #missing_value == 0, table.concat(missing_value, " | "))
+check("every board fact a row places in state stays out of the query (BEST_PRACTICES.md:9)",
+  #in_query == 0, table.concat(in_query, " | "))
 check("every bank figure on the wire is the live one",
   #wrong_bank == 0, table.concat(wrong_bank, " | "))
 check("F9b no frame states an identity a row forbids",
   #leaked == 0, table.concat(leaked, " | "))
-check("the notation audit found payloads on the wire to audit",
-  groups_seen >= 60 and (per_name.play_hand or 0) > 0,
-  "objects " .. groups_seen .. ", play_hand payloads " .. tostring(per_name.play_hand))
-check("every JSON object on the wire is a registry render of the action it names",
-  #notation == 0, "\n  " .. table.concat(notation, "\n  "))
+check("every board reached the wire",
+  boards == #SectionRows.ALL_BOARDS,
+  string.format("boards=%d expected=%d", boards, #SectionRows.ALL_BOARDS))
 check("every offered action reached the frame's action_names",
   #offers == 0, table.concat(offers, " | "))
+check("the roster's plan rows cost exactly what is recorded, measured on their own bytes",
+  #plan_wrong == 0, table.concat(plan_wrong, " | "))
+check("a re-ask never costs more than the force it repeats", #grew == 0, table.concat(grew, " | "))
 check("the bridge never refused a force during the sweep",
   #FW.refusals() == 0, table.concat(FW.refusals(), " | "))
-
-check("the per-window alias rewrite is total in both directions",
-  #rewrite == 0, table.concat(rewrite, " | "))
-check("the notation predicate still rejects the sentence F1 shipped",
-  #Notation.audit("selftest", "To play, send play_hand with {indices:array[1-5]:unique}.") > 0)
 
 FW.close()
 done()

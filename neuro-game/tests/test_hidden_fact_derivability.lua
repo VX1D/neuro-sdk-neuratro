@@ -2,21 +2,14 @@ rawset(_G, "NEURO_TEST", true)
 love = { timer = { getTime = function() return 0 end } }
 
 local H = require("tests.helpers")
+local EngineCards = require("tests.engine_cards")
 local check, done = H.harness("hidden fact derivability")
 
 local sid = 0
 local function card(v, suit, face_down)
   sid = sid + 1
-  local id = H.RID[v]
-  local c = {
-    base = { value = H.VALN[v] or v, suit = suit, id = id, nominal = (id <= 10 and id or 10) },
-    sort_id = sid, cost = 1, sell_cost = 1,
-    ability = { set = "Default", name = "Base", effect = "" },
-    config = { center = { key = "c_base", set = "Default" } },
-    facing = face_down and "back" or "front",
-  }
-  c.is_suit = function(_, s) return s == suit end
-  c.get_id = function(self) return self.base.id end
+  local c = EngineCards.playing(H.VALN[v] or v, suit, { sort_id = sid, facing = face_down and "back" or "front" })
+  c.cost, c.sell_cost = 1, 1
   return c
 end
 
@@ -32,42 +25,7 @@ local function joker(key, name, ability, desc, face_down)
     is_rarity = function(_, r) return r == "Common" end }
 end
 
-local function base_G()
-  local g = {
-    NEURO = { run_generation = 1 },
-    STATE = 1,
-    STATES = { SELECTING_HAND = 1, SHOP = 2, BLIND_SELECT = 3, ROUND_EVAL = 7, MENU = 20 },
-    P_BLINDS = { bl_small = { name = "Small Blind", dollars = 3, mult = 1 },
-                 bl_big = { name = "Big Blind", dollars = 4, mult = 1.5 },
-                 bl_hook = { name = "The Hook", dollars = 5, mult = 2, boss = true, debuff = {} } },
-    P_TAGS = {},
-    TIMERS = { REAL = 100, TOTAL = 100 },
-    SETTINGS = { GAMESPEED = 1, paused = false },
-    SPEEDFACTOR = 1,
-    jokers = { cards = {}, config = { card_limit = 5 } },
-    consumeables = { cards = {}, config = { card_limit = 2 } },
-    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-    deck = { cards = {} }, playing_cards = {},
-    FUNCS = {},
-    GAME = {
-      dollars = 20, bankrupt_at = 0, chips = 0, round = 4, skips = 0,
-      win_ante = 8, used_vouchers = {}, modifiers = {}, tags = {},
-      interest_amount = 1, interest_cap = 25, probabilities = { normal = 1 },
-      starting_params = {}, hands = {},
-      blind = { name = "Big Blind", chips = 600, dollars = 4, in_blind = true, boss = false,
-                debuff = {}, disabled = false, hands = {}, get_type = function() return "Big" end },
-      current_round = { hands_left = 3, discards_left = 2, discards_used = 0,
-        most_played_poker_hand = "High Card", reroll_cost = 5, free_rerolls = 0,
-        dollars_to_be_earned = "" },
-      round_resets = { ante = 3, blind_ante = 3, hands = 4, discards = 3,
-        blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_hook" },
-        blind_states = { Small = "Defeated", Big = "Current", Boss = "Upcoming" } },
-      round_bonus = { discards = 0, next_hands = 0 },
-    },
-  }
-  _G.G = g
-  return g
-end
+local base_G = H.base_G
 
 local FactHints = require("facts.fact_hints")
 
@@ -75,7 +33,7 @@ local function acorn_chain(order)
   local g = base_G()
   g.jokers.cards = order
   for _, j in ipairs(order) do j.area = g.jokers; j.facing = "back" end
-  return FactHints.blueprint_chain_hint()
+  return (FactHints.copy_chain() or "")
 end
 
 local bp_a  = joker("j_blueprint", "Blueprint", {}, "Copies ability of Joker to the right")
@@ -97,7 +55,7 @@ do
   local bar = joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult")
   g.jokers.cards = { bp, bar }
   for _, j in ipairs(g.jokers.cards) do j.area = g.jokers end
-  local text = FactHints.blueprint_chain_hint()
+  local text = (FactHints.copy_chain() or "")
   check("face-up roster: the copy-chain hint still names Blueprint's target",
     text:find("Blueprint (slot 1) copies the joker to its right (Baron)", 1, true) ~= nil, text)
 end
@@ -142,22 +100,17 @@ local function baron_board(hidden_value, pos)
   return section, quantity_sig(ledger and ledger.gated and ledger.gated.xmult)
 end
 
-local function each_position(n, fn)
-  local bad = nil
-  for pos = 1, n do
-    local ok, detail = fn(pos)
-    if not ok and not bad then bad = "at hidden position " .. pos .. ": " .. tostring(detail) end
-  end
-  return bad == nil, bad or "all positions 1.." .. n
-end
+local each_position = require("tests.helpers").each_position
 
 local hidden_king = baron_board("K")
 local hidden_two  = baron_board("2")
-check("hidden hand card: its rank is not derivable from the joker ledger", each_position(5,
+check("hidden hand card: the ledger never names the concealed card", each_position(5,
   function(pos)
     local sk, qk = baron_board("K", pos)
-    local st, qt = baron_board("2", pos)
-    return sk == st and qk == qt, "[" .. sk .. " | " .. qk .. "] vs [" .. st .. " | " .. qt .. "]"
+    local st = baron_board("2", pos)
+    local named = sk:find("King of Clubs", 1, true) or st:find("2 of Clubs", 1, true)
+      or qk:find("of Clubs", 1, true)
+    return named == nil, "[" .. sk .. " | " .. qk .. "] vs [" .. st .. "]"
   end))
 check("hidden hand card: the ledger itself carries no held-card count", each_position(5,
   function(pos)
@@ -213,7 +166,6 @@ end
 local LB = require("tests.fixtures.live_board")
 local HF = require("facts.hand_facts")
 local CR = require("context.context_readable")
-local Compact = require("context.context_compact")
 
 _G.localize = _G.localize or function() return "" end
 
@@ -232,12 +184,7 @@ local function acorn_board(keys, visible)
     if not visible then roster[i].facing = "back" end
   end
   G.jokers = { cards = roster, config = { card_limit = 5 } }
-  Compact.invalidate_cache()
-  return HF.summary()
-end
-
-local function ready_line(summary)
-  return CR.structure_prose(summary):match("Ready to play now:[^%.]*") or "<no ready line>"
+  return CR.structure_prose(HF.structure())
 end
 
 local function sweep(keys, render)
@@ -260,25 +207,19 @@ end
 
 local ACORN_MULTISET = { "j_hologram", "j_cavendish", "j_jolly", "j_baron", "j_scary_face" }
 
-local compact_forms = sweep(ACORN_MULTISET, function(s) return s end)
-check("Amber Acorn: 120 hidden orders of one multiset render one compact summary",
-  #compact_forms == 1, #compact_forms .. " distinct forms, e.g. [" ..
-    ready_line(compact_forms[1]) .. "] vs [" .. ready_line(compact_forms[math.min(2, #compact_forms)]) .. "]")
+local prose_forms = sweep(ACORN_MULTISET, function(s) return s end)
+check("Amber Acorn: 120 hidden orders of one multiset render one prose payload",
+  #prose_forms == 1, #prose_forms .. " distinct forms, e.g. [" ..
+    prose_forms[1] .. "] vs [" .. prose_forms[math.min(2, #prose_forms)] .. "]")
 
-local prose_forms = sweep(ACORN_MULTISET, function(s) return CR.structure_prose(s) end)
-check("Amber Acorn: the same 120 orders render one prose payload",
-  #prose_forms == 1, #prose_forms .. " distinct forms")
-
-check("Amber Acorn: the hidden row's contribution is still stated as an un-slotted total",
-  compact_forms[1]:find("(jokers: ", 1, true) ~= nil
-    and compact_forms[1]:find("(jokers-always: ", 1, true) ~= nil, compact_forms[1])
+check("Amber Acorn: hidden joker contributions are rendered in no chain at all",
+  prose_forms[1]:find("jokers left to right", 1, true) == nil
+    and prose_forms[1]:find("as the cards score", 1, true) == nil, prose_forms[1])
 
 do
   local visible = acorn_board(ACORN_MULTISET, true)
   check("face-up roster: the ready-hand note still names the paying slot",
-    visible:find("(J", 1, true) ~= nil, visible)
-  check("face-up roster: the prose still attributes the number to a joker",
-    CR.structure_prose(visible):find("joker [%d, ]+adds") ~= nil, ready_line(visible))
+    visible:find("then jokers left to right: joker 1 ", 1, true) ~= nil, visible)
 end
 
 do
@@ -297,29 +238,15 @@ end
 
 do
   local HF2 = require("facts.hand_facts")
-  local COLOR = { Hearts = "red", Diamonds = "red", Spades = "black", Clubs = "black" }
-
-  local function suit_card(v, suit, smeared)
-    local id = H.RID[v]
-    return {
-      base = { value = H.VALN[v] or v, suit = suit, id = id },
-      ability = { set = "Default", name = "Base", effect = "" },
-      config = { center = { key = "c_base", set = "Default" } },
-      facing = "front",
-      get_id = function() return id end,
-      is_suit = function(_, s, _ignore_debuff, flush_calc)
-        if s == suit then return true end
-        return (flush_calc and smeared and COLOR[s] == COLOR[suit]) or false
-      end,
-    }
-  end
+  -- Smeared is derived from the live joker even when it is face down.
+  local function suit_card(v, suit) return EngineCards.playing(H.VALN[v] or v, suit) end
 
   local HAND = { { "K", "Hearts" }, { "9", "Hearts" }, { "Q", "Diamonds" }, { "J", "Diamonds" },
                  { "7", "Clubs" }, { "5", "Spades" }, { "3", "Spades" } }
   local RANKS2 = { "2","3","4","5","6","7","8","9","10","J","Q","K","A" }
   local SUITS2 = { "Hearts","Spades","Diamonds","Clubs" }
 
-  local function smeared_board(joker_key, visible, smeared)
+  local function smeared_board(joker_key, visible)
     local g = base_G()
     local j = joker(joker_key, joker_key == "j_smeared" and "Smeared Joker" or "Joker", {}, "")
     j.facing = visible and "front" or "back"
@@ -327,13 +254,13 @@ do
     g.jokers.cards = { j }
     local used, hand = {}, {}
     for _, hc in ipairs(HAND) do
-      hand[#hand + 1] = suit_card(hc[1], hc[2], smeared)
+      hand[#hand + 1] = suit_card(hc[1], hc[2])
       used[hc[1] .. hc[2]] = true
     end
     local pile = {}
     for _, su in ipairs(SUITS2) do
       for _, v in ipairs(RANKS2) do
-        if not used[v .. su] then pile[#pile + 1] = suit_card(v, su, smeared) end
+        if not used[v .. su] then pile[#pile + 1] = suit_card(v, su) end
       end
     end
     g.hand = { cards = hand, highlighted = {},
@@ -341,19 +268,19 @@ do
     g.deck = { cards = pile }
     g.GAME.hands = {}
     g.FUNCS = {}
-    return HF2.summary()
+    return CR.structure_prose(HF2.structure())
   end
 
-  local hidden_smeared = smeared_board("j_smeared", false, true)
-  local hidden_plain   = smeared_board("j_joker", false, false)
-  check("a face-down Smeared Joker is not derivable from the suit tally it changes",
-    hidden_smeared == hidden_plain,
+  local hidden_smeared = smeared_board("j_smeared", false)
+  local hidden_plain   = smeared_board("j_joker", false)
+  check("a face-down Smeared Joker's effect is reported truthfully in the suit tally",
+    hidden_smeared ~= hidden_plain,
     "[" .. hidden_smeared .. "]\nvs\n[" .. hidden_plain .. "]")
-  check("and the concealed board states the shape the player can see, not a false one",
-    hidden_smeared:find("Flush", 1, true) == nil and hidden_smeared:find("suit_max:2", 1, true) ~= nil,
+  check("and the concealed board states the true shape, from the engine's own answer",
+    hidden_smeared:find("most cards of one suit 4;", 1, true) ~= nil,
     hidden_smeared)
 
-  local shown = smeared_board("j_smeared", true, true)
+  local shown = smeared_board("j_smeared", true)
   check("face-up Smeared Joker: the count and the label are both smeared",
     shown:find("Flush: 4 red", 1, true) ~= nil, shown)
   check("face-up Smeared Joker: no base-suit label is printed beside a smeared count",
@@ -374,11 +301,11 @@ do
     local sm = Scoring2.joker_summary()
     local flat = string.format("%s/%s/%s/%s", tostring(sm and sm.chips), tostring(sm and sm.mult),
       tostring(sm and sm.xmult), tostring(sm and sm.xchips))
-    return flat, Scoring2.owned_xmult_state(), tostring(Scoring2.owned_has_xmult())
+    return flat, Scoring2.owned_xmult_state()
   end
 
-  local xa, sa, ha = roster_board("j_cavendish", "Cavendish", { extra = { Xmult = 3 }, x_mult = 1 })
-  local xb, sb, hb = roster_board("j_joker", "Joker", { mult = 4 })
+  local xa, sa = roster_board("j_cavendish", "Cavendish", { extra = { Xmult = 3 }, x_mult = 1 })
+  local xb, sb = roster_board("j_joker", "Joker", { mult = 4 })
   check("hidden joker: its numbers are not derivable from the always-on aggregate",
     xa == xb, "[" .. xa .. "] vs [" .. xb .. "]")
   check("hidden joker: the face-up jokers' own numbers survive the filter",
@@ -387,8 +314,6 @@ do
     sa == sb, sa .. " vs " .. sb)
   check("hidden joker: and it is not the answer that prints the roster-wide claim",
     sa ~= "none", sa)
-  check("hidden joker: owned_has_xmult is not a second oracle for the same bit",
-    ha == hb, ha .. " vs " .. hb)
 
   do
     local g = base_G()

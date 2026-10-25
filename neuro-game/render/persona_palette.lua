@@ -4,63 +4,6 @@ local neuro_log = require("util.utils").neuro_log
 
 local M = {}
 local _persona_colors_applied = nil
-local _palette_baseline = nil
-local _palette_selftest_done = false
-
-local REPALETTE_KEYS = {
-  "RED", "BLUE", "PURPLE", "GREEN", "GOLD", "ORANGE", "YELLOW",
-  "BLACK", "L_BLACK", "GREY", "WHITE", "JOKER_GREY",
-  "MULT", "CHIPS", "XMULT", "UI_MULT", "UI_CHIPS",
-  "MONEY", "BOOSTER", "EDITION", "DARK_EDITION",
-  "IMPORTANT", "FILTER", "VOUCHER", "CHANCE", "PALE_GREEN",
-  "ETERNAL", "PERISHABLE", "RENTAL",
-}
-
-local NESTED_KEYS = {
-  BACKGROUND    = { "L", "D", "C" },
-  BLIND         = { "Small", "Big", "Boss", "won" },
-  DYN_UI        = { "MAIN", "DARK", "BOSS_MAIN", "BOSS_DARK", "BOSS_PALE" },
-  UI            = { "TEXT_LIGHT", "TEXT_DARK", "TEXT_INACTIVE",
-                    "BACKGROUND_LIGHT", "BACKGROUND_WHITE", "BACKGROUND_DARK",
-                    "BACKGROUND_INACTIVE", "OUTLINE_LIGHT", "OUTLINE_LIGHT_TRANS",
-                    "OUTLINE_DARK", "TRANSPARENT_LIGHT", "TRANSPARENT_DARK", "HOVER" },
-  SET           = { "Default", "Enhanced", "Joker", "Tarot", "Planet", "Spectral", "Voucher" },
-  SECONDARY_SET = { "Default", "Enhanced", "Joker", "Tarot", "Planet", "Spectral", "Voucher", "Edition" },
-}
-
-local function cc(c) return { c[1], c[2], c[3], c[4] } end
-
-local function apply_color_inplace(target, source)
-  if not target or not source or type(target) ~= "table" or type(source) ~= "table" then return end
-  target[1] = source[1]
-  target[2] = source[2]
-  target[3] = source[3]
-  if source[4] ~= nil then target[4] = source[4] end
-end
-
-local function snapshot_palette_baseline()
-  if _palette_baseline or not (G and G.C) then return end
-  local snap = { flat = {}, nested = {} }
-
-  for _, k in ipairs(REPALETTE_KEYS) do
-    if type(G.C[k]) == "table" then
-      snap.flat[k] = cc(G.C[k])
-    end
-  end
-
-  for tbl, subs in pairs(NESTED_KEYS) do
-    if type(G.C[tbl]) == "table" then
-      snap.nested[tbl] = {}
-      for _, sk in ipairs(subs) do
-        if type(G.C[tbl][sk]) == "table" then
-          snap.nested[tbl][sk] = cc(G.C[tbl][sk])
-        end
-      end
-    end
-  end
-
-  _palette_baseline = snap
-end
 
 local function active_palette_key()
   local pk = Palette.displayed_persona()
@@ -336,64 +279,25 @@ local EVIL_COLORS = {
 }
 
 local PERSONA_COLORS = { hiyori = HIYORI_COLORS, neuro = NEURO_COLORS, evil = EVIL_COLORS }
-local PERSONA_ORDER = { "hiyori", "neuro", "evil" }
 
 local function apply_palette(palette)
-  if not palette or not G or not G.C or not _palette_baseline then return end
-  for _, k in ipairs(REPALETTE_KEYS) do
-    local src = palette[k] or (_palette_baseline.flat and _palette_baseline.flat[k])
-    if src and G.C[k] then
-      apply_color_inplace(G.C[k], src)
-    end
-  end
-  for tbl, subs in pairs(NESTED_KEYS) do
-    if G.C[tbl] then
-      for _, sk in ipairs(subs) do
-        local src = (palette[tbl] and palette[tbl][sk])
-          or (_palette_baseline.nested and _palette_baseline.nested[tbl] and _palette_baseline.nested[tbl][sk])
-        if src and G.C[tbl][sk] then
-          apply_color_inplace(G.C[tbl][sk], src)
+  for k, v in pairs(palette) do
+    local t = G.C[k]
+    if type(t) == "table" then
+      if type(v[1]) == "number" then
+        t[1], t[2], t[3], t[4] = v[1], v[2], v[3], v[4]
+      else
+        for sk, c in pairs(v) do
+          local d = t[sk]
+          if type(d) == "table" then d[1], d[2], d[3], d[4] = c[1], c[2], c[3], c[4] end
         end
       end
     end
   end
 end
 
-local function run_palette_selftest_once()
-  if _palette_selftest_done or not (G and G.C) then return end
-  if not _palette_baseline then return end
-
-  local all_keys = {}
-  for _, name in ipairs(PERSONA_ORDER) do
-    for k in pairs(PERSONA_COLORS[name]) do all_keys[k] = true end
-  end
-  for _, name in ipairs(PERSONA_ORDER) do
-    for k in pairs(all_keys) do
-      if PERSONA_COLORS[name][k] == nil then
-        print("[neuro-game] Palette selftest: '" .. name .. "' is missing key " .. tostring(k))
-      end
-    end
-  end
-
-  local ok_count = 0
-  for _, name in ipairs(PERSONA_ORDER) do
-    local ok, err = pcall(apply_palette, PERSONA_COLORS[name])
-    if ok then
-      ok_count = ok_count + 1
-    else
-      print("[neuro-game] Palette selftest failed for " .. name .. ": " .. tostring(err))
-    end
-  end
-
-  pcall(apply_palette, {})
-  _palette_selftest_done = true
-  neuro_log("Palette selftest:", ok_count, "/" .. #PERSONA_ORDER .. " personas OK")
-end
-
 function M.apply_for_frame()
   if not (G and G.C) then return end
-  snapshot_palette_baseline()
-  run_palette_selftest_once()
   local pk = active_palette_key()
   if pk ~= _persona_colors_applied then
     neuro_log("Palette ->", pk)
@@ -401,7 +305,5 @@ function M.apply_for_frame()
     apply_palette(PERSONA_COLORS[pk] or NEURO_COLORS)
   end
 end
-
-if rawget(_G, "NEURO_TEST") then M._test = { colors = PERSONA_COLORS } end
 
 return M

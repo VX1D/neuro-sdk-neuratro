@@ -1,6 +1,5 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
+require("tests.stubs").setup({ love = "lazy", localize = true })
+local ES = require("tests.engine_cards").states()
 
 local check, done = require("tests.helpers").harness("deck-commit-scope")
 local Compact = require("context.context_compact")
@@ -16,11 +15,11 @@ local BROWSED = {
 }
 local PLAYED = { key = "b_black", name = "Black Deck" }
 
-local POOL, CENTERS = {}, {}
+local POOL, CENTERS = {}, require("tests.engine_centers").centers()
 for i, d in ipairs(BROWSED) do
-  local center = { key = d.key, name = d.name, loc_txt = { name = d.name }, config = {} }
+  local center = CENTERS[d.key]
+  center.loc_txt = { name = d.name }
   POOL[i] = center
-  CENTERS[d.key] = center
 end
 
 local function back(center)
@@ -35,16 +34,12 @@ end
 local wire = {}
 local N = { enabled = true, stable_refresh_due = true, run_generation = 1,
   once_serials = {}, session_once_serials = {} }
-function N:send_context(msg, silent, receipt)
-  wire[#wire + 1] = { msg = msg, silent = silent }
-  receipt.status = "written"
-  return true
-end
+N.send_context = require("tests.helpers").wire_context(wire)
 
 local function world(stage)
   _G.G = {
     STAGE = stage, STAGES = { MAIN_MENU = 1, RUN = 2, SANDBOX = 3 },
-    STATE = 1, STATES = { SELECTING_HAND = 1 },
+    STATE = ES.SELECTING_HAND, STATES = ES,
     FUNCS = {}, P_CENTERS = CENTERS, P_CENTER_POOLS = { Back = POOL },
     GAME = {
       dollars = 4, chips = 0, used_vouchers = {}, modifiers = {},
@@ -56,7 +51,6 @@ local function world(stage)
     consumeables = { cards = {}, config = { card_limit = 2 } }, hand = { cards = {} },
     playing_cards = {}, NEURO = N,
   }
-  Compact.invalidate_cache()
 end
 
 local function deck_frames()
@@ -71,50 +65,41 @@ end
 Delivery.reset_transport()
 
 world(1)
-Orchestrator._maybe_emit_stable_context("MENU")
+require("core.window").emit_rules("MENU")
 for _, deck in ipairs(BROWSED) do
+  local already = require("facts.deck_facts").run_deck_center().key == deck.key
   local run_it, err = MenuHandlers.handle_change_selected_back({ back = deck.key })
-  check("browsing " .. deck.name .. " is accepted by the handler", run_it ~= nil, tostring(err))
+  check("browsing " .. deck.name .. (already and " while it is selected changes nothing" or " is accepted by the handler"),
+    already and run_it == nil and err.reason_code == "UNCHANGED" or not already and run_it ~= nil,
+    tostring(err and err.message))
   if run_it then run_it() end
-  Compact.invalidate_cache()
-  Orchestrator._maybe_emit_stable_context("MENU")
-  Orchestrator._maybe_emit_stable_context("RUN_SETUP")
+  require("core.window").emit_rules("MENU")
+  require("core.window").emit_rules("RUN_SETUP")
 end
 
 check("a deck that was only LOOKED AT never reaches the channel that cannot retract it",
   #deck_frames() == 0, table.concat(deck_frames(), ", "))
 
--- The commit: Game:start_run sets G.STAGE = G.STAGES.RUN (dump game.lua:2067) and only then rebuilds
--- G.GAME.selected_back from the choice and applies it (game.lua:2085-2116).
+-- start_run switches to RUN before rebuilding and applying the selected back.
 world(2)
 G.GAME.selected_back = back(CENTERS[PLAYED.key])
 G.GAME.selected_back_key = CENTERS[PLAYED.key]
-Compact.invalidate_cache()
-Orchestrator._maybe_emit_stable_context("BLIND_SELECT")
-Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+require("core.window").emit_rules("BLIND_SELECT")
+require("core.window").emit_rules("SELECTING_HAND")
 
 local named = deck_frames()
 check("exactly one deck's rules are retained, and it is the deck being played",
   #named == 1 and named[1] == PLAYED.name, table.concat(named, ", "))
 
-local state = Compact.build("SELECTING_HAND", nil, { split = "state", no_cache = true }) or ""
+local state = Compact.build("SELECTING_HAND", nil, { split = "state" }) or ""
 check("the force still names the deck in play",
   state:find("Your deck: " .. PLAYED.name .. ".", 1, true) ~= nil, state)
 
-for _, sent in ipairs(wire) do
-  if sent.msg:find("Deck rules --", 1, true) then
-    check("the retained deck frame claims no current run",
-      sent.msg:find("Your deck", 1, true) == nil
-        and sent.msg:find("you are playing", 1, true) == nil, sent.msg)
-  end
-end
-
--- Back to the menu: Game:main_menu resets the deck to Red (dump game.lua:1554-1566), which is a
--- screen default, not a choice -- it may not retain anything either.
+-- Returning to the menu resets the deck to Red; that default is not a retained choice.
 local after_run = #deck_frames()
 world(1)
-Orchestrator._maybe_emit_stable_context("MENU")
-Orchestrator._maybe_emit_stable_context("GAME_OVER")
+require("core.window").emit_rules("MENU")
+require("core.window").emit_rules("GAME_OVER")
 check("returning to the menu retains no further deck", #deck_frames() == after_run,
   table.concat(deck_frames(), ", "))
 

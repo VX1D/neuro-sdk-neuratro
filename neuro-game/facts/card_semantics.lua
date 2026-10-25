@@ -3,6 +3,7 @@ local M = {}
 local NUMERIC_EFFECTS = require("facts.numeric_effects")
 local Utils = require("util.utils")
 local DynamicJokers = require("facts.dynamic_jokers")
+local CardUtil = require("facts.card_util")
 
 local CONDITIONAL_WORDS = {
   " if ", " when ", " whenever ", " played ", " scored ", " held in hand",
@@ -73,8 +74,13 @@ local function add_row(out, row)
   end
   local rate = tonumber(row.rate)
   if not rate then return nil end
-  if (row.kind == "xmult" or row.kind == "xchips") and (rate <= 0 or rate == 1) then return nil end
-  if row.kind ~= "xmult" and row.kind ~= "xchips" and rate == 0 then return nil end
+  local function inert(v)
+    if row.kind == "xmult" or row.kind == "xchips" then return v <= 0 or v == 1 end
+    return v == 0
+  end
+  local moves = row.gate and row.gate.kind == "rescored"
+    and ((row.at_score and not inert(row.at_score)) or (row.ceiling and not inert(row.ceiling)))
+  if inert(rate) and not moves then return nil end
   row.rate = rate
   row.value = rate
   row.certainty = row.gate and "conditional" or "guaranteed"
@@ -126,25 +132,9 @@ end
 
 local EDITION_FIELDS = { { "chips", "chips" }, { "mult", "mult" }, { "xmult", "x_mult" } }
 
-local function copy_target(card, kind)
-  local cards = G and G.jokers and G.jokers.cards
-  if type(cards) ~= "table" then return nil, false end
-  local target
-  if kind == "brainstorm" then
-    target = cards[1]
-  else
-    for i = 1, #cards do if cards[i] == card then target = cards[i + 1] end end
-  end
-  if type(target) ~= "table" or target == card or target.debuff then return nil, false end
-  if not require("facts.public_card_identity").is_public(target) then return nil, true end
-  local center = target.config and target.config.center
-  if not (type(center) == "table" and center.blueprint_compat) then return nil, false end
-  return target, false
-end
-
 local function project(card, board, seen)
   local ability = card and card.ability or {}
-  local center = card and card.config and card.config.center
+  local center = CardUtil.center(card)
   local key = center and center.key
   local description = raw_description(card)
   local effects, refusals = {}, {}
@@ -186,19 +176,28 @@ local function project(card, board, seen)
       if rate == nil then
         refusals[#refusals + 1] = { key = key, reason = gate_text(row.gate) or "state this joker does not expose" }
       else
-        add_row(effects, { kind = row.kind, scope = row.scope, rate = rate, gate = row.gate,
+        local rs = row.rescore
+        if rs and rs.active and not rs.active(card, board) then rs = nil end
+        local gate, ceiling, at_score = row.gate, nil, nil
+        if rs then
+          gate = { kind = "rescored", text = rs.text(card) }
+          at_score = rs.value and rs.value(card, board) or nil
+          ceiling = rs.ceiling and rs.ceiling(card, board) or nil
+        elseif row.ceiling_from then
+          ceiling = DynamicJokers.read_from(card, row.ceiling_from, board)
+        end
+        add_row(effects, { kind = row.kind, scope = row.scope, rate = rate, gate = gate,
           ref = row.ref, match = row.match, at_most_once = row.at_most_once,
-          ceiling = row.ceiling_from and DynamicJokers.read_from(card, row.ceiling_from, board) or nil,
-          source = "registry" })
+          ceiling = ceiling, at_score = at_score, source = "registry" })
       end
     end
   end
 
-  local copy_kind = require("facts.card_util").copy_joker_kind(card)
+  local copy_kind = CardUtil.copy_joker_kind(card)
   if copy_kind then
     seen = seen or {}
     seen[card] = true
-    local target, unidentifiable = copy_target(card, copy_kind)
+    local target, unidentifiable = DynamicJokers.copy_target(card, copy_kind)
     if unidentifiable then
       refusals[#refusals + 1] = { key = key, reason = "a joker the blind turned face down" }
     elseif target and not seen[target] then
@@ -236,12 +235,9 @@ local function project(card, board, seen)
 
   local edition = card and card.edition
   if type(edition) == "table" then
-    local elabel = require("facts.card_util").edition_name(edition)
+    local elabel = CardUtil.edition_name(edition)
     for _, f in ipairs(EDITION_FIELDS) do
       add_row(effects, { kind = f[1], scope = "hand", rate = edition[f[2]], source = "edition", source_label = elabel })
-    end
-    if edition.polychrome and not edition.x_mult then
-      add_row(effects, { kind = "xmult", scope = "hand", rate = 1.5, source = "edition", source_label = elabel })
     end
   end
 
@@ -255,14 +251,7 @@ function M.description(card)
 end
 
 function M.full_description(card)
-  local base = raw_description(card)
-  if require("facts.card_util").copy_joker_kind(card) then
-    local info = require("util.utils").card_info_text(card)
-    if info and info ~= "" then
-      base = (base ~= "" and (base .. " · Copying: " .. info)) or ("Copying: " .. info)
-    end
-  end
-  return normalize(base)
+  return normalize(raw_description(card))
 end
 
 local function effect_text(effect)
@@ -282,7 +271,7 @@ function M.summary(card, opts)
   if description ~= "" then
     local text = description
     if not opts.edition_in_flags then
-      local edition = require("facts.card_util").edition_tag(card and card.edition)
+      local edition = CardUtil.edition_prose(card)
       if edition ~= "" then text = text .. " · " .. edition end
     end
     return normalize(text)
@@ -349,7 +338,7 @@ function M.produces_flat_mult(card)
 end
 
 function M.produces_xmult(card)
-  local key = card and card.config and card.config.center and card.config.center.key
+  local key = CardUtil.center_key(card)
   if key and DynamicJokers.declares(key, "xmult") then return true end
   for _, e in ipairs(M.project(card).effects) do
     if e.kind == "xmult" or e.kind == "xchips" then return true end

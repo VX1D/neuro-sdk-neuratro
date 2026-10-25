@@ -14,6 +14,7 @@ end
 
 local SURFACE_FALLBACK = {
   select = { "select" },
+  upcoming = { "upcoming", "select" },
   status = { "status", "select" },
   hand = { "hand", "status", "select" },
   ante = { "ante" },
@@ -38,12 +39,16 @@ function M.render(surface, key, opts)
   local ok_v, v = pcall(View.build, opts.blind)
   if not ok_v then v = {} end
   local vars = {}
+  for k, val in pairs(Model.ROUND_PHRASE[surface] or Model.ROUND_PHRASE.default) do vars[k] = val end
+  for k, val in pairs(rec.data or {}) do vars[k] = val end
   if rec.facts then
     local ok_f, facts = pcall(rec.facts, v)
-    if ok_f and type(facts) == "table" then vars = facts end
+    if ok_f and type(facts) == "table" then
+      for k, val in pairs(facts) do vars[k] = val end
+    end
   end
   for k, val in pairs(opts.vars or {}) do vars[k] = val end
-  local name = Model.boss_name(key) or rec.name
+  local name = Model.display_name(key) or rec.name
   vars.boss = name
   vars.rule = subst(rec.rule, vars)
   local body = subst(tpl, vars)
@@ -56,8 +61,7 @@ function M.boss_line(surface, key, blind, opts)
   key = key or Model.resolve_key(blind)
   local line = M.render(surface, key, { blind = blind, vars = opts and opts.vars })
   if line then return line end
-  local ok_df, DF = pcall(require, "facts.debuff_facts")
-  if not (ok_df and DF) then return nil end
+  local DF = require("facts.debuff_facts")
   local src = blind_def or blind
   local txt = ""
   if type(src) == "table" then
@@ -70,14 +74,13 @@ function M.boss_line(surface, key, blind, opts)
   end
   if txt == "" then return nil end
   Utils.neuro_log("boss: no curated record for key " .. tostring(key) .. "; using raw engine text")
-  local name = (type(src) == "table" and src.name) or (type(blind) == "table" and blind.name) or key or "?"
+  local name = Model.display_name(key) or (type(src) == "table" and src.name)
+    or (type(blind) == "table" and blind.name) or key or "?"
   return "Boss (" .. tostring(name) .. "): " .. txt
 end
 
 function M.active_boss_key()
-  local b = G and G.GAME and G.GAME.blind
-  if type(b) ~= "table" or b.disabled then return nil end
-  return Model.resolve_key(b)
+  return Model.active_key()
 end
 
 function M.upcoming_boss_key()

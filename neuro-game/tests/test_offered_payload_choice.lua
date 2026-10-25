@@ -1,7 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", localize = true, G = "board" })
 
 local check, done = require("tests.helpers").harness("offered-payload-choice")
 local FP = require("tests.force_payload")
@@ -9,68 +6,58 @@ local LB = require("tests.fixtures.live_board")
 local Registry = require("core.action_registry")
 require("core.actions")
 
-local function offers(text)
-  local out = {}
-  for name, payload in tostring(text or ""):gmatch("([%w_]+)|(%b{})") do
-    if Registry.get(name) then out[#out + 1] = { name = name, payload = payload } end
-  end
-  return out
+local boards, candidate_count, array_count = 0, 0, 0
+local invalid, missing = {}, {}
+local function candidate_in_force(force, name, candidate)
+  local query = tostring(force.query or "") .. "\n" .. tostring(force.state or "")
+  local rendered = Registry.render(name, candidate)
+  if rendered and query:find(rendered, 1, true) then return true end
+  local scalar = {}
+  if candidate.area ~= nil then scalar.area = candidate.area end
+  if candidate.index ~= nil then scalar.index = candidate.index end
+  local base = Registry.render(name, scalar)
+  return base ~= nil and query:find(base, 1, true) ~= nil
 end
 
-local function array_fields(name)
-  local contract = Registry.get(name)
-  local props = (contract and contract.schema and contract.schema.properties) or {}
-  local out = {}
-  for field, spec in pairs(props) do
-    if type(spec) == "table" and spec.type == "array" then out[field] = true end
-  end
-  return out
-end
-
-local function literal_selections(name, payload)
-  local bad = {}
-  for field in pairs(array_fields(name)) do
-    local value = payload:match('"' .. field .. '":(%b[])')
-    if value and value:gsub("<[^>]*>", ""):find("%d") then bad[#bad + 1] = field .. ":" .. value end
-  end
-  return bad
-end
-
-local scanned, with_arrays = 0, 0
 for _, board in ipairs(LB.BOARDS) do
   LB.load(board.state, board.desc)
-  local first = FP.build(board.state)
-  local text = (first and ((first.state or "") .. "\n" .. (first.query or ""))) or ""
-  for _, offer in ipairs(offers(text)) do
-    scanned = scanned + 1
-    if next(array_fields(offer.name)) and offer.payload:find("%[") then with_arrays = with_arrays + 1 end
-    local bad = literal_selections(offer.name, offer.payload)
-    check("" .. board.state .. ": " .. offer.name .. " asks for its selection instead of answering it",
-      #bad == 0, table.concat(bad, ", ") .. " in " .. offer.payload)
+  local force = FP.build(board.state)
+  if force then
+    boards = boards + 1
+    for _, name in ipairs(force.actions or {}) do
+      local contract = Registry.get(name)
+      if not contract then
+        invalid[#invalid + 1] = name
+      else
+        local candidates = Registry.candidates(name)
+        for _, candidate in ipairs(candidates) do
+          candidate_count = candidate_count + 1
+          if type(candidate) ~= "table" then
+            invalid[#invalid + 1] = name .. ": non-object candidate"
+          else
+            if not candidate_in_force(force, name, candidate) then
+              missing[#missing + 1] = board.state .. "/" .. name
+            end
+            for _, value in pairs(candidate) do
+              if type(value) == "table" and #value > 0 then
+                array_count = array_count + 1
+              end
+            end
+          end
+        end
+        local guidance = Registry.render(name, {})
+        if guidance:find("|{", 1, true) then invalid[#invalid + 1] = name .. ": legacy guidance" end
+      end
+    end
   end
 end
 
-check("the sweep actually found offers to scan", scanned > 20, tostring(scanned))
-check("at least one scanned offer carries an array field", with_arrays > 0, tostring(with_arrays))
-
-do
-  local REGRESSION = 'use_consumable|{"area":"consumeables","index":1,"hand_indices":[1]}'
-  local hits = offers(REGRESSION)
-  check("the regression payload is extracted", #hits == 1, tostring(#hits))
-  if hits[1] then
-    check("the regression payload is rejected",
-      #literal_selections(hits[1].name, hits[1].payload) == 1, hits[1].payload)
-  end
-  local FIXED = 'use_consumable|{"area":"consumeables","index":1,"hand_indices":[<pick 1 to 5 different hand positions>]}'
-  local ok_hits = offers(FIXED)
-  check("the fixed payload is extracted", #ok_hits == 1, tostring(#ok_hits))
-  if ok_hits[1] then
-    check("the fixed payload passes",
-      #literal_selections(ok_hits[1].name, ok_hits[1].payload) == 0, ok_hits[1].payload)
-  end
-  local BOUND = 'sell_card|{"area":"jokers","index":2}'
-  check("a state-fixed scalar may still be bound",
-    #literal_selections("sell_card", BOUND:match("%b{}")) == 0, BOUND)
-end
+check("the sweep visits force action surfaces", boards >= 11, tostring(boards))
+check("every offered action has a registry contract", #invalid == 0, table.concat(invalid, ", "))
+check("every emitted candidate is bound in its own force prose",
+  #missing == 0, table.concat(missing, ", "))
+check("candidate payloads are structured objects", candidate_count > 0, tostring(candidate_count))
+check("candidate payloads leave optional array targeting to the action schema",
+  array_count == 0, tostring(array_count))
 
 done()

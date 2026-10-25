@@ -1,10 +1,8 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
+require("tests.stubs").setup({ love = "timers" })
 
 local check, done = require("tests.helpers").harness("paused-overlay")
 
-local STATES = { MENU = 11, SPLASH = 12, SELECTING_HAND = 3, BLIND_SELECT = 1, SHOP = 2,
-  GAME_OVER = 4, TAROT_PACK = 6, ROUND_EVAL = 7 }
+local STATES = require("tests.engine_cards").states()
 
 local overlay = {}
 function overlay:get_UIE_by_ID(id)
@@ -13,6 +11,7 @@ function overlay:get_UIE_by_ID(id)
 end
 
 _G.G = {
+  P_CENTERS = require("tests.engine_centers").centers(),
   STATE = STATES.MENU, STATES = STATES, STATE_COMPLETE = true,
   TIMERS = { REAL = 100, TOTAL = 100 },
   SETTINGS = { GAMESPEED = 1, paused = true },
@@ -36,28 +35,21 @@ _G.G = {
   CONTROLLER = { locks = {} },
   E_MANAGER = { queues = {} },
 }
-_G.SMODS = { Mods = {} }
+require("tests.engine_cards").install_smods({ Mods = {} })
 
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
 local State = require("core.state")
 
 local forces, registers = {}, {}
-G.NEURO = {
-  enabled = true, persona = "neuro", run_generation = 1,
-  dispatcher = Dispatcher, actions = Actions,
-  _decision_windows = {}, once_serials = {}, decision_serial = 1,
-  state_enter_serial = 1, reserved_dollars = 0,
-  update = function() end,
-  send_context = function() end,
-  send_action_result = function() end,
-}
+G.NEURO = require("tests.helpers").orch_neuro({
+  dispatcher = Dispatcher, actions = Actions, send_context = "written", send_action_result = "noop",
+})
 function G.NEURO:register_actions(defs)
   local names = {}
   for _, d in ipairs(defs or {}) do names[#names + 1] = d.name end
   registers[#registers + 1] = names
 end
-function G.NEURO:unregister_actions() end
 function G.NEURO:force_actions(_, _, actions)
   forces[#forces + 1] = table.concat(actions, ",")
 end

@@ -1,5 +1,5 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
+require("tests.stubs").setup({ love = "lazy" })
+local ES = require("tests.engine_cards").states()
 
 local check, done = require("tests.helpers").harness("plan-provenance")
 local Plans = require("handlers.plan_handlers")
@@ -10,8 +10,8 @@ local function joker(key, sid)
 end
 
 _G.G = {
-  STATE = 1,
-  STATES = { SHOP = 1 },
+  STATE = ES.SHOP,
+  STATES = ES,
   GAME = {
     dollars = 12,
     blind_on_deck = "Small",
@@ -58,7 +58,7 @@ check("delayed commit retains prepare-time authorship",
   G.NEURO.plan.provenance.build.ante == 2
     and G.NEURO.plan.provenance.build.decision_serial == 43)
 
-local aged_note = FactHints.plan_note("shop")
+local aged_note = require("tests.helpers").plan_frame("shop")
 check("age is derived per field from its own provenance",
   aged_note:find("Build focus (written by you, Ante 2, decision 43) [set 2 antes ago", 1, true) ~= nil,
   aged_note)
@@ -72,20 +72,17 @@ do
   local prior_money = G.NEURO.plan.provenance.money
   local tx, tx_err = require("core.plan_transaction").prepare("buy_from_shop", {})
   check("transaction can inherit the current required money plan", type(tx) == "table", tx_err)
-  local wrapped = require("core.plan_transaction").wrap("buy_from_shop", {}, function()
-    return require("core.action_receipt").outcome("applied")
-  end, tx)
-  wrapped()
+  require("core.plan_transaction").settle("buy_from_shop", {}, tx)
   check("transaction-carried plan retains original provenance",
     G.NEURO.plan.money == "keep a reserve" and G.NEURO.plan.provenance.money == prior_money)
 end
 
-local note = FactHints.plan_note("shop")
+local note = require("tests.helpers").plan_frame("shop")
 check("render labels the model as author",
   note:find("written by you, Ante 2, decision 42", 1, true) ~= nil, note)
 
 G.NEURO.decision_serial = 50
-local intents = Plans.prepare_joker_intents({ intents = {
+local intents = Plans.handle_record_joker_roles({ intents = {
   { index = 1, tag = "CORE", note = "anchor" },
   { index = 2, tag = "HOLD" },
 } })
@@ -93,30 +90,29 @@ intents()
 local alpha_p = G.NEURO.joker_intents[101].provenance
 local beta_p = G.NEURO.joker_intents[102].provenance
 check("intent write stamps both selected cards",
-  alpha_p.ante == 2 and alpha_p.decision_serial == 50 and alpha_p.revision == 1
-    and beta_p.revision == 1)
+  alpha_p.ante == 2 and alpha_p.decision_serial == 50
+    and beta_p.ante == 2 and beta_p.decision_serial == 50)
 
 G.NEURO.decision_serial = 51
-Plans.prepare_joker_intents({ intents = { { index = 1, tag = "SCALING" } } })()
+Plans.handle_record_joker_roles({ intents = { { index = 1, tag = "SCALING" } } })()
 check("retag stamps only the selected Joker",
   G.NEURO.joker_intents[101].provenance.decision_serial == 51
-    and G.NEURO.joker_intents[101].provenance.revision == 2
     and G.NEURO.joker_intents[102].provenance == beta_p)
 check("retag still preserves an omitted note",
   G.NEURO.joker_intents[101].note == "anchor")
 
-do
-  local function marks(txt)
-    local n = 0
-    for _ in txt:gmatch("%(written by you") do n = n + 1 end
-    return n
-  end
+local function marks(txt)
+  local n = 0
+  for _ in txt:gmatch("%(written by you") do n = n + 1 end
+  return n
+end
 
+do
   G.GAME.round_resets.ante = 2
   G.NEURO.decision_serial = 60
   Plans.prepare_plan({ hand_plan = "play pairs", build_plan = "keep Alpha",
     money_plan = "keep a reserve" })()
-  local shared = FactHints.plan_note("shop")
+  local shared = require("tests.helpers").plan_frame("shop")
   check("three fields from one decision carry no inline authorship mark",
     marks(shared) == 0, shared)
   check("their shared authorship is stated once, and named as covering all of them",
@@ -129,7 +125,7 @@ do
 
   G.NEURO.decision_serial = 61
   Plans.prepare_plan({ money_plan = "spend down to $10" })()
-  local mixed = FactHints.plan_note("shop")
+  local mixed = require("tests.helpers").plan_frame("shop")
   check("a field written at another decision keeps its own mark",
     mixed:find("(written by you, Ante 2, decision 61)", 1, true) ~= nil, mixed)
   check("and the clause then covers only the remainder",
@@ -137,21 +133,45 @@ do
   check("exactly one field pays for an inline mark", marks(mixed) == 1, mixed)
 
   G.NEURO.plan = { ante = 2, build = "keep Alpha",
-    build_scope = require("core.plan_gate").current_build_scope(),
+    build_scope = require("core.gate").current_build_scope(),
     provenance = { build = { ante = 2, decision_serial = 60 } } }
-  local lone = FactHints.plan_note("shop")
+  local lone = require("tests.helpers").plan_frame("shop")
   check("a lone field keeps its inline mark", marks(lone) == 1, lone)
   check("and states no trailing clause",
     lone:find("written by you, Ante 2, decision 60.", 1, true) == nil, lone)
 
   G.NEURO.plan = { ante = 2, build = "keep Alpha", hand = "play pairs",
-    build_scope = require("core.plan_gate").current_build_scope(),
-    hand_scope = require("core.plan_gate").current_blind_scope(),
+    build_scope = require("core.gate").current_build_scope(),
+    hand_scope = require("core.gate").current_blind_scope(),
     provenance = { build = { ante = 2, decision_serial = 60 } } }
-  local partial = FactHints.plan_note("shop")
+  local partial = require("tests.helpers").plan_frame("shop")
   check("an unattributed field blocks the hoist rather than being credited",
     partial:find("All written by you", 1, true) == nil
       and partial:find("The rest written by you", 1, true) == nil, partial)
+end
+
+do
+  G.NEURO.plan = nil
+  G.NEURO.decision_serial = 185
+  Plans.prepare_plan({ build_plan = "first text" })()
+  local before = require("tests.helpers").plan_frame("shop")
+  Plans.prepare_plan({ build_plan = "second text" })()
+  local after = require("tests.helpers").plan_frame("shop")
+  local mark_before = before:match("Build focus (%b())")
+  local mark_after = after:match("Build focus (%b())")
+  check("the first write at a decision keeps the plain caption",
+    mark_before == "(written by you, Ante 2, decision 185)", before)
+  check("a second write at the same decision is captioned as a different write",
+    mark_after == "(written by you, Ante 2, decision 185, write 2)", after)
+  Plans.handle_record_joker_roles({ intents = { { index = 1, tag = "CORE" } } })()
+  check("joker tags written at that decision count from the same source",
+    G.NEURO.joker_intents[101].provenance.write == 3,
+    tostring(G.NEURO.joker_intents[101].provenance.write))
+  G.NEURO.decision_serial = 186
+  Plans.prepare_plan({ build_plan = "third text" })()
+  check("a new decision starts its own count",
+    require("tests.helpers").plan_frame("shop"):match("Build focus (%b())")
+      == "(written by you, Ante 2, decision 186)", require("tests.helpers").plan_frame("shop"))
 end
 
 do
@@ -164,11 +184,6 @@ do
     G.jokers = { cards = cards, config = { card_limit = 5 } }
     G.NEURO.joker_intents = joker_intents
     return CtxJokers.jokers_section("SHOP")
-  end
-  local function marks(text)
-    local n = 0
-    for _ in text:gmatch("%(written by you") do n = n + 1 end
-    return n
   end
   local function rec(ante, serial) return { ante = ante, decision_serial = serial } end
   local A, B, C = roster_joker("Alpha", 101), roster_joker("Beta", 102), roster_joker("Gamma", 103)

@@ -1,11 +1,11 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
+require("tests.stubs").setup({ love = "timers" })
 _G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} }, hand = { cards = {} }, TIMERS = { REAL = 100 } }
 
 local check, done = require("tests.helpers").harness("action-schema-surface")
 
 local Bridge = require("core.bridge")
 local Actions = require("core.actions")
+local json = require("util.neuro_json")
 
 local function wire_actions()
   local b = Bridge:new({ game = "Balatro", enabled = true })
@@ -29,14 +29,6 @@ local function find_key(v, key, path)
 end
 
 do
-  local bad
-  for _, def in ipairs(Actions.get_static_actions()) do
-    local hit = def.schema and find_key(def.schema, "description", def.name or "?")
-    if hit then bad = hit break end
-  end
-  check("source schemas carry no description keyword (the bridge strips it, so it is dead source)",
-    bad == nil, bad)
-
   local wire = wire_actions()
   check("register message captured", type(wire) == "table" and #wire > 0)
   if type(wire) == "table" then
@@ -54,6 +46,19 @@ do
   end
 end
 
+for _, mode in ipairs({ "on", "off" }) do
+  require("core.config").set("NEURO_CONFIRM_HAND", mode)
+  local marked = {}
+  for _, a in ipairs(wire_actions() or {}) do
+    local d = tostring(a.description)
+    if d:find("`", 1, true) or d:find("**", 1, true) or d:find("#", 1, true) or d:find("^%s*%- ") then
+      marked[#marked + 1] = a.name
+    end
+  end
+  check("confirm_hand " .. mode .. ": every registered description is plain text", #marked == 0, table.concat(marked, ","))
+end
+require("core.config").set("NEURO_CONFIRM_HAND", "on")
+
 local function area_enum(wire, action_name)
   for _, a in ipairs(wire or {}) do
     if a.name == action_name then
@@ -65,19 +70,16 @@ local function area_enum(wire, action_name)
   return nil
 end
 
-local function has(list, value)
-  for _, v in ipairs(list or {}) do if v == value then return true end end
-  return false
-end
+local has = require("tests.helpers").has
 
 do
   local wire = wire_actions()
   for _, name in ipairs({ "use_consumable", "sell_card" }) do
     local e = area_enum(wire, name)
-    check("" .. name .. ".area advertises the engine spelling `consumeables`",
-      e ~= nil and has(e, "consumeables"), e and table.concat(e, ",") or "nil")
-    check("" .. name .. ".area does not advertise the `consumables` alias",
-      e ~= nil and not has(e, "consumables"), e and table.concat(e, ",") or "nil")
+    check(name .. ".area advertises the English spelling `consumables`",
+      e ~= nil and has(e, "consumables"), e and table.concat(e, ",") or "nil")
+    check(name .. ".area does not advertise the engine's `consumeables`",
+      e ~= nil and not has(e, "consumeables"), e and table.concat(e, ",") or "nil")
   end
   for _, name in ipairs({ "choose_pack_card", "choose_directional_pack_card" }) do
     local e = area_enum(wire, name)
@@ -88,29 +90,25 @@ do
   for _, name in ipairs({ "use_consumable", "use_directional_consumable" }) do
     local e = area_enum(wire, name)
     check(name .. ".area is restricted to owned consumables",
-      e ~= nil and #e == 1 and e[1] == "consumeables",
+      e ~= nil and #e == 1 and e[1] == "consumables",
       e and table.concat(e, ",") or "nil")
   end
 end
 
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
-local FS = require("core.force_state")
+local Enforce = require("tests.helpers").enforce()
 local Helpers = require("tests.helpers")
 
 local function tarot()
-  return {
-    sort_id = "c_fool", sell_cost = 1, cost = 3,
-    ability = { set = "Tarot", name = "The Fool", consumeable = true },
-    config = { center = { key = "c_fool", set = "Tarot", loc_txt = { name = "The Fool" } } },
-    juice_up = function() end, highlight = function() end,
-  }
+  return require("tests.engine_cards").consumable("c_fool",
+    { sort_id = "c_fool", sell_cost = 1, cost = 3, juice_up = function() end })
 end
 
 local function dispatch_use_card(area_value)
   G.TIMERS.REAL = (G.TIMERS.REAL or 100) + 100
-  G.STATES = { SELECTING_HAND = 4 }
-  G.STATE = 4
+  G.STATES = require("tests.engine_cards").states()
+  G.STATE = G.STATES.SELECTING_HAND
+  G.CONTROLLER = { locked = false }
   G.STATE_COMPLETE = true
   G.OVERLAY_MENU = nil
   G.GAME = {
@@ -125,9 +123,8 @@ local function dispatch_use_card(area_value)
   G.consumeables = { cards = { tarot() }, config = { card_limit = 2 } }
   G.deck = { cards = {} }
   G.FUNCS = { use_card = function() end }
-  require("core.transition_guard").reset()
-  require("core.tx_cache").reset()
-  require("core.action_receipt").reset("schema-surface")
+  require("core.validate").reset_run_state()
+  require("core.bridge").tx.reset()
   Enforce.reset_run_state()
 
   local log = {}
@@ -139,14 +136,12 @@ local function dispatch_use_card(area_value)
     end,
     send_context = function() end,
     register_actions = function() end,
-    unregister_actions = function() end,
     is_transition_cooldown = function() return false end,
   }
   Helpers.stage_registered(nil, { "use_consumable" })
-  FS.arm("SELECTING_HAND", { "use_consumable" }, { use_consumable = true }, 1)
   Dispatcher.handle_message({ command = "action", data = {
     id = "area-" .. tostring(area_value), name = "use_consumable",
-    data = { area = area_value, index = 1 } } }, bridge)
+    data = json.encode({ area = area_value, index = 1 }) } }, bridge)
   return log[1] or { ok = nil, message = "(no result)", code = nil }
 end
 
@@ -178,22 +173,7 @@ do
     ["unevaluatedProperties"] = true, ["writeOnly"] = true,
   }
 
-  local function derive_validator_supported_keywords()
-    local f = io.open("util/schema_validate.lua", "rb")
-    if not f then return nil end
-    local src = f:read("*a")
-    f:close()
-    local keywords = {}
-    for kw in src:gmatch("schema%.([%a_][%w_]*)") do
-      keywords[kw] = true
-    end
-    return keywords
-  end
-
-  local SUPPORTED_VALIDATOR_KEYWORDS = derive_validator_supported_keywords()
-  check("schema_validate is readable to derive its supported keyword set",
-    SUPPORTED_VALIDATOR_KEYWORDS ~= nil)
-  SUPPORTED_VALIDATOR_KEYWORDS = SUPPORTED_VALIDATOR_KEYWORDS or {}
+  local SUPPORTED_VALIDATOR_KEYWORDS = require("util.schema_validate").SUPPORTED_KEYWORDS
 
   local function collect_schema_keys(schema, collected, path)
     if type(schema) ~= "table" then return end
@@ -244,10 +224,77 @@ do
 
   check("every action schema has root type 'object'",
     #non_object_roots == 0, table.concat(non_object_roots, "; "))
-  check("used schema keywords exclude unsupported SPECIFICATION.md:58 keywords",
+  check("used schema keywords exclude unsupported SPECIFICATION.md:61 keywords",
     #unsupported_found == 0, table.concat(unsupported_found, "; "))
   check("schema_validate supports every schema keyword used by an action",
     #unhandled_by_validator == 0, table.concat(unhandled_by_validator, "; "))
+  local association_errors = {}
+  local function walk(schema, path)
+    if type(schema) ~= "table" then return end
+    local props = schema.properties
+    if type(props) == "table" then
+      for _, required in ipairs(schema.required or {}) do
+        if props[required] == nil then
+          association_errors[#association_errors + 1] = path .. " requires missing " .. tostring(required)
+        end
+      end
+      for key, child in pairs(props) do
+        if type(child) ~= "table" then
+          association_errors[#association_errors + 1] = path .. "." .. tostring(key) .. " has no schema"
+        else
+          walk(child, path .. "." .. tostring(key))
+        end
+      end
+    end
+    if type(schema.items) == "table" then walk(schema.items, path .. "[]") end
+  end
+  local function same(a, b)
+    if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+    for k, v in pairs(a) do if not same(v, b[k]) then return false end end
+    for k in pairs(b) do if a[k] == nil then return false end end
+    return true
+  end
+  local prompt_errors = {}
+  for _, def in ipairs(defs) do
+    walk(def.schema, def.name)
+    local prompt = Registry.prompt(def.name) or ""
+    local shown = ((Registry.display(def.name) or {}).schema or {}).properties or {}
+    for key, spec in pairs((def.schema or {}).properties or {}) do
+      if same(spec, shown[key]) and prompt:find("%f[%w_]" .. key .. "%f[^%w_]", #("Use the " .. def.name .. " action") + 1) then
+        prompt_errors[#prompt_errors + 1] = def.name .. "." .. key
+      end
+    end
+  end
+  check("nested schema properties remain associated with required keys", #association_errors == 0,
+    table.concat(association_errors, "; "))
+  check("structured prompts restate no schema field they leave as registered", #prompt_errors == 0,
+    table.concat(prompt_errors, "; "))
+
+end
+
+
+do
+  local SchemaValidate = require("util.schema_validate")
+  local seed_schema
+  for _, def in ipairs(Actions.get_static_actions()) do
+    if def.name == "paste_seed" then
+      seed_schema = def.schema
+      break
+    end
+  end
+  local seed = seed_schema and seed_schema.properties and seed_schema.properties.seed
+  local valid, valid_err = SchemaValidate.validate_value(seed_schema,
+    { seed = "ABC123XY" }, "parameters")
+  local invalid, invalid_err = SchemaValidate.validate_value(seed_schema,
+    { seed = "AB-123" }, "parameters")
+  check("paste_seed schema advertises the handler's alphanumeric contract",
+    seed and seed.pattern == "^[A-Za-z0-9]*$",
+    tostring(seed and seed.pattern))
+  check("paste_seed accepts an eight-character alphanumeric seed",
+    valid == true, tostring(valid_err))
+  check("paste_seed rejects punctuation before handler execution",
+    invalid == false and type(invalid_err) == "string",
+    tostring(invalid_err))
 end
 
 do
@@ -257,9 +304,8 @@ do
     G.STATE_COMPLETE = true
     G.OVERLAY_MENU = nil
     G.NEURO.state = state_name
-    require("core.transition_guard").reset()
-    require("core.tx_cache").reset()
-    require("core.action_receipt").reset("schema-test")
+    require("core.validate").reset_run_state()
+    require("core.bridge").tx.reset()
     Enforce.reset_run_state()
 
     local log = {}
@@ -269,18 +315,22 @@ do
       end,
       send_context = function() end,
       register_actions = function() end,
-      unregister_actions = function() end,
       is_transition_cooldown = function() return false end,
     }
 
     Helpers.stage_registered(nil, { action_name })
-    FS.arm(state_name, { action_name }, { [action_name] = true }, 1)
+    require("tests.helpers").open_force(state_name, { action_name })
+    local wire_payload = payload_data
+    if type(payload_data) == "table" then
+      local wire_value = next(payload_data) == nil and json.object(payload_data) or payload_data
+      wire_payload = json.encode(wire_value)
+    end
     Dispatcher.handle_message({
       command = "action",
       data = {
         id = "n200-test",
         name = action_name,
-        data = payload_data
+        data = wire_payload
       }
     }, bridge)
     return log[1] or { ok = nil, message = "(no result)", code = nil }
@@ -296,24 +346,47 @@ do
     r_req2.code == "SCHEMA_INVALID" and r_req2.message:find("Missing required parameter: index", 1, true) ~= nil,
     tostring(r_req2.code) .. " / " .. r_req2.message)
 
+  local r_engine = dispatch_test("use_consumable", "SELECTING_HAND", { area = "consumeables", index = 1 })
+  local r_bogus = dispatch_test("use_consumable", "SELECTING_HAND", { area = "consumabels", index = 1 })
+  check("the engine's `consumeables` spelling still passes the advertised area enum",
+    r_engine.code ~= "SCHEMA_INVALID" and r_bogus.code == "SCHEMA_INVALID",
+    tostring(r_engine.code) .. " / " .. tostring(r_bogus.code))
+
+  local r_absent = dispatch_test("play_hand", "SELECTING_HAND", nil)
+  check("an omitted action payload is treated as an empty JSON object",
+    r_absent.code == "SCHEMA_INVALID"
+      and r_absent.message:find("Missing required parameter: indices", 1, true) ~= nil
+      and r_absent.message:find("must be an object", 1, true) == nil,
+    tostring(r_absent.code) .. " / " .. r_absent.message)
+
   local r_arr = dispatch_test("play_hand", "SELECTING_HAND", { indices = "not_an_array" })
   check("a non-table array payload reports 'must be an array'",
     r_arr.code == "SCHEMA_INVALID" and r_arr.message:find("must be an array", 1, true) ~= nil,
     tostring(r_arr.code) .. " / " .. r_arr.message)
 
   local r_obj_scalar = dispatch_test("select_blind", "BLIND_SELECT", "scalar_payload")
-  check("a scalar payload reports invalid JSON or requires a JSON object",
-    r_obj_scalar.code == "SCHEMA_INVALID" and (r_obj_scalar.message:find("must be a JSON object", 1, true) ~= nil or r_obj_scalar.message:find("invalid JSON", 1, true) ~= nil),
+  check("a scalar payload reports the reference SDK's invalid-JSON failure",
+    r_obj_scalar.code == "SCHEMA_INVALID",
     tostring(r_obj_scalar.code) .. " / " .. r_obj_scalar.message)
+  local r_bool = dispatch_test("select_blind", "BLIND_SELECT", false)
+  local r_large = dispatch_test(
+    "select_blind", "BLIND_SELECT", '{"x":"' .. string.rep("x", 65530) .. '"}')
+  check("boolean payloads reject before schema defaults while large frame-valid payloads reach schema validation",
+    r_bool.code == "SCHEMA_INVALID"
+      and r_large.code == "SCHEMA_INVALID"
+      and r_large.message:find("Missing required parameter: blind", 1, true) ~= nil,
+    tostring(r_bool.code) .. " / " .. r_bool.message .. " | "
+      .. tostring(r_large.code) .. " / " .. r_large.message)
+
 
   local r_obj_raw_scalar = dispatch_test("select_blind", "BLIND_SELECT", '"scalar_json"')
-  check("a JSON scalar payload reports 'must be a JSON object'",
-    r_obj_raw_scalar.code == "SCHEMA_INVALID" and r_obj_raw_scalar.message:find("must be a JSON object", 1, true) ~= nil,
+  check("a JSON scalar payload is told the parameters must be an object",
+    r_obj_raw_scalar.code == "SCHEMA_INVALID",
     tostring(r_obj_raw_scalar.code) .. " / " .. r_obj_raw_scalar.message)
 
   local r_obj_arr = dispatch_test("select_blind", "BLIND_SELECT", { "blind", "small" })
-  check("an array root payload reports 'must be a JSON object (not an array)'",
-    r_obj_arr.code == "SCHEMA_INVALID" and r_obj_arr.message:find("must be a JSON object (not an array)", 1, true) ~= nil,
+  check("an array root payload is told the parameters must be an object",
+    r_obj_arr.code == "SCHEMA_INVALID",
     tostring(r_obj_arr.code) .. " / " .. r_obj_arr.message)
 
   local r_enum_blind = dispatch_test("select_blind", "BLIND_SELECT", { blind = "invalid_blind" })

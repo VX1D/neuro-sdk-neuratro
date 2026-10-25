@@ -1,25 +1,19 @@
-
 G = { NEURO = { run_generation = 3 } }
 
 local Config = require("core.config")
-local Protocol = require("core.bridge_protocol")
-local Bridge = require("core.bridge")
+local Protocol = require("core.bridge").wire
+require("core.bridge")
 local json = require("util.neuro_json")
 
 local check, done = require("tests.helpers").harness("wire_envelope")
 
-Config.set("NEURO_OUTBOX_TRUNCATE_ON_STARTUP", "off")
 Config.set("NEURO_INBOX_TRUNCATE_ON_STARTUP", "off")
 
 local TmpWork = require("tests.tmp_workdir")
 local IPC_DIR = TmpWork.open("wire_envelope")
   .. (tostring({}):match("0x(%x+)") or "0")
 
-local function fresh_bridge()
-  os.execute("rm -rf " .. IPC_DIR)
-  os.execute("mkdir -p " .. IPC_DIR)
-  return Bridge:new({ enabled = true, fs_dir = IPC_DIR })
-end
+local function fresh_bridge() return require("tests.helpers").fs_bridge(IPC_DIR) end
 
 local function outbox_lines(bridge)
   local f = io.open(IPC_DIR .. "/" .. bridge.outbox_file, "rb")
@@ -52,10 +46,10 @@ b:send_context("hello", true)
 b:register_actions({ { name = "play_hand", description = "play", schema = { type = "object" } } })
 b:force_actions("SELECTING_HAND", "your move", { "play_hand" }, { priority = "high", ephemeral_context = true })
 b:send_action_result("id-1", false, "no", "STALE_GENERATION")
-b:unregister_actions({ "play_hand" })
+b:withdraw_actions({ "play_hand" })
 
 local lines = outbox_lines(b)
-check("every C2S command reached the outbox", #lines == 7, #lines)
+check("every C2S command reached the outbox", #lines == 6, #lines)
 
 local seen_commands = {}
 for i, line in ipairs(lines) do
@@ -84,24 +78,24 @@ for i, line in ipairs(lines) do
   end
 end
 
-check("the frames include the scoped force registration in SDK send order",
-  table.concat(seen_commands, ",") == "startup,context,actions/register,actions/register,actions/force,action/result,actions/unregister",
+check("the frames use the documented SDK send order",
+  table.concat(seen_commands, ",") == "startup,context,actions/register,actions/force,action/result,actions/unregister",
   table.concat(seen_commands, ","))
 
 do
-  local force = json.decode(lines[5])
-  check("the force frame keeps every field the SDK reads (SPECIFICATION.md:131-160)",
+  local canonical_register = json.decode(lines[3])
+  local force = json.decode(lines[4])
+  check("the force frame keeps every field the SDK reads (SPECIFICATION.md:142-162)",
     force.data.state == "SELECTING_HAND" and force.data.query == "your move"
       and force.data.priority == "high" and force.data.ephemeral_context == true
-      and force.data.action_names[1]:match("^play_hand_force_%d+$"), lines[5])
-  local result = json.decode(lines[6])
-  check("the result frame keeps id/success/message (SPECIFICATION.md:161-189)",
+      and force.data.action_names[1] == "play_hand", lines[4])
+  local result = json.decode(lines[5])
+  check("the result frame keeps id/success/message (SPECIFICATION.md:174-189)",
     result.data.id == "id-1" and result.data.success == false and result.data.message == "no",
-    lines[6])
-  local register = json.decode(lines[3])
-  check("the register frame keeps the action definitions",
-    register.data.actions[1].name == "play_hand"
-      and register.data.actions[1].description == "play", lines[3])
+    lines[5])
+  check("the canonical register frame keeps the stable action definition",
+    canonical_register.data.actions[1].name == "play_hand"
+      and canonical_register.data.actions[1].description == "play", lines[3])
 end
 
 local raw = table.concat(lines, "\n")
@@ -109,10 +103,6 @@ for _, field in ipairs(Protocol.TRANSPORT_FIELDS) do
   check("no outbox line mentions " .. field .. " at all",
     raw:find('"' .. field .. '"', 1, true) == nil)
 end
-
-check("the send counter still advances for the local metric", b.seq == 7, b.seq)
-check("the session id is still held for the journal and the marker file",
-  type(b.session_id) == "number")
 
 do
   local dirty = fresh_bridge()
@@ -124,14 +114,9 @@ do
   check("send strips a hand-built frame down to the envelope",
     frame ~= nil and frame.seq == nil and frame.session_id == nil and frame.run_generation == nil
       and frame.reason_code == nil, tostring(written))
-  check("send strips data down to the command's spec fields",
-    frame and frame.data and frame.data.note == nil and frame.data.message == "m"
-      and frame.data.silent == false, tostring(written))
 end
 
 do
-  -- Same action frame, two transports: the one the Rust bridge writes today (stamped from our own
-  -- outbox) and the one a plain jsonl->websocket relay writes (SPECIFICATION.md:214-227, verbatim).
   local function delivered(line)
     local bridge = fresh_bridge()
     local got
@@ -162,7 +147,7 @@ do
     stamped and stamped.data and stamped.data.id == "a-1" and stamped.data.name == "play_hand"
       and stamped.data.data == "{}")
 
-  local reconnect = delivered('{"command":"actions/reregister_all","transport_session":2}')
+  local reconnect = delivered('{"command":"neuro-bridge/reregister_all","transport_session":2}')
   check("a transport-origin field is not mistaken for a loop and survives",
     reconnect and reconnect.transport_session == 2, reconnect and tostring(reconnect.transport_session))
 end

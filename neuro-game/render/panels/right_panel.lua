@@ -8,7 +8,7 @@ local set_col, shadow_text = H.set_col, H.shadow_text
 local push_clip, pop_clip = H.push_clip, H.pop_clip
 local smoothstep01 = H.smoothstep01
 local draw_card_mini, card_dimensions, rarity_color, joker_fx = H.draw_card_mini, H.card_dimensions, H.rarity_color, H.joker_fx
-local card_display_name, card_description = H.card_display_name, H.card_description
+local card_display_name = H.card_display_name
 local modifier_badges, layout_modifier_badges, draw_modifier_badges =
   H.modifier_badges, H.layout_modifier_badges, H.draw_modifier_badges
 local badge_family_color = H.badge_family_color
@@ -18,24 +18,11 @@ local DESC_FADE_D, DESC_SHOW_D = H.DESC_FADE_D, H.DESC_SHOW_D
 local carousel_clock, carousel_restart = H.carousel_clock, H.carousel_restart
 local buy_flare01, buy_pop01 = H.buy_flare01, H.buy_pop01
 
-local CY_JOKER = { slot = "desc_slot", epoch = "desc_epoch", cache = "desc_cache",
-  cache_n = "desc_cache_n", ref = "desc_slot_ref" }
-local CY_CONS = { slot = "cons_slot", epoch = "cons_epoch", cache = "cons_cache",
-  cache_n = "cons_cache_n", ref = "cons_slot_ref" }
-
-local PIN_MO = { pulse = 0.5 }
-local function pin_mo(mo)
-  PIN_MO.pulse = (mo and mo.pulse) or 0.5
-  return PIN_MO
-end
+local pin_mo = H.pin_motion()
 
 local BAND_G = {}
 local HORN_BLACK = { 0.09, 0.07, 0.08 }
-local CAROUSEL_WHITE = { 1, 1, 1 }
 local FLASH_C = { 0, 0, 0 }
-local GLITCH_R = { 0.95, 0.10, 0.16 }
-local GLITCH_C = { 0.12, 0.80, 0.90 }
-local PLAIN_WHITE = { 1, 1, 1 }
 
 local _ctr_txt = {}
 local _FRAME_OPTS = { quiet = true }
@@ -47,18 +34,7 @@ local function counter_text(i, n)
   return t
 end
 
-local CTR_W_MAX = 64
-local _ctr_w, _ctr_w_font, _ctr_w_n = {}, nil, 0
-local function counter_w(text, font)
-  if font ~= _ctr_w_font then _ctr_w, _ctr_w_n, _ctr_w_font = {}, 0, font end
-  local w = _ctr_w[text]
-  if w then return w end
-  w = font:getWidth(text)
-  if _ctr_w_n >= CTR_W_MAX then _ctr_w, _ctr_w_n = {}, 0 end
-  _ctr_w[text] = w
-  _ctr_w_n = _ctr_w_n + 1
-  return w
-end
+local counter_w = H.memo(64, function(text, font) return font:getWidth(text) end)
 
 local function round_eval_flash(now)
   return S.ov.re_seen
@@ -80,10 +56,11 @@ local function draw_rp_frame(ctx)
   end
   local re01 = round_eval_flash(now)
   love.graphics.setFont(rfont)
-  _FRAME_OPTS.sh, _FRAME_OPTS.rad, _FRAME_OPTS.title_h = rp_sh, rn(9), title_h
+  _FRAME_OPTS.sh, _FRAME_OPTS.title_h = rp_sh, title_h
   H.persona_frame(th, mo, p_x, p_y, pw_total, total_h, rn(1), _FRAME_OPTS)
   if persona_neuro then
-    Prims.valance(p_x, p_y + rn(1), pw_total, rn(1), ACC, pg, 0.9, true)
+    local va_x, va_w = Prims.heart_valance_span(p_x, pw_total, rn(1))
+    Prims.valance(va_x, p_y + rn(1), va_w, rn(1), th._pal, 1)
     for si = 1, 5 do
       local sxr = 0.5 + 0.5 * math.sin(si * 78.233)
       local syr = 0.5 + 0.5 * math.sin(si * 39.425 + 1.7)
@@ -99,12 +76,8 @@ local function draw_rp_frame(ctx)
     local bsc2 = 1
     local bs = S.buy_showcase
     if bs and bs.started then
-      local bage = now - bs.started
       bsc2 = 1 + 0.08 * buy_pop01(now)
-      if bage >= 0 and bage < 0.5 then
-        local pk2 = math.sin(math.pi * (bage / 0.5))
-        Prims.draw_sparkle(p_x + pw_total - rn(38), p_y + rn(10), rn(2) + pk2 * rn(3), pg, 0.8 * pk2)
-      end
+      H.buy_sparkle(now, p_x + pw_total - rn(38), p_y + rn(10), rn(2), rn(3), pg, 1)
     end
     if blind_sel then
       set_col(ACC, 0.05 + 0.05 * pulse)
@@ -173,9 +146,9 @@ local function draw_rp_header(ctx)
     local gt = now / gwin - gseg
     if gt > gstart and gt < gstart + 0.05 then
       local jit = rn(2)
-      caps_label(persona_name, tx - jit, ty, GLITCH_R, 0.55, TRACK, rfont, 0, nil, nil,
+      caps_label(persona_name, tx - jit, ty, Prims.GLITCH_RED, 0.55, TRACK, rfont, 0, nil, nil,
         S, "rp_glitch_r")
-      caps_label(persona_name, tx + jit, ty - 1, GLITCH_C, 0.42, TRACK, rfont, 0, nil, nil,
+      caps_label(persona_name, tx + jit, ty - 1, Prims.GLITCH_CYAN, 0.42, TRACK, rfont, 0, nil, nil,
         S, "rp_glitch_c")
     end
   end
@@ -183,7 +156,7 @@ local function draw_rp_header(ctx)
     nil, S, "rp_persona_name")
   if persona_evil and name_end then
     local oy2 = ty + math.floor(r_text_h / 2)
-    local cur_slot = (S.desc_slot or 0) * 131 + (S.cons_slot or 0)
+    local cur_slot = (S.carousel.jokers.slot or 0) * 131 + (S.carousel.cons.slot or 0)
     if S.ov.eye_slot ~= cur_slot then
       S.ov.eye_slot = cur_slot; S.ov.eye_at = now
       S.ov.eye_look_dir = (S.ov.eye_look_dir == 1) and -1 or 1
@@ -212,7 +185,7 @@ local function draw_rp_header(ctx)
     love.graphics.rectangle("fill", tx, ty + r_text_h + rn(1), name_end - tx, 1)
     local bob = math.sin(now * 1.4) * rn(1)
     local re01 = round_eval_flash(now)
-    local beat = (now % 4.7) < 0.12   -- must match the evil-eye blink cadence (now%4.7<0.12) in hud/prims.lua
+    local beat = (now % 4.7) < 0.12
     Prims.draw_heart(name_end + rn(9), ty + math.floor(r_text_h / 2) + bob - math.floor(re01 * rn(3)),
       (beat or re01 > 0) and rn(4) or rn(3), pg, (beat or re01 > 0) and 1.0 or 0.85)
   end
@@ -226,8 +199,6 @@ local function draw_rp_header(ctx)
     local lw = tracked_width(state_label, TRACK_SM, sl_font)
     local dot_x = tx + lw + r_U + rn(2)
     local dot_gap, dot_r = rn(6), rn(3) / 2
-    -- Breathe rides the tint, which the text cache does not compare. The shadow is tinted with
-    -- the glyphs and fades with them.
     caps_label(state_label, tx, sl_y, ACC, 1, TRACK_SM, sl_font, 0.32, rn(1),
       nil, S, "rp_state_label", (0.82 + 0.12 * quant_alpha(breathe)) * sl_in)
     if persona_evil then
@@ -247,11 +218,12 @@ local function draw_rp_header(ctx)
       end
     end
   else
-    local rest = 0.34 + 0.14 * Motion.pulse(now, 0.6)
+    local rest = persona_neuro and (0.84 + 0.10 * Motion.pulse(now, 0.6))
+      or (0.34 + 0.14 * Motion.pulse(now, 0.6))
     local lw = tracked_width(state_label, TRACK_SM, sl_font)
-    caps_label(state_label, tx, sl_y, PLAIN_WHITE, 1, TRACK_SM, sl_font, 0,
+    caps_label(state_label, tx, sl_y, Prims.WHITE, 1, TRACK_SM, sl_font, 0,
       nil, nil, S, "rp_state_label", rest * sl_in)
-    set_col(th.DIM or {1, 1, 1}, 0.35 * sl_in)
+    set_col(th.DIM, 0.35 * sl_in)
     love.graphics.rectangle("fill", tx + lw + r_U + rn(2), sl_y + sl_text_h / 2 - rn(1), rn(3), rn(3))
   end
   love.graphics.setFont(rfont)
@@ -278,33 +250,27 @@ local function draw_rp_header(ctx)
   end
 end
 
-local _carousel_P = {}
-local function draw_desc_carousel(P)
-  local r, rx, cy = P.r, P.rx, P.cy
-  local now, cur_card_a, pulse = P.now, P.cur_card_a, P.pulse
-  local rn, content_w, p_w, p_pad_x = P.rn, P.content_w, P.p_w, P.p_pad_x
-  local rp_card_line_h, rp_small_line_h, rp_text_h, r_small_text_h = P.rp_card_line_h, P.rp_small_line_h, P.rp_text_h, P.r_small_text_h
-  local rp_font, rfont_small = P.rp_font, P.rfont_small
-  local persona_evil, persona_neuro = P.persona_evil, P.persona_neuro
-  local pg, ACC, FR, FRD, GOLD = P.pg, P.ACC, P.FR, P.FRD, P.GOLD
-  local SEL = P.SEL
-  local shimr, shimg, shimb = P.shimr, P.shimg, P.shimb
-  local trunc, wrapped_lines = P.trunc, P.wrapped_lines
-  local draw_desc_lines = P.draw_desc_lines
-  local theme = P.theme
+local function draw_desc_carousel(ctx, r, rx, cy, cur_card_a)
+  local theme, mo, me, _, dr = H.bind(ctx)
+  local now, pulse, shimr, shimg, shimb = H.motion(mo)
+  local rn, content_w, p_w, p_pad_x = me.rn, me.content_w, me.p_w, me.p_pad_x
+  local rp_card_line_h, rp_small_line_h, rp_text_h, r_small_text_h = me.rp_card_line_h, me.rp_small_line_h, me.rp_text_h, me.r_small_text_h
+  local rp_font, rfont_small = theme.rp_font, theme.rfont_small
+  local persona_evil, persona_neuro = H.persona(theme)
+  local pg, ACC, FR, FRD, GOLD = theme.pg, theme.ACC, theme.FR, theme.FRD, theme.GOLD
+  local SEL = theme.SEL
+  local trunc, wrapped_lines = dr.trunc, dr.wrapped_lines
+  local draw_desc_lines = dr.draw_desc_lines
   local jokers = r.cards
   local n = #jokers
   if n > 0 then
     local D_FADE = DESC_FADE_D
     local D_SHOW = DESC_SHOW_D
 
-    local K = (r.which == "cons") and CY_CONS or CY_JOKER
-    local cy_slot = S[K.slot]
-    local cy_epoch = S[K.epoch]
-    local cy_cache = S[K.cache]
-    local cy_cache_n = S[K.cache_n]
+    local C = S.carousel[(r.which == "cons") and "cons" or "jokers"]
+    local cy_slot, cy_epoch, cy_cache, cy_cache_n = C.slot, C.epoch, C.cache, C.cache_n
 
-    local cy_ref = S[K.ref]
+    local cy_ref = C.ref
     local pre_ref = jokers[cy_slot + 1]
     if cy_ref ~= nil and pre_ref ~= nil and pre_ref ~= cy_ref then carousel_restart(now) end
 
@@ -347,12 +313,10 @@ local function draw_desc_carousel(P)
       local badges = modifier_badges(cur_jc)
       local badges_v = badges._v
       local rc2 = rarity_color(cur_jc)
-      if not rc2 or type(rc2) ~= "table" then rc2 = CAROUSEL_WHITE end
+      if not rc2 or type(rc2) ~= "table" then rc2 = Prims.WHITE end
       local r1, r2, r3 = rc2[1], rc2[2], rc2[3]
       local placeholder_revision = Utils.placeholder_revision(cur_jc)
       local ui_text_revision = Utils.ui_text_revision(cur_jc)
-      -- Scaling jokers mutate `extra` in place, so a table-typed `extra` can't be fingerprinted by
-      -- reference: re-run joker_fx() for it, but gate the rebuild below on the returned string.
       local ab = cur_jc.ability or {}
       local fx_extra = ab.extra
       local fx_extra_is_table = type(fx_extra) == "table"
@@ -374,11 +338,7 @@ local function draw_desc_carousel(P)
         or cached.ui_text_revision ~= ui_text_revision
         or fx_stale
       if changed then
-        local desc = card_description(cur_jc) or ""
-        if desc == "" and cur_jc.config and cur_jc.config.center then
-          local ok, d = pcall(Utils.safe_description, cur_jc.config.center.loc_txt, cur_jc)
-          if ok and type(d) == "string" then desc = d end
-        end
+        local desc = H.card_text(cur_jc)
         local show = desc ~= "" and desc or fx
         local dname = card_display_name(cur_jc) or "Unknown"
         local lns = show ~= "" and wrapped_lines(show, wrap_w, sf2) or {}
@@ -396,8 +356,8 @@ local function draw_desc_carousel(P)
       cached = nil
       cy_cache[cy_slot] = nil
     end
-    S[K.slot], S[K.epoch], S[K.cache], S[K.cache_n] = cy_slot, cy_epoch, cy_cache, cy_cache_n
-    S[K.ref] = jokers[cy_slot + 1]
+    C.slot, C.epoch, C.cache, C.cache_n = cy_slot, cy_epoch, cy_cache, cy_cache_n
+    C.ref = jokers[cy_slot + 1]
 
     local jc = cached and cached.jc
     if jc then
@@ -443,17 +403,20 @@ local function draw_desc_carousel(P)
       end
       local badge_layout = cached.badge_layout
 
-      local name_txt = trunc(jname, name_w, rp_font)
+      local slot_txt = counter_text(cy_slot + 1, n)
+      local stw = counter_w(slot_txt, sf)
+      local name_room = name_w
+      if persona_neuro then name_room = math.min(name_w, content_w - text_off - stw - rn(6)) end
+      local name_txt = trunc(jname, name_room, rp_font)
       local name_x = rx + p_pad_x + text_off
       local name_y = cy + (rp_card_line_h - rp_text_h) / 2
+      if persona_neuro then name_y = math.floor(name_y) end
       shadow_text(name_txt, name_x, name_y, rc, 0.97 * fade_a, 0.30 * fade_a, rn(1))
 
       love.graphics.setFont(rfont_small)
-      local slot_txt = counter_text(cy_slot + 1, n)
-      local stw = counter_w(slot_txt, sf)
-      -- The breathe rides the tint, which the text cache does not compare; in the alpha it would
-      -- rewrite the vertex buffer on every quantised step. The shadow is tinted and fades too.
-      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, cy + (rp_card_line_h - r_small_text_h) / 2, ACC, 1, 0.30, rn(1), false, 0.78 + 0.10 * quant_alpha(pulse))
+      local slot_y = cy + (rp_card_line_h - r_small_text_h) / 2
+      if persona_neuro then slot_y = math.floor(slot_y) end
+      shadow_text(slot_txt, rx + p_w - p_pad_x - stw, slot_y, ACC, 1, 0.30, rn(1), false, 0.78 + 0.10 * quant_alpha(pulse))
 
       local strip_h = badge_layout.height
       local desc_lines = (#lns > 0)
@@ -466,10 +429,11 @@ local function draw_desc_carousel(P)
         local lead_top = math.min(lead, math.ceil(slack / 2))
         local lead_bot = math.min(lead, slack - lead_top)
         draw_modifier_badges(badge_layout, rx + p_pad_x + text_off, desc_y + lead_top,
-          fade_a, theme, pin_mo(P))
+          fade_a, theme, pin_mo(mo))
         desc_y = desc_y + lead_top + strip_h + lead_bot
       end
       if desc_lines > 0 then
+        if persona_neuro then lns = dr.clip_lines(lns, desc_lines, cached.wrap_w, sf) end
         draw_desc_lines(lns, desc_lines, rx + p_pad_x + text_off, desc_y, rp_small_line_h, fade_a, sf)
       end
       love.graphics.setFont(rp_font)
@@ -529,6 +493,28 @@ local function draw_desc_carousel(P)
   return cy
 end
 
+local function empty_slot_rects(nslot, sw2, sh2, dash, gap)
+  local list = {}
+  for si = 1, nslot do
+    local ox = (si - 1) * (sw2 + gap)
+    local dx = ox
+    while dx < ox + sw2 do
+      local seg = math.min(dash, ox + sw2 - dx)
+      RectMesh.rect(list, dx, 0, seg, 1, 1, 1, 1, 1)
+      RectMesh.rect(list, dx, sh2, seg, 1, 1, 1, 1, 1)
+      dx = dx + dash * 2
+    end
+    local dy = 0
+    while dy < sh2 do
+      local seg = math.min(dash, sh2 - dy)
+      RectMesh.rect(list, ox, dy, 1, seg, 1, 1, 1, 1)
+      RectMesh.rect(list, ox + sw2, dy, 1, seg, 1, 1, 1, 1)
+      dy = dy + dash * 2
+    end
+  end
+  return list
+end
+
 local function draw_rp_rows(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
   local pg, ACC, FR, FRD, GOLD = th.pg, th.ACC, th.FR, th.FRD, th.GOLD
@@ -550,15 +536,15 @@ local function draw_rp_rows(ctx)
   if #panel_rows > 0 then
     cy = cy + r_U
     local clip_y = p_y + total_h - footer_h
-    local wrap_y = p_y + (me.panel_h_target or total_h) - footer_h
+    local wrap_y = p_y + me.panel_h_target - footer_h
     local rp_col = 1
     local rx = p_x
     local rows_y0 = cy
     local row_sdx = S.right_panel_slide_frac > 0
-      and round((me.main_slide_dir or 1) * (pw_total + 20) * S.right_panel_slide_frac) or 0
+      and round(me.main_slide_dir * (pw_total + 20) * S.right_panel_slide_frac) or 0
     local rc_on, rc_x, rc_y, rc_w, rc_h = push_clip(p_x + row_sdx - 2, p_y,
       pw_total + 4, math.max(0, math.min(clip_y, sh) - p_y))
-    for c = 2, (me.n_cols_used or n_cols) do
+    for c = 2, me.n_cols_used do
       set_col(FRD, 0.90)
       love.graphics.rectangle("fill", p_x + (c - 1) * p_w, cy - r_U, 1, clip_y - cy + r_U)
     end
@@ -567,8 +553,8 @@ local function draw_rp_rows(ctx)
     if S.buy_showcase then
       buy_prominence = buy_showcase_alpha(S.buy_showcase, now)
     end
-    local spotlight = math.max(showcase_alpha or 0, buy_prominence)
-    local spotlight_dim = 1 - 0.35 * spotlight
+    local spotlight = math.max(showcase_alpha, buy_prominence)
+    local spotlight_dim = persona_neuro and 1 or (1 - 0.35 * spotlight)
     local transition_recency = 1 - smoothstep01((now - S.state_changed_at) / 0.18)
     local transition_dip = 1 - 0.55 * transition_recency
     local row_dim = spotlight_dim * transition_dip
@@ -595,19 +581,7 @@ local function draw_rp_rows(ctx)
         cy = cy + rp_sep_h - r_U
 
       elseif kind == "carousel" then
-        local P = _carousel_P
-        P.r, P.rx, P.cy, P.now, P.cur_card_a, P.pulse = r, rx, cy, now, cur_card_a, pulse
-        P.rn, P.content_w, P.p_w, P.p_pad_x = rn, content_w, p_w, p_pad_x
-        P.rp_card_line_h, P.rp_small_line_h = rp_card_line_h, rp_small_line_h
-        P.rp_text_h, P.r_small_text_h = rp_text_h, r_small_text_h
-        P.rp_font, P.rfont_small = rp_font, rfont_small
-        P.theme = th
-        P.persona_evil, P.persona_neuro = persona_evil, persona_neuro
-        P.pg, P.ACC, P.FR, P.FRD, P.GOLD = pg, ACC, FR, FRD, GOLD
-        P.SEL = SEL
-        P.shimr, P.shimg, P.shimb = shimr, shimg, shimb
-        P.trunc, P.wrapped_lines, P.draw_desc_lines = trunc, wrapped_lines, draw_desc_lines
-        cy = draw_desc_carousel(P)
+        cy = draw_desc_carousel(ctx, r, rx, cy, cur_card_a)
 
       elseif kind == "header" then
         local col = r.color
@@ -641,27 +615,6 @@ local function draw_rp_rows(ctx)
         love.graphics.setFont(rp_font)
         cy = cy + rp_hdr_line_h
 
-      elseif kind == "sub" then
-        local col = r.color
-        local txt = r.text or ""
-        local indent = r.indent or 0
-        local sub_lines = wrapped_lines(txt, content_w - indent, rp_font)
-        local n_sub = #sub_lines > 0 and #sub_lines or 1
-        local block_w = math.max(28, content_w - indent + 4)
-        local block_h = rp_line_h * n_sub - 2
-        set_col(ROW, 0.55)
-        love.graphics.rectangle("fill", rx + p_pad_x + indent - 3, cy, block_w, block_h)
-        set_col(col, 0.18)
-        love.graphics.rectangle("fill", rx + p_pad_x + indent - 4, cy, r_accw, block_h)
-        for li = 1, n_sub do
-          local lyc = cy + (li - 1) * rp_line_h
-          love.graphics.setColor(0, 0, 0, 0.25)
-          love.graphics.print(sub_lines[li], rx + p_pad_x + indent + rn(1), lyc + rn(1))
-          set_col(col, 0.97)
-          love.graphics.print(sub_lines[li], rx + p_pad_x + indent, lyc)
-        end
-        cy = cy + rp_line_h * n_sub
-
       elseif kind == "emptyslots" then
         local nslot = math.min(r.limit or 5, 6)
         local gap = rn(4)
@@ -669,51 +622,10 @@ local function draw_rp_rows(ctx)
         local sh2 = rp_card_line_h - rn(6)
         local sy2 = cy + rn(2)
         local dash = rn(3)
-        set_col(FRD, 0.40)
-        local slots = RectMesh.get("rp_emptyslots", nslot, sw2, sh2, dash, gap)
-        if not slots and RectMesh.available() then
-          local v, i = {}, {}
-          for si = 1, nslot do
-            local ox = (si - 1) * (sw2 + gap)
-            local dx = ox
-            while dx < ox + sw2 do
-              local seg = math.min(dash, ox + sw2 - dx)
-              RectMesh.add(v, i, dx, 0, seg, 1, 1, 1, 1, 1)
-              RectMesh.add(v, i, dx, sh2, seg, 1, 1, 1, 1, 1)
-              dx = dx + dash * 2
-            end
-            local dy = 0
-            while dy < sh2 do
-              local seg = math.min(dash, sh2 - dy)
-              RectMesh.add(v, i, ox, dy, 1, seg, 1, 1, 1, 1)
-              RectMesh.add(v, i, ox + sw2, dy, 1, seg, 1, 1, 1, 1)
-              dy = dy + dash * 2
-            end
-          end
-          slots = RectMesh.build(v, i)
-          if slots then RectMesh.put("rp_emptyslots", nslot, sw2, sh2, dash, gap, nil, slots) end
-        end
-        if slots then
-          love.graphics.draw(slots, rx + p_pad_x, sy2)
-        else
-          for si = 1, nslot do
-            local sx2 = rx + p_pad_x + (si - 1) * (sw2 + gap)
-            local dx = sx2
-            while dx < sx2 + sw2 do
-              local seg = math.min(dash, sx2 + sw2 - dx)
-              love.graphics.rectangle("fill", dx, sy2, seg, 1)
-              love.graphics.rectangle("fill", dx, sy2 + sh2, seg, 1)
-              dx = dx + dash * 2
-            end
-            local dy = sy2
-            while dy < sy2 + sh2 do
-              local seg = math.min(dash, sy2 + sh2 - dy)
-              love.graphics.rectangle("fill", sx2, dy, 1, seg)
-              love.graphics.rectangle("fill", sx2 + sw2, dy, 1, seg)
-              dy = dy + dash * 2
-            end
-          end
-        end
+        local slots = RectMesh.cached(RectMesh.shared, "rp_emptyslots", nslot, sw2, sh2, dash, gap,
+          nil, nil, nil, empty_slot_rects, nslot, sw2, sh2, dash, gap)
+        RectMesh.fill(slots, rx + p_pad_x, sy2, FRD[1], FRD[2], FRD[3], 0.40, empty_slot_rects,
+          nslot, sw2, sh2, dash, gap)
         cy = cy + rp_card_line_h
 
       elseif kind == "deckback" then
@@ -728,7 +640,7 @@ local function draw_rp_rows(ctx)
         local sy = cy + rn(2)
         local mini_w = 0
         if r.center then
-          -- Reused per center: a fresh table every frame would miss the card dimension cache.
+          -- Reuse per center to preserve the card-dimension cache hit.
           local wcard = S.center_wrap[r.center]
           if not wcard then
             wcard = { config = { center = r.center } }
@@ -758,13 +670,7 @@ local function draw_rp_rows(ctx)
           love.graphics.rectangle("fill", bx, cy, bw, block_h)
           set_col(col, 0.18)
           love.graphics.rectangle("fill", rx + p_pad_x - 4, cy, r_accw, block_h)
-          for li = 1, n_d do
-            local lyc = cy + rn(2) + (li - 1) * rp_small_line_h
-            love.graphics.setColor(0, 0, 0, 0.50)
-            love.graphics.print(dlines[li], rx + p_pad_x + rn(1), lyc + rn(1))
-            set_col(th.WHITE, 0.98)
-            love.graphics.print(dlines[li], rx + p_pad_x, lyc)
-          end
+          draw_desc_lines(dlines, n_d, rx + p_pad_x, cy + rn(2), rp_small_line_h, 0.98, rfont_small)
           cy = cy + block_h
           love.graphics.setFont(rp_font)
         end
@@ -803,6 +709,26 @@ local function draw_footer_emote(em, p_x, pw_total, fy, footer_h, rn, now, a)
   end
 end
 
+local function draw_footer_quip(text, g, fy, text_h, dim, trunc, a)
+  local f, rn = g.font, g.rn
+  local qt = trunc(text, g.pw_total - rn(24), f)
+  local qw = f:getWidth(qt)
+  local qx = g.p_x + (g.pw_total - qw) / 2
+  local qy = fy + (g.footer_h - text_h) / 2
+  if g.neuro then qx, qy = math.floor(qx), math.floor(qy) end
+  shadow_text(qt, qx, qy, dim, 0, 0.50, rn(1), nil, a, "sh")
+  shadow_text(qt, qx, qy, dim, 1, 0, rn(1), nil, (0.90 + 0.06 * g.pulse) * a, "mn")
+  return qt, qx, qw
+end
+
+local function flank_rects(base, step, dir)
+  local list = {}
+  for k = 0, 2 do
+    RectMesh.rect(list, dir < 0 and -(k + 1) or k, 0, 1, 1, 1, 1, 1, base - k * step)
+  end
+  return list
+end
+
 local function draw_band_flanks(g, th, mid_y, in_l, in_r, a, col_r, col_g, col_b, alt)
   local rn = g.rn
   local out_l = g.p_x + g.p_pad_x + rn(6)
@@ -810,20 +736,10 @@ local function draw_band_flanks(g, th, mid_y, in_l, in_r, a, col_r, col_g, col_b
   if in_l - out_l <= rn(12) then return end
   local seg = (in_l - out_l) / 3
   local base, step = (g.evil and 0.24 or 0.22), (g.evil and 0.07 or 0.06)
-  local flank = RectMesh.get("rp_flank", base, step)
-  if not flank and RectMesh.available() then
-    local v, i = {}, {}
-    for k = 0, 2 do RectMesh.add(v, i, -(k + 1), 0, 1, 1, 1, 1, 1, base - k * step) end
-    flank = RectMesh.build(v, i)
-    if flank then RectMesh.put("rp_flank", base, step, nil, nil, nil, nil, flank) end
-  end
-  local flank_r = flank and RectMesh.get("rp_flank_r", base, step)
-  if flank and not flank_r then
-    local v, i = {}, {}
-    for k = 0, 2 do RectMesh.add(v, i, k, 0, 1, 1, 1, 1, 1, base - k * step) end
-    flank_r = RectMesh.build(v, i)
-    if flank_r then RectMesh.put("rp_flank_r", base, step, nil, nil, nil, nil, flank_r) end
-  end
+  local flank = RectMesh.cached(RectMesh.shared, "rp_flank", base, step, nil, nil, nil, nil, nil,
+    nil, flank_rects, base, step, -1)
+  local flank_r = flank and RectMesh.cached(RectMesh.shared, "rp_flank_r", base, step, nil, nil,
+    nil, nil, nil, nil, flank_rects, base, step, 1)
   if flank and flank_r then
     love.graphics.setColor(col_r, col_g, col_b, a)
     love.graphics.draw(flank, in_l, mid_y, 0, seg, 1)
@@ -880,10 +796,13 @@ local function draw_footer_legend(list, meta, g, th, a)
   local pin_w = (lay.row_widths and lay.row_widths[1]) or 0
 
   local gloss = entry and (entry.tip or entry.fx)
-  if gloss and font:getWidth(gloss) > budget then gloss = entry and entry.fx or nil end
-  if gloss and font:getWidth(gloss) > budget then gloss = nil end
-  if gloss == "" then gloss = nil end
   local gloss_w = gloss and font:getWidth(gloss) or 0
+  if gloss_w > budget then
+    gloss = entry.fx
+    gloss_w = gloss and font:getWidth(gloss) or 0
+    if gloss_w > budget then gloss, gloss_w = nil, 0 end
+  end
+  if gloss == "" then gloss = nil end
 
   local drop = gloss and (math.floor(fh * 0.5) + u) or 0
 
@@ -909,7 +828,7 @@ local function draw_footer_legend(list, meta, g, th, a)
 
   if ct then
     shadow_text(ct, run_x, g.mid - drop - math.floor(fh / 2),
-      th.DIM, 0.72 * ta, 0.50 * ta, u)
+      th.DIM, (g.neuro and 0.96 or 0.72) * ta, 0.50 * ta, u)
   end
   draw_modifier_badges(lay, run_x + ct_w + gap,
     g.mid - drop - math.floor(lay.height / 2), a, th, LEGEND_MO)
@@ -931,16 +850,16 @@ local function draw_rp_footer(ctx)
   local rn, p_x, p_y, p_pad_x, pw_total, total_h, footer_h = me.rn, me.p_x, me.p_y, me.p_pad_x, me.pw_total, me.total_h, me.footer_h
   local r_small_text_h = me.r_small_text_h
   local quip_display, footer_emote, footer_is_emote = da.quip_display, da.footer_emote, da.footer_is_emote
-  local ffade = da.footer_fade or 1
+  local ffade = da.footer_fade
   local trunc = dr.trunc
   if footer_h > 0 then
     local fy = p_y + total_h - footer_h
     local bandg = BAND_G
     bandg.rn, bandg.font = rn, rfont_small
     bandg.p_x, bandg.p_pad_x, bandg.pw_total = p_x, p_pad_x, pw_total
-    bandg.fy, bandg.footer_h = fy, footer_h
+    bandg.footer_h = footer_h
     bandg.mid = fy + math.floor(footer_h / 2)
-    bandg.evil, bandg.pulse = persona_evil, pulse
+    bandg.evil, bandg.neuro, bandg.pulse = persona_evil, persona_neuro, pulse
     local lg = (da.footer_legend or da.footer_prev_legend) and bandg or nil
     set_col(FRD, 0.90)
     love.graphics.setLineWidth(rn(1))
@@ -949,11 +868,7 @@ local function draw_rp_footer(ctx)
     local prev_emote, prev_quip = da.footer_prev_emote, da.footer_prev_quip
     local now_emote = footer_is_emote and true or false
 
-    local had_prev_footer = prev_emote ~= nil or da.footer_prev_legend ~= nil
-      or (prev_quip and prev_quip ~= "")
-    local fading = ffade < 1 and had_prev_footer
-
-    if fading then
+    if ffade < 1 then
       local oa = 1 - ffade
       if prev_emote and prev_emote.img then
         if not now_emote then
@@ -963,42 +878,17 @@ local function draw_rp_footer(ctx)
         draw_footer_legend(da.footer_prev_legend, da.footer_prev_legend_meta, lg, th, oa)
       elseif (not prev_emote) and prev_quip and prev_quip ~= "" then
         love.graphics.setFont(rfont_small)
-        local ot = trunc(prev_quip, pw_total - rn(24), rfont_small)
-        local ox = p_x + (pw_total - rfont_small:getWidth(ot)) / 2
-        local oy = fy + (footer_h - r_small_text_h) / 2
-        shadow_text(ot, ox, oy, DIM, 0, 0.50, rn(1), nil, oa, "sh")
-        shadow_text(ot, ox, oy, DIM, 1, 0, rn(1), nil, (0.90 + 0.06 * pulse) * oa, "mn")
+        draw_footer_quip(prev_quip, bandg, fy, r_small_text_h, DIM, trunc, oa)
       end
     end
 
     if footer_is_emote and footer_emote and footer_emote.img then
-      local efw, efh = footer_emote.fw, footer_emote.fh
-      if efw > 0 and efh > 0 then
-        local emote_area_h = footer_h - rn(6)
-        local max_w = pw_total - rn(20)
-        local scale = math.min(max_w / efw, emote_area_h / efh)
-        local dw, dh = efw * scale, efh * scale
-        local ix = p_x + (pw_total - dw) / 2
-        local iy = fy + (emote_area_h - dh) / 2 + 3
-        love.graphics.setColor(1, 1, 1, 0.97 * ffade)
-        if footer_emote.quads and footer_emote.n_frames > 1 then
-          local frame_idx = math.floor(now * footer_emote.fps) % footer_emote.n_frames + 1
-          love.graphics.draw(footer_emote.img, footer_emote.quads[frame_idx], ix, iy, 0, scale, scale)
-        else
-          love.graphics.draw(footer_emote.img, ix, iy, 0, scale, scale)
-        end
-      end
+      draw_footer_emote(footer_emote, p_x, pw_total, fy, footer_h, rn, now, 0.97 * ffade)
     elseif da.footer_legend and lg then
       draw_footer_legend(da.footer_legend, da.footer_legend_meta, lg, th, ffade)
     elseif quip_display and quip_display ~= "" then
       love.graphics.setFont(rfont_small)
-      local qf = rfont_small
-      local qt = trunc(quip_display, pw_total - rn(24), qf)
-      local qw = qf:getWidth(qt)
-      local qx = p_x + (pw_total - qw) / 2
-      local qy = fy + (footer_h - r_small_text_h) / 2
-      shadow_text(qt, qx, qy, DIM, 0, 0.50, rn(1), nil, ffade, "sh")
-      shadow_text(qt, qx, qy, DIM, 1, 0, rn(1), nil, (0.90 + 0.06 * pulse) * ffade, "mn")
+      local qt, qx, qw = draw_footer_quip(quip_display, bandg, fy, r_small_text_h, DIM, trunc, ffade)
       if persona_evil then
         draw_band_flanks(bandg, th, bandg.mid, qx - rn(8), qx + qw + rn(8), ffade,
           GOLD[1], GOLD[2], GOLD[3], #qt % 2 == 0)

@@ -7,7 +7,6 @@ local Utils = require("util.utils"); Utils.now = function() return clock.t end
 local check, done = require("tests.helpers").harness("missing_action_name")
 local Harness = require("tests.inbound_harness")
 local Dispatcher = require("core.dispatcher")
-local json = require("util.neuro_json")
 
 local H = Harness.new({ clock = clock, registered = { "play_hand", "discard_hand" } })
 H.fresh()
@@ -35,16 +34,9 @@ H.frames(10)
 
 local function results_for(target_id)
   local matches = {}
-  local f = io.open(H.outbox, "r")
-  if not f then return matches end
-  for line in f:lines() do
-    local dok, frame = pcall(json.decode, line)
-    if dok and type(frame) == "table" and frame.command == "action/result"
-      and frame.data and tostring(frame.data.id) == target_id then
-      matches[#matches + 1] = frame.data
-    end
+  for _, frame in ipairs(require("tests.helpers").outbox_frames(H.outbox, { command = "action/result" })) do
+    if frame.data and tostring(frame.data.id) == target_id then matches[#matches + 1] = frame.data end
   end
-  f:close()
   return matches
 end
 
@@ -54,8 +46,6 @@ if ok1 and ok2 then
     #results == 1, #results)
   check("that result reports failure, since nothing was executed",
     results[1] and results[1].success == false, results[1] and tostring(results[1].success))
-  check("the redelivery produced no second result for the same id",
-    #results == 1, #results)
 else
   check("skipped result-shape checks because the drive crashed (already failed above)", false)
 end

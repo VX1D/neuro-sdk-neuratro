@@ -2,7 +2,6 @@ local S = require("hud.state")
 local Prims = require("hud.prims")
 local round = Prims.round
 local Cards = require("hud.cards")
-local Utils = require("util.utils")
 local Palette = require("render.palette")
 local StateKinds = require("core.state_kinds")
 local DebuffFacts = require("facts.debuff_facts")
@@ -15,7 +14,6 @@ local smoothstep01 = Prims.smoothstep01
 local print_tracked = Prims.print_tracked
 local tracked_width = Prims.tracked_width
 local CAROUSEL_PERIOD = HudShared.CAROUSEL_PERIOD
-local draw_cached_tracked_text = HudShared.draw_cached_tracked_text
 
 local Vouchers = {}
 
@@ -51,31 +49,13 @@ local function count_label(n, rot_idx, fs)
   _cnt_str, _cnt_w, _cnt_n, _cnt_idx, _cnt_font = s, w, n, rot_idx, fs
   return s, w
 end
-local _TITLE_BLOCK = {
-  shadow_color = { 0, 0, 0 },
-  main_color = false,
-  shadow_alpha = 0.5,
-  main_alpha = 0.95,
-  shadow_dx = 1,
-  shadow_dy = 1,
-}
 
 local _name_cache = {}
 
 local function voucher_name(key)
   local cached = _name_cache[key]
   if cached ~= nil then return cached end
-  local name
-  local c = G and G.P_CENTERS and G.P_CENTERS[key]
-  if c and c.loc_txt and c.loc_txt.name and c.loc_txt.name ~= "" then
-    name = tostring(c.loc_txt.name)
-  elseif c and c.name and c.name ~= "" then
-    name = tostring(c.name)
-  elseif Utils.humanize_identifier then
-    name = Utils.humanize_identifier(key)
-  else
-    name = (tostring(key):gsub("^v_", ""))
-  end
+  local name = require("facts.display_names").center(key, "Voucher")
   _name_cache[key] = name
   return name
 end
@@ -133,7 +113,7 @@ end
 
 local _keys_a, _keys_b, _in_order = {}, {}, {}
 
-local drop_last_codepoint = Utils.drop_last_codepoint
+local fit_text = require("render.gfx").fit_text
 
 local function fit_segments(key, segs, max_px, fs)
   local fit = S.voucher_seg_fit[key]
@@ -148,15 +128,10 @@ local function fit_segments(key, segs, max_px, fs)
       n = n + 3
       cum = cum + w
     else
-      local avail = max_px - cum
-      local t = str
-      local tw = fs:getWidth(t .. "..")
-      while tw > avail and #t > 0 do
-        t = drop_last_codepoint(t)
-        tw = fs:getWidth(t .. "..")
-      end
-      if tw <= avail and #t > 0 then
-        fit[n + 1], fit[n + 2], fit[n + 3] = t .. "..", segs[i + 1], tw
+      local t = fit_text(str, fs, max_px - cum, "..", 0)
+      local tw = fs:getWidth(t)
+      if #t > 2 and tw <= max_px - cum then
+        fit[n + 1], fit[n + 2], fit[n + 3] = t, segs[i + 1], tw
         n = n + 3
       end
       break
@@ -183,26 +158,49 @@ local function tray_height(n, rn)
   return rn(HEADER_H) + math.min(n, VIS) * rn(ROW_H) + rn(8)
 end
 
-local function tray_frame(ctx)
-  if not (ctx and ctx.p_x and ctx.p_y and ctx.pw and ctx.panel_h) then return nil end
+local function tray_box(ctx, rn)
+  local tray_w = math.min(rn(BASE_W), ctx.pw)
+  return rn(PAD), rn(GAP_TOP), tray_w, ctx.p_x + ctx.pw - tray_w, ctx.p_y + ctx.panel_h
+end
+
+local function neuro_charm(tray_x, tray_w, rn)
+  local HF, u = Prims.HEART_FRAME, rn(1)
+  local w, h = Prims.heart_extent(rn(3))
+  local x = tray_x + tray_w - (#HF.tl[1] - HF.out) * u - math.ceil(w / 2) - rn(2) - u
+  return x, rn(9), h
+end
+
+local function tray_clip(tray_x, tray_w, gap, body_h, rn, neuro)
+  local x0, x1, below = tray_x - rn(3), tray_x + tray_w + rn(5), rn(4)
+  if neuro then
+    local out = Prims.HEART_FRAME.out * rn(1)
+    x0, x1 = math.min(x0, tray_x - out), math.max(x1, tray_x + tray_w + out)
+    local _, drop, ch = neuro_charm(tray_x, tray_w, rn)
+    below = math.max(below, (out + 1) * rn(1), drop + math.ceil(ch / 2) + rn(1))
+  end
+  return x0, x1 - x0, gap + body_h + below
+end
+
+local function drawer_gate()
   if not (G and G.GAME and G.NEURO) then return nil end
   local sn = G.NEURO.state or ""
-  if StateKinds.is_menu_state(sn) or G.OVERLAY_MENU then
-    if not G.NEURO.dev_preview_active then return nil end
-  end
+  if (StateKinds.is_menu_state(sn) or G.OVERLAY_MENU) and not G.NEURO.dev_preview_active then return nil end
   local frac = S.drawer_slide_current or 0
   if frac <= 0.004 then return nil end
-  local n = #(S.voucher_order or {})
+  local n = S.voucher_order and #S.voucher_order or 0
   if n == 0 then return nil end
   local body_h = S.drawer_h_current or 0
   if body_h <= 1 then return nil end
+  return frac, n, body_h
+end
+
+local function tray_frame(ctx)
+  if not (ctx and ctx.p_x and ctx.p_y and ctx.pw and ctx.panel_h) then return nil end
+  local frac, _, body_h = drawer_gate()
+  if not frac then return nil end
 
   local rn = ctx.rn or function(v) return v end
-  local pad = rn(PAD)
-  local gap = rn(GAP_TOP)
-  local tray_w = math.min(rn(BASE_W), ctx.pw)
-  local tray_x = ctx.p_x + ctx.pw - tray_w
-  local y0 = ctx.p_y + ctx.panel_h
+  local pad, gap, tray_w, tray_x, y0 = tray_box(ctx, rn)
   if ctx.sh then
     local clip_h = math.min(gap + body_h + rn(4), ctx.sh - y0)
     if clip_h <= 1 then return nil end
@@ -426,13 +424,12 @@ local function draw_row(ctx, key, x, y, w, h, ga, now)
   if anim then
     local st = (now - anim.at - SWEEP_DELAY) / SWEEP_D
     if st > 0 and st < 1 then
-      local sx1, sy1, sw1, sh1 = love.graphics.getScissor()
-      love.graphics.intersectScissor(x, y - _SLIDE, w, h)
+      local clip, sx1, sy1, sw1, sh1 = HudShared.push_clip(x, y - _SLIDE, w, h)
       local bw2, sl = rn(SWEEP_W), rn(SWEEP_SLANT)
       local bx2 = x - bw2 - sl + (w + 2 * (bw2 + sl)) * st
       set_col(_WHITE, 0.16 * a * math.sin(math.pi * st))
       love.graphics.polygon("fill", bx2, y + h, bx2 + sl, y, bx2 + sl + bw2, y, bx2 + bw2, y + h)
-      if sx1 then love.graphics.setScissor(sx1, sy1, sw1, sh1) else love.graphics.setScissor() end
+      HudShared.pop_clip(clip, sx1, sy1, sw1, sh1)
     end
   end
 end
@@ -444,18 +441,16 @@ local function draw_connection(rn, x, ty, pb_y, ga, evil, neuro)
   local wire = (evil or neuro) and _ACC or _GOLD
 
   if py - pb_y > rn(2) then
-    if evil then
+    if evil or neuro then
       set_col(wire, 0.60 * ga)
       love.graphics.setLineWidth(math.max(1, rn(2)))
       love.graphics.line(x, pb_y, x, py)
       local my = math.floor((pb_y + py) / 2)
-      Prims.draw_diamond(x, my, rn(1), wire, 0.85 * ga)
-    elseif neuro then
-      set_col(wire, 0.60 * ga)
-      love.graphics.setLineWidth(math.max(1, rn(2)))
-      love.graphics.line(x, pb_y, x, py)
-      local my = math.floor((pb_y + py) / 2)
-      Prims.draw_heart(x, my, rn(3), _GLOW, 0.85 * ga)
+      if evil then
+        Prims.draw_diamond(x, my, rn(1), wire, 0.85 * ga)
+      else
+        Prims.draw_heart(x, my, rn(3), _GLOW, 0.85 * ga)
+      end
     else
       set_col(_GOLD, 0.70 * ga)
       love.graphics.setLineWidth(math.max(1, rn(2)))
@@ -479,55 +474,27 @@ local function draw_connection(rn, x, ty, pb_y, ga, evil, neuro)
 end
 
 function Vouchers.draw(ctx)
-  if not (ctx and G and G.GAME and G.NEURO) then return end
-  local sn = G.NEURO.state or ""
-  if StateKinds.is_menu_state(sn) or G.OVERLAY_MENU then
-    if not G.NEURO.dev_preview_active then return end
-  end
-  local frac = S.drawer_slide_current or 0
-  if frac <= 0.004 then return end
-  local n = #(S.voucher_order or {})
-  if n == 0 then return end
+  if not ctx then return end
+  local frac, n, body_h = drawer_gate()
+  if not frac then return end
 
   local now, rn, pal = ctx.now, ctx.rn, ctx.pal
   local row_h = rn(ROW_H)
   local shown = math.min(n, VIS)
-  local body_h = S.drawer_h_current or 0
-  if body_h <= 1 then return end
 
-  _GOLD = pal.D_GOLD or { 0.92, 0.71, 0.13 }
-  _ACC = pal.ACCENT or _GOLD
-  _BG = pal.PANEL_BG or pal.BG or { 0.08, 0.08, 0.1 }
-  _FR = pal.FRAME or { 0.5, 0.5, 0.5 }
-  _FRD = pal.FRAME_DIM or _FR
-  _WHITE = pal.D_WHITE or { 1, 1, 1 }
-  _DIM = pal.D_DIM or { 0.7, 0.7, 0.7 }
-  _MONEY = pal.D_MONEY or _GOLD
+  _GOLD, _ACC, _BG, _FR, _FRD = pal.D_GOLD, pal.ACCENT, pal.PANEL_BG, pal.FRAME, pal.FRAME_DIM
+  _WHITE, _DIM, _MONEY = pal.D_WHITE, pal.D_DIM, pal.D_MONEY
   _PULSE = ctx.pulse or 0
-  local persona_key = (Palette.displayed_persona and Palette.displayed_persona()) or ""
+  local persona_key = Palette.displayed_persona()
   local evil = persona_key == "evil"
   local neuro = persona_key == "neuro"
-  _GLOW = pal.GLOW or _ACC
-  local shr, shg, shb = _ACC[1], _ACC[2], _ACC[3]
-  if neuro then
-    local st2 = Motion.pulse(now, 1.25)
-    shr = _ACC[1] + (_GLOW[1] - _ACC[1]) * st2
-    shg = _ACC[2] + (_GLOW[2] - _ACC[2]) * st2
-    shb = _ACC[3] + (_GLOW[3] - _ACC[3]) * st2
-  elseif evil then
-    local st2 = Motion.pulse(now, 1.1)
-    local em = pal.ACCENT or _GOLD
-    shr = _GOLD[1] + (em[1] - _GOLD[1]) * st2
-    shg = _GOLD[2] + (em[2] - _GOLD[2]) * st2
-    shb = _GOLD[3] + (em[3] - _GOLD[3]) * st2
-  end
+  _GLOW = pal.GLOW
+  local shr, shg, shb = HudShared.shimmer(pal, persona_key, now)
+  if not shr then shr, shg, shb = _ACC[1], _ACC[2], _ACC[3] end
 
-  local pad = rn(PAD)
-  local gap = rn(GAP_TOP)
-  local tray_w = math.min(rn(BASE_W), ctx.pw)
-  local tray_x = ctx.p_x + ctx.pw - tray_w
-  local y0 = ctx.p_y + ctx.panel_h
-  local clip_h = math.min(gap + body_h + rn(4), ctx.sh - y0)
+  local pad, gap, tray_w, tray_x, y0 = tray_box(ctx, rn)
+  local clip_x, clip_w, clip_h = tray_clip(tray_x, tray_w, gap, body_h, rn, neuro)
+  clip_h = math.min(clip_h, ctx.sh - y0)
   if clip_h <= 1 then return end
 
   local ease = smoothstep01(frac)
@@ -536,21 +503,25 @@ function Vouchers.draw(ctx)
   _SLIDE = slide
   local prev_font = love.graphics.getFont()
 
-  love.graphics.setScissor(tray_x - rn(3), y0, tray_w + rn(8), clip_h)
+  love.graphics.setScissor(clip_x, y0, clip_w, clip_h)
   love.graphics.push()
   love.graphics.translate(0, -slide)
   local ty = y0 + gap
   _TH.persona_evil, _TH.persona_neuro = evil, neuro
   _TH.bg, _TH.FR, _TH.FRD, _TH.GOLD, _TH.pg = _BG, _FR, _FRD, _GOLD, _GLOW
   _MO.pulse, _MO.shimr, _MO.shimg, _MO.shimb = _PULSE, shr, shg, shb
-  _FRAME_OPTS.a, _FRAME_OPTS.rad, _FRAME_OPTS.title_h, _FRAME_OPTS.quiet =
-    ga, rn(9), rn(HEADER_H), true
-  local rad = HudShared.persona_frame(_TH, _MO, tray_x, ty, tray_w, body_h, rn(1), _FRAME_OPTS)
+  _TH._pal = pal
+  _FRAME_OPTS.a, _FRAME_OPTS.title_h, _FRAME_OPTS.quiet = ga, rn(HEADER_H), true
+  HudShared.persona_frame(_TH, _MO, tray_x, ty, tray_w, body_h, rn(1), _FRAME_OPTS)
   if body_h > rn(12) then
+    local inset = neuro and Prims.HEART_FRAME.inset * rn(1) or rn(3)
+    local inset_w = neuro and inset * 2 or rn(6)
     love.graphics.setColor(0, 0, 0, 0.25 * ga)
-    love.graphics.rectangle("fill", tray_x + rn(3), ty + body_h - rn(5), tray_w - rn(6), rn(3))
-    love.graphics.setColor(1, 1, 1, 0.05 * ga)
-    love.graphics.rectangle("fill", tray_x + rad, ty + 1, tray_w - rad * 2, 1)
+    love.graphics.rectangle("fill", tray_x + inset, ty + body_h - rn(5), tray_w - inset_w, rn(3))
+    if not neuro then
+      love.graphics.setColor(1, 1, 1, 0.05 * ga)
+      love.graphics.rectangle("fill", tray_x, ty + 1, tray_w, 1)
+    end
   end
   if evil and body_h > rn(20) then
     HudShared.evil_frame(tray_x, ty, tray_w, body_h, rn(1), rn(HEADER_H), _GOLD, _GLOW, _BG, _PULSE, now, ga, 0)
@@ -564,12 +535,12 @@ function Vouchers.draw(ctx)
     Prims.wax_seal(chx + ch_sway, ty + body_h + rn(9), rn(3), rn(1), _GOLD, 0.9 * ga, _PULSE, true, now)
   end
   if neuro and body_h > rn(20) then
-    local chx = tray_x + tray_w - rn(16)
+    local chx, drop = neuro_charm(tray_x, tray_w, rn)
     local ch_sway = math.sin(now * 1.6) * rn(2)
     love.graphics.setColor(shr, shg, shb, 0.65 * ga)
     love.graphics.setLineWidth(1)
     love.graphics.line(chx, ty + body_h - 1, chx + ch_sway, ty + body_h + rn(6))
-    Prims.draw_heart(chx + ch_sway, ty + body_h + rn(9), rn(3), _GLOW, 0.9 * ga)
+    Prims.draw_heart(chx + ch_sway, ty + body_h + drop, rn(3), _GLOW, 0.9 * ga)
   end
 
   local fs = ctx.font_small
@@ -579,18 +550,8 @@ function Vouchers.draw(ctx)
   local header_h = rn(HEADER_H)
   local hy = ty + math.floor((header_h - 2 - fs_h) / 2)
   local title_x = tray_x + pad + rn(12)
-  _TITLE_BLOCK.font, _TITLE_BLOCK.track = fs, rn(TRACK_SM)
-  _TITLE_BLOCK.main_color, _TITLE_BLOCK.tint_alpha = _ACC, ga
-  _TITLE_BLOCK.dynamic_color = false -- alpha is the draw tint; the cached RGB stays fixed
-  local title_cached, title_w = draw_cached_tracked_text(
-    ctx, "voucher_header_title", "VOUCHERS", title_x, hy, _TITLE_BLOCK)
-  local title_end = title_x + (title_w or tracked_width("VOUCHERS", rn(TRACK_SM), fs))
-  if not title_cached then
-    love.graphics.setColor(0, 0, 0, 0.5 * ga)
-    print_tracked("VOUCHERS", title_x + 1, hy + 1, rn(TRACK_SM), fs)
-    set_col(_ACC, 0.95 * ga)
-    title_end = print_tracked("VOUCHERS", title_x, hy, rn(TRACK_SM), fs)
-  end
+  local title_end = HudShared.caps_label("VOUCHERS", title_x, hy, _ACC, 0.95, rn(TRACK_SM), fs, 0.5, 1,
+    false, ctx, "voucher_header_title", ga)
 
   local cnt, cw = count_label(n, S.voucher_rot_idx, fs)
   local k = 0
@@ -662,8 +623,8 @@ function Vouchers.draw(ctx)
     end
   end
 
-  love.graphics.setScissor(tray_x - rn(3), y0, tray_w + rn(8), clip_h)
-  local pb_y = y0 + slide  -- already in translated coordinates, not screen space
+  love.graphics.setScissor(clip_x, y0, clip_w, clip_h)
+  local pb_y = y0 + slide
   draw_connection(rn, tray_x + rn(26), ty, pb_y, ga, evil, neuro)
   draw_connection(rn, tray_x + tray_w - rn(26), ty, pb_y, ga, evil, neuro)
 

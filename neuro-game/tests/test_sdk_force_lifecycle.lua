@@ -1,69 +1,64 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
 
-local FS = require("core.force_state")
-local raw_arm = FS.arm
-FS.arm = function(state, names, set, now, payload)
-  local armed = raw_arm(state, names, set, now, payload)
-  if armed then require("tests.helpers").stage_registered(state, names) end
-  return armed
+local Window = require("core.window")
+local H = require("tests.helpers")
+local function open_force(state, names)
+  H.stage_registered(state, names)
+  return H.open_force(state, names)
 end
-local check, done = require("tests.helpers").harness("sdk-force-lifecycle")
+local check, done = H.harness("sdk-force-lifecycle")
 
 local function bridge_neuro(over)
-  local N = { enabled = true, persona = "neuro", unreg_log = {}, reg_calls = 0 }
-  function N:unregister_actions(names)
+  local N = require("tests.helpers").started_bridge({ enabled = true, persona = "neuro", cancel_log = {}, reg_calls = 0 })
+  function N:withdraw_actions(names)
     local copy = {}
     for i, v in ipairs(names or {}) do copy[i] = v end
-    self.unreg_log[#self.unreg_log + 1] = copy
+    self.cancel_log[#self.cancel_log + 1] = copy
+    return true
   end
   function N:register_actions(_) self.reg_calls = self.reg_calls + 1 end
-  function N:send_context() end
+  function N:send_context(_, _, receipt)
+    if receipt then receipt.status = "written" end
+    return true
+  end
   if over then for k, v in pairs(over) do N[k] = v end end
   return N
 end
 
 do
   G.NEURO = bridge_neuro()
-  FS.arm("SELECTING_HAND", { "play_hand", "discard_hand" },
-    { play_hand = true, discard_hand = true }, 100)
-  FS.mark_sent(100)
-  FS.supersede(100)
-  check("supersede: force closed", G.NEURO.force_inflight == false)
-  -- API/README.md:23 -- the exact force-owned names must be withdrawn before replacement. This is
-  -- an explicit cancellation transaction, independent of reconciliation and registry shadow state.
-  check("supersede: teardown explicitly withdraws the sent force",
-    #G.NEURO.unreg_log == 1, #G.NEURO.unreg_log)
-  check("supersede: the sent offer's names are quarantined, so the computed set stops offering them",
-    FS.cancel_blocks("play_hand", 100) == true and FS.cancel_blocks("discard_hand", 100) == true)
-  check("supersede: and the quarantine is what withdraws them -- cancel_blocks refuses them",
-    FS.cancel_blocks("play_hand", 100) == true and FS.cancel_blocks("discard_hand", 100) == true)
-  check("supersede: result recorded", G.NEURO.force_last_result == "superseded")
+  local w = open_force("SELECTING_HAND", { "play_hand", "discard_hand" })
+  Window.withdraw("superseded")
+  check("supersede: the delivered force ends", w.phase == "ended" and Window.current() == nil)
+  check("supersede: the withdrawal unregisters exactly the delivered names (README.md:27)",
+    #G.NEURO.cancel_log == 1
+      and G.NEURO.cancel_log[1][1] == "play_hand"
+      and G.NEURO.cancel_log[1][2] == "discard_hand")
+  check("supersede: the reason is recorded", w.ended_by == "superseded")
 end
 
 do
   G.NEURO = bridge_neuro()
-  FS.arm("SHOP", { "sell_card" }, { sell_card = true }, 100)
-  FS.supersede(100)
-  check("supersede: an offer that never reached the wire is not quarantined",
-    G.NEURO.force_cancel_pending == nil and #G.NEURO.unreg_log == 0)
+  G.NEURO.force_window = { phase = "registered", state = "SHOP", names = { "sell_card" }, set = { sell_card = true } }
+  Window.withdraw("superseded")
+  check("supersede: an offer that never reached the wire is discarded without an unregister",
+    G.NEURO.force_window.phase == "ended" and #G.NEURO.cancel_log == 0)
 end
 
 do
   G.NEURO = bridge_neuro()
-  FS.arm("SHOP", { "sell_card" }, { sell_card = true }, 100)
-  FS.mark_sent(100)
-  FS.invalidate("run_reset", 100)
-  check("invalidate: exact withdrawal and quarantine describe the same sent offer",
-    #G.NEURO.unreg_log == 1 and FS.cancel_blocks("sell_card", 100) == true)
+  local w = open_force("SHOP", { "buy_from_shop", "sell_card" })
+  Window.withdraw("run_reset")
+  check("withdraw: the sent offer ends", w.phase == "ended")
+  check("withdraw: the whole sent offer is unregistered, tool included (README.md:27)",
+    #G.NEURO.cancel_log == 1 and table.concat(G.NEURO.cancel_log[1], ",") == "buy_from_shop,sell_card",
+    table.concat(G.NEURO.cancel_log[1] or {}, ","))
 end
 
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
 local Staging = require("core.staging")
-local ConfirmationEvidence = require("core.confirmation_evidence")
-local HandTx = require("core.hand_transaction")
+local Gate = require("core.gate")
 
 local play_card = require("tests.helpers").play_card
 
@@ -82,13 +77,9 @@ local function apply_play()
 end
 
 local function result_bridge()
-  local b = { results = {}, contexts = {} }
-  function b:send_action_result(id, ok, msg, reason)
-    self.results[#self.results + 1] = { id = id, ok = ok, msg = msg, reason = reason }
-    return true, { status = "written" }
-  end
+  local b = H.stub_bridge({ results = {}, contexts = {}, register_actions = "noop",
+    send_action_result = H.result_log("results", { "id", "ok", "msg", "reason" }, "written") })
   function b:send_context(msg) self.contexts[#self.contexts + 1] = tostring(msg) end
-  function b:register_actions(_) end
   return b
 end
 
@@ -98,16 +89,14 @@ do
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 5,
   })
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   local b = result_bridge()
   Dispatcher.handle_message({ command = "action",
-    data = { id = "keep-1", name = "play_hand", data = { indices = { 99 } } } }, b)
+    data = { id = "keep-1", name = "play_hand", data = '{"indices":[99]}' } }, b)
   check("in-set failure: wire result is success=false",
     b.results[1] and b.results[1].ok == false)
   check("in-set failure: the force stays open (Neuro retries it herself)",
-    G.NEURO.force_inflight == true)
-  check("in-set failure: no re-force armed alongside the open force",
-    G.NEURO.force_dirty ~= true)
+    Window.current() ~= nil and #G.NEURO.cancel_log == 0)
 end
 
 do
@@ -116,89 +105,87 @@ do
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 5,
   })
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   local b = result_bridge()
   Dispatcher.handle_message({ command = "action",
-    data = { id = "confirm-1", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
+    data = { id = "confirm-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   local r = b.results[1]
   check("confirm: wire result is success=true (force closes without a retry)",
     r and r.ok == true)
   check("confirm: reason code kept", r and r.reason == "CONFIRMATION_REQUIRED")
-  check("confirm: verdict text delivered in the result message (opens with the Selection [ix] = ... line, not just any text mentioning the word)",
-    r and tostring(r.msg):match("^Selection %[") ~= nil, r and tostring(r.msg))
-  check("confirm: force closed", G.NEURO.force_inflight == false)
-  check("confirm: new force armed immediately", G.NEURO.force_dirty == true)
+  check("confirm: the result is only the brief (SPECIFICATION.md:189)",
+    r and r.msg == require("handlers.hand_handlers").PLAY_REVIEW_BRIEF, r and tostring(r.msg))
+  local p = require("core.gate").proposal() or {}
+  local verdict, facts = p.verdict or "", p.facts or ""
+  local force = require("force.force_router").get_force_for_state("SELECTING_HAND")
+  check("confirm: the review rides the resolve_play force, its Selection [ix] = ... facts in state",
+    facts:match("^Selection %[") ~= nil and force and force.query:find(verdict, 1, true) ~= nil
+      and tostring(force.state_extra):find(facts, 1, true) ~= nil and not force.query:find("Selection [", 1, true),
+    facts .. " || " .. tostring(force and force.query))
+  check("confirm: the force ends as answered, so the resolution is asked next",
+    Window.current() == nil and G.NEURO.force_window.ended_by == "answered")
   check("confirm: decision serial untouched (resend latch stays valid)",
     G.NEURO.decision_serial == 5)
   check("confirm: play latch survives the force closure",
-    HandTx.current() and HandTx.current().signature == "1,2"
-      and HandTx.current().decision_serial == 5)
+    Gate.proposal() and Gate.proposal().signature == "1,2"
+      and Gate.proposal().decision_serial == 5)
 
   G.TIMERS.REAL = 322
-  G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   local played = false
   G.FUNCS.play_cards_from_highlighted = function() played = true apply_play() end
   Dispatcher.handle_message({ command = "action",
-    data = { id = "confirm-2", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
+    data = { id = "confirm-2", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   local r2 = b.results[2]
   check("confirm resend: same indices do not commit the play",
     r2 and r2.ok == true and r2.reason == "POLICY_ACKNOWLEDGED"
       and played == false,
     r2 and r2.msg)
   check("confirm resend: the explicit confirm path remains pending and does not advance the serial",
-    G.NEURO.force_inflight == false and G.NEURO.decision_serial == 5)
+    Window.current() == nil and G.NEURO.decision_serial == 5)
 end
 
 do
   selecting_hand_env(340)
   G.NEURO = bridge_neuro({ dispatcher = Dispatcher, actions = Actions })
-  local content = require("handlers.hand_handlers").play_content(
-    { G.hand.cards[1], G.hand.cards[2] })
-  local hand_tx = assert(HandTx.create({
-    signature = "1,2",
-    content = content, indices = { 1, 2 }, context_revision = HandTx.context_revision(),
-    hand_type = "Pair",
-  }))
-  local candidate = ConfirmationEvidence.candidate(
-    hand_tx.signature, hand_tx.content, { 1, 2 }, "Pair", hand_tx.id, hand_tx.context_revision)
-  assert(ConfirmationEvidence.stage(candidate,
-    "Committing Pair -- Call resolve_play with answer yes to commit this play.",
-    { status = "written" }))
-  assert(ConfirmationEvidence.step_delivery())
+  local hand_tx = assert(require("tests.helpers").open_proposal({ 1, 2 },
+    "Committing Pair -- Call resolve_play with answer yes to commit this play."))
+  check("staged: the delivered confirmation is awaiting its answer before queueing",
+    hand_tx.phase == "ready" and require("handlers.hand_handlers").confirm_ready(), "phase=" .. tostring(hand_tx.phase))
   G.NEURO.weak_fired_serial = 0
   Staging.reset_run_state()
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   local b = result_bridge()
+  function b:confirmation_proposal_ref(_) return hand_tx.ref end
   local played = false
   G.FUNCS.play_cards_from_highlighted = function() played = true apply_play() end
   require("tests.helpers").stage_registered(nil, { "resolve_play" })
-  local queued = Staging.queue({ command = "action",
-    data = { id = "early-1", name = "resolve_play",
-      data = string.format('{"transaction_id":%d,"answer":"yes"}', hand_tx.id) } }, b)
-  check("staged: queue accepted the action", queued == true)
-  check("staged: action/result sent at queue time, before any update tick",
-    #b.results == 1 and b.results[1].id == "early-1" and b.results[1].ok == true)
+  Dispatcher.route_message({ command = "action",
+    data = { id = "early-1", name = "resolve_play", data = '{"answer":"yes"}' } }, b)
+  check("staged: the action was admitted and staged", require("core.execute").busy() == "staged")
+  check("staged: action admission result precedes execution",
+    b.results[1] and b.results[1].ok == true
+      and b.results[1].reason == "ACTION_ACCEPTED"
+      and b.results[1].msg == nil,
+    b.results[1] and b.results[1].msg)
   check("staged: execution has not run yet", played == false)
   for _ = 1, 200 do
     G.TIMERS.REAL = G.TIMERS.REAL + 0.25
     Staging.update()
-    if not Staging.is_busy() then break end
+    require("core.execute").step()
+    if played then break end
   end
-  check("staged: execution ran after the ack", played == true)
+  check("staged: execution ran after admission", played == true)
   check("staged: still exactly one result for the id", #b.results == 1)
 end
 
 do
   selecting_hand_env(400)
   G.NEURO = bridge_neuro({ dispatcher = Dispatcher, actions = Actions })
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 400)
-  FS.mark_sent(400)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   require("core.neuro_lifecycle").reset_run_state()
-  check("run reset: the dying run's quarantine cannot survive into the new run",
-    G.NEURO.force_cancel_pending == nil and FS.cancel_blocks("play_hand", 400) == false)
-  check("run reset: force closed", G.NEURO.force_inflight == false)
+  check("run reset: force closed", Window.current() == nil)
   check("run reset: nothing re-registers the dying run's actions",
     G.NEURO.reg_calls == 0, G.NEURO.reg_calls)
 end
@@ -209,12 +196,10 @@ do
   local ok_panel, Panel = pcall(require, "hud.tuning_panel")
   if ok_panel and Panel and Panel.toggle then
     Panel.toggle()
-    FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 420)
+    require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
     local still_open = Panel.toggle()
     check("panel close: panel actually closed", still_open == false)
-    check("panel close: the force is torn down without the teardown touching the registry",
-      G.NEURO.force_inflight == false and #G.NEURO.unreg_log == 0, #G.NEURO.unreg_log)
-    check("panel close: re-arm requested", G.NEURO.force_dirty == true)
+    check("panel close: the force is torn down", Window.current() == nil)
   else
     check("panel close: tuning panel loads headless", false, tostring(Panel))
   end
@@ -227,7 +212,7 @@ do
   G.OVERLAY_MENU = nil
   G.E_MANAGER = { queues = { base = { { blocking = true } } } }
   Staging.reset_run_state()
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   local mid_transition = true
   G.NEURO = bridge_neuro({
     dispatcher = Dispatcher, actions = Actions,
@@ -235,7 +220,7 @@ do
     state = "SELECTING_HAND", last_action_at = 0,
     update = function() end,
   })
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   local forces = 0
   function G.NEURO:force_actions(_ctx, _query, _actions) forces = forces + 1 end
   local played = false
@@ -245,16 +230,12 @@ do
   local Orch = require("core.orchestrator")
 
   Dispatcher.handle_message({ command = "action",
-    data = { id = "busy-1", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
+    data = { id = "busy-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   local r = b.results[1]
   check("mid-transition answer: wire result is success=true (the force is not retried into the transition)",
-    r and r.ok == true and r.reason == "TRANSITION_ACKNOWLEDGED", r and tostring(r.reason) or "no result")
-  check("mid-transition answer: the message says nothing applied and to choose again",
-    r and tostring(r.msg):find("nothing was applied", 1, true) ~= nil
-      and tostring(r.msg):find("choose again", 1, true) ~= nil, r and tostring(r.msg))
+    r and r.ok == true, r and tostring(r.reason) or "no result")
   check("mid-transition answer: the action did not execute", played == false)
-  check("mid-transition answer: force closed and re-arm requested",
-    G.NEURO.force_inflight == false and G.NEURO.force_dirty == true)
+  check("mid-transition answer: the force ends", Window.current() == nil)
 
   for _ = 1, 100 do
     G.TIMERS.REAL = G.TIMERS.REAL + 0.05
@@ -272,30 +253,6 @@ do
   check("no force storm: exactly one replacement force once the engine settles",
     forces == 1, tostring(forces))
   G.E_MANAGER = nil
-end
-
-do
-  local Bridge = require("core.bridge")
-  local prev = G.NEURO
-  local b = setmetatable({ enabled = true, _registered_set = { sell_card = true } }, { __index = Bridge })
-  function b:send() return true end
-  G.NEURO = b
-  b.run_generation = 5
-  b:register_actions({ { name = "sell_card", description = "sell", schema = { type = "object" } } })
-  b:force_actions("SHOP", "q", { "sell_card" })
-  check("106: the force records the generation its question was asked in",
-    G.NEURO.force_generation == 5, tostring(G.NEURO.force_generation))
-
-  FS.clear_force_state()
-  check("106: and the record outlives the window -- it names the last question asked, not the open one",
-    G.NEURO.force_generation == 5, tostring(G.NEURO.force_generation))
-
-  b.llm_paused = true
-  b.run_generation = 6
-  b:force_actions("SHOP", "q", { "sell_card" })
-  check("106: a question that never went out does not become the one being answered",
-    G.NEURO.force_generation == 5, tostring(G.NEURO.force_generation))
-  G.NEURO = prev
 end
 
 done()

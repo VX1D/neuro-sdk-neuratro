@@ -62,12 +62,9 @@ stdout_out.txt
 opencode_stderr.txt
 nul
 
-# Local dev notes / audit reports (not shipped)
+# Local dev notes (not shipped)
 /dev/
 neuro-game/dev/
-# Offline rasteriser output (scripts/raster.lua): draw-op logs and PNG contact sheets.
-# Names are derived from the request so re-running overwrites instead of piling up.
-neuro-game/.raster/
 
 # Local snapshot copies of the mod tree (not shipped)
 neuro-game/.local-backups/

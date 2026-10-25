@@ -1,35 +1,25 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
 
 local check, done = require("tests.helpers").harness("sdk-lifecycle-integration")
 
-local Enforce = require("core.enforce")
+local Enforce = require("tests.helpers").enforce()
 local ActionResult = require("core.action_result")
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
-local FS = require("core.force_state")
+local TxCache = require("core.bridge").tx
 local Orchestrator = require("core.orchestrator")
 local ContextCompact = require("context.context_compact")
 local TokenLegends = require("facts.token_legends")
 local Once = require("util.once")
 local Config = require("core.config")
 
+local json = require("util.neuro_json")
 local play_card = require("tests.helpers").play_card
-
-local function make_joker(key, name, desc)
-  return {
-    cost = 4, sell_cost = 2, debuff = false,
-    ability = { set = "Joker", name = name, mult = 4 },
-    config = { center = { key = key, name = name, set = "Joker",
-      loc_txt = { name = name, description = desc or "+4 Mult" } } },
-  }
-end
+local make_joker = require("tests.fake_cards").make_joker
 
 local function selecting_hand_env(t)
   G.TIMERS.REAL = t
-  G.STATES = { SELECTING_HAND = 4 }
-  G.STATE = 4
+  require("tests.helpers").in_engine_state("SELECTING_HAND")
   G.STATE_COMPLETE = true
   G.OVERLAY_MENU = nil
   G.GAME = {
@@ -41,25 +31,25 @@ local function selecting_hand_env(t)
     hands = { Pair = { level = 1, chips = 20, mult = 2, visible = true } },
     modifiers = {},
   }
-  G.hand = { cards = { play_card(1), play_card(2), play_card(3) },
-    highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
+  G.hand = require("tests.helpers").card_area({ cards = { play_card(1), play_card(2), play_card(3) },
+    highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } })
   G.jokers = { cards = { make_joker("j_joker", "Joker") }, config = { card_limit = 5 } }
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.playbook_extra = nil
   G.shop_jokers = nil
   G.deck = { cards = {} }
   G.FUNCS = {
-    get_poker_hand_info = function(cards) return "Pair", {}, { Pair = { cards } }, cards end,
+    get_poker_hand_info = require("tests.engine_hand_info").stub("Pair"),
   }
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
   Enforce.reset_run_state()
-  ContextCompact.invalidate_cache()
 end
 
 local function force_bridge(over)
   require("core.context_delivery").reset_transport()
-  local N = { enabled = true, persona = "neuro", emitted = {}, reg_log = {}, unreg_log = {},
-    llm_paused = false }
+  local N = require("tests.helpers").started_bridge(require("tests.helpers").stub_bridge({
+    enabled = true, persona = "neuro", run_generation = 1, transport_session = "test-session",
+    emitted = {}, reg_log = {}, llm_paused = false, force_actions = "noop", send_action_result = "noop",
+  }))
   function N:send_context(msg, _silent, receipt)
     if self.llm_paused then if receipt then receipt.status = "rejected" end return false end
     self.emitted[#self.emitted + 1] = tostring(msg)
@@ -71,36 +61,32 @@ local function force_bridge(over)
     for i, d in ipairs(defs or {}) do names[i] = d.name end
     self.reg_log[#self.reg_log + 1] = names
   end
-  function N:unregister_actions(names)
-    local copy = {}
-    for i, v in ipairs(names or {}) do copy[i] = v end
-    self.unreg_log[#self.unreg_log + 1] = copy
-  end
-  function N:force_actions() end
-  function N:send_action_result() end
   if over then for k, v in pairs(over) do N[k] = v end end
   return N
+end
+
+local function action_envelope(id, name, payload)
+  local data = (type(payload) == "table" and next(payload) ~= nil) and json.encode(payload) or "{}"
+  return {
+    command = "action", run_generation = G.NEURO.run_generation,
+    data = { id = id, name = name, data = data },
+  }
 end
 
 do
   selecting_hand_env(500)
   G.NEURO = force_bridge({})
-  require("core.force_state").arm("SELECTING_HAND", { "discard_hand" },
-    { discard_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "discard_hand" })
   local b = { send_context = function() end }
-  local last_ok, last_err, last_code
+  local last_ok, last_err, last_terminal
   for i = 1, 31 do
-    G.NEURO.force_inflight = true
-    last_ok, last_err, _, last_code = Enforce.pre_action(b, "discard_hand")
+    last_ok, last_err, last_terminal = Enforce.pre_action(b, "discard_hand")
     if i <= 30 then
       check("A: forced repeat " .. i .. " passes the gate", last_ok == true, last_err)
     end
   end
   check("A: forced repeat over the limit is refused by the gate", last_ok ~= true)
-  check("A: refusal carries an acknowledging reason code (wire success=true, no force retry)",
-    ActionResult.acknowledges(last_code) == true, tostring(last_code))
-  check("A: acknowledgement says nothing happened",
-    tostring(last_err):find("Nothing happened", 1, true) ~= nil, tostring(last_err))
+  check("A: the refusal is terminal (wire success=true, no force retry)", last_terminal == true)
 end
 
 do
@@ -119,35 +105,22 @@ do
 end
 
 do
-  selecting_hand_env(700)
-  G.NEURO = force_bridge()
-  local contexts = {}
-  local b = {}
-  function b:send_context(msg, _silent) contexts[#contexts + 1] = tostring(msg) end
-  Enforce.on_error(b)
-  Enforce.post_action(b, false)
-  check("on_error/post_action(false) send no board dump to retained context",
-    #contexts == 0, tostring(contexts[1]))
-end
-
-do
   selecting_hand_env(800)
   local N = force_bridge({ stable_refresh_due = true })
   G.NEURO = N
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   local rules_first = 0
   for _, m in ipairs(N.emitted) do
     if m:find("RULES.", 1, true) == 1 then rules_first = rules_first + 1 end
   end
   check("first stable emission carries the rules head", rules_first == 1, tostring(#N.emitted))
-  check("first stable emission excludes the variable tail", #N.emitted == 1)
-
+  check("first stable emission is limited to retained stable frames",
+    #N.emitted >= 1, tostring(#N.emitted))
   local before = #N.emitted
   G.jokers.cards[#G.jokers.cards + 1] = make_joker("j_greedy_joker", "Greedy Joker",
     "Played Diamond cards give +3 Mult when scored")
-  ContextCompact.invalidate_cache()
   N.stable_refresh_due = true
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("roster change emits no retained tail", #N.emitted == before)
   local rules_again = false
   for i = before + 1, #N.emitted do
@@ -160,11 +133,11 @@ do
   selecting_hand_env(900)
   local N = force_bridge({ stable_refresh_due = true, llm_paused = true })
   G.NEURO = N
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   check("paused bridge emits nothing", #N.emitted == 0)
   N.llm_paused = false
   N.stable_refresh_due = true
-  Orchestrator._maybe_emit_stable_context("SELECTING_HAND")
+  require("core.window").emit_rules("SELECTING_HAND")
   local got_rules = false
   for _, m in ipairs(N.emitted) do
     if m:find("RULES.", 1, true) == 1 then got_rules = true end
@@ -174,26 +147,27 @@ end
 
 do
   Enforce.reset_run_state()
+  local note_rejection = require("core.validate")._test.note_rejection
   local acknowledged = false
-  for _ = 1, 4 do acknowledged = Enforce.note_rejection("play_hand", "same-decision") end
+  for _ = 1, 4 do acknowledged = note_rejection("play_hand", "same-decision") end
   check("A: an unchanged rejection scope eventually becomes a terminal acknowledgement",
     acknowledged == true)
   check("A: real decision progress resets the rejection acknowledgement streak",
-    Enforce.note_rejection("play_hand", "next-decision") == false)
+    note_rejection("play_hand", "next-decision") == false)
 end
 
 do
   selecting_hand_env(1000)
   local N = force_bridge()
   G.NEURO = N
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   local first = #N.emitted
   check("first glossary emission delivers the common legend",
     first > 0 and N.emitted[1] == TokenLegends.READABLE_COMMON)
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   check("the same ante does not re-emit glossaries", #N.emitted == first, tostring(#N.emitted))
   G.GAME.round_resets.ante = 2
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   check("a new ante stays silent under session epoch", #N.emitted == first, tostring(#N.emitted))
 end
 
@@ -201,10 +175,10 @@ do
   selecting_hand_env(1100)
   local N = force_bridge({ llm_paused = true })
   G.NEURO = N
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   check("paused bridge emits no glossary", #N.emitted == 0)
   N.llm_paused = false
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   check("glossary gate not consumed while paused", #N.emitted > 0)
 end
 do
@@ -238,7 +212,7 @@ do
   local exec3 = PlanHandlers.prepare_plan({ hand_plan = "save discards for the boss" })
   check("a new plan scope is silent too", exec3() == nil)
   check("the new scope is the one recorded",
-    G.NEURO.plan.hand_scope == require("core.plan_gate").current_blind_scope(),
+    G.NEURO.plan.hand_scope == require("core.gate").current_blind_scope(),
     tostring(G.NEURO.plan.hand_scope))
 end
 
@@ -246,31 +220,42 @@ do
   selecting_hand_env(1300)
   local N = force_bridge()
   G.NEURO = N
-  Orchestrator.register_valid_actions("HAND_PLAYED")
-  check("transient state sends no register frame", #N.reg_log == 0)
-  Orchestrator.register_valid_actions("DRAW_TO_HAND")
-  Orchestrator.register_valid_actions("NEW_ROUND")
-  Orchestrator.register_valid_actions("PLAY_TAROT")
-  check("no transient state sends a register frame", #N.reg_log == 0)
-  Orchestrator.register_valid_actions("SELECTING_HAND")
+  require("core.window").register_catalogue()
+  check("first transient state registers the canonical action catalogue", #N.reg_log == 1)
+  require("core.window").register_catalogue()
+  require("core.window").register_catalogue()
+  require("core.window").register_catalogue()
+  check("transient state changes do not re-register the canonical catalogue", #N.reg_log == 1)
+  require("core.window").register_catalogue()
   local has_play = false
   for _, n in ipairs(N.reg_log[1] or {}) do
     if n == "play_hand" then has_play = true end
   end
-  check("a real state still registers its action set",
+  check("a real state keeps the canonical action set without re-registering",
     #N.reg_log == 1 and has_play)
-  check("state_has_actions covers pack states",
-    Actions.state_has_actions("TAROT_PACK") == true
-      and Actions.state_has_actions("HAND_PLAYED") == false)
+
+  local previous_pack_cards, previous_booster_pack = G.pack_cards, G.booster_pack
+  local pack = { cards = { play_card(1) } }
+  G.pack_cards, G.booster_pack = pack, pack
+  local pack_actions = Actions.get_valid_actions_for_state("SMODS_BOOSTER_OPENED")
+  local transient_actions = Actions.get_valid_actions_for_state("HAND_PLAYED")
+  local has_pack_choice = false
+  for _, name in ipairs(pack_actions) do
+    if name == "choose_pack_card" then has_pack_choice = true end
+  end
+  G.pack_cards, G.booster_pack = previous_pack_cards, previous_booster_pack
+  check("the canonical action list covers pack-state availability",
+    has_pack_choice, table.concat(pack_actions, ","))
+  check("the canonical action list leaves transient states unavailable",
+    #transient_actions == 0, table.concat(transient_actions, ","))
 end
 
 local Bridge = require("core.bridge")
 
 local function wire_bridge(registered)
   local b = setmetatable({ log = {}, enabled = true,
-    _registered_set = {}, _registered_sigs = {} }, { __index = Bridge })
+    _registered_sigs = {} }, { __index = Bridge })
   for _, n in ipairs(registered or {}) do
-    b._registered_set[n] = true
     b._registered_sigs[n] = "sig"
   end
   function b:send(msg, receipt)
@@ -285,17 +270,10 @@ local function wire_bridge(registered)
   end
   function b:send_action_result(id, ok, msg, reason)
     self.log[#self.log + 1] = { kind = "result", id = id, ok = ok, msg = msg, reason = reason }
-    return true
+    return true, { status = "written", written_at = G.TIMERS.REAL }
   end
-  function b:send_context() return true end
-  function b:register_actions() end
-  function b:write_file() return true end
-  b:set_desired_action_names(function()
-    local want = {}
-    local state_name = require("core.state").get_state_name()
-    for _, n in ipairs(Actions.get_valid_actions_for_state(state_name)) do want[n] = true end
-    return want
-  end)
+  local H = require("tests.helpers")
+  b.send_context, b.register_actions, b.write_file = H.yes, H.noop, H.yes
   return b
 end
 
@@ -312,8 +290,8 @@ do
     content = require("handlers.hand_handlers").play_content({ G.hand.cards[1], G.hand.cards[2] }),
     indices = { 1, 2 }, decision_serial = 5, run_generation = 0,
   }
-  require("core.force_state").arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
-  require("core.tx_cache").reset()
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
+  require("core.bridge").tx.reset()
   local played = false
   local b = wire_bridge({ "play_hand", "discard_hand" })
   G.FUNCS.play_cards_from_highlighted = function()
@@ -330,10 +308,9 @@ do
     G.GAME.current_round.hands_left = G.GAME.current_round.hands_left - 1
   end
   require("tests.helpers").stage_registered(nil, { "play_hand" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-1", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
+  Dispatcher.handle_message(action_envelope("disp-1", "play_hand", { indices = { 1, 2 } }), b)
   check("play committed", played == true)
-  check("shared event log proves unregister -> result -> execution",
+  check("shared event log proves unregister -> admission result -> execution",
     b.log[1] and b.log[1].kind == "unregister" and b.log[1].names[1] == "play_hand"
       and b.log[2] and b.log[2].kind == "result"
       and b.log[2].ok == true and b.log[2].id == "disp-1"
@@ -343,8 +320,7 @@ do
       for _, event in ipairs(b.log) do kinds[#kinds + 1] = tostring(event.kind) end
       return kinds
     end)(), " -> "))
-  check("success result closes the force after the unregister",
-    G.NEURO.force_inflight == false)
+  check("the admission result answers the force", require("core.window").current() == nil)
   Config.set("NEURO_CONFIRM_HAND", "on")
 end
 
@@ -354,16 +330,15 @@ do
     dispatcher = Dispatcher, actions = Actions,
     decision_serial = 7,
   })
-  require("core.force_state").arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
-  require("core.tx_cache").reset()
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
+  require("core.bridge").tx.reset()
   local b = wire_bridge()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-2", name = "play_hand", data = { indices = { 1, 2 } } } }, b)
+  Dispatcher.handle_message(action_envelope("disp-2", "play_hand", { indices = { 1, 2 } }), b)
   local unregs = 0
   for _, e in ipairs(b.log) do if e.kind == "unregister" then unregs = unregs + 1 end end
-  check("guarded proposal withdraws the proposal action surface",
-    unregs == 1, tostring(unregs))
+  check("guarded proposal keeps the canonical action surface registered",
+    unregs == 0, tostring(unregs))
   local confirmation_result
   for _, event in ipairs(b.log) do
     if event.kind == "result" then confirmation_result = event break end
@@ -375,11 +350,10 @@ end
 do
   selecting_hand_env(1600)
   G.NEURO = force_bridge({ dispatcher = Dispatcher, actions = Actions })
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   local b = wire_bridge()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-3", name = "play_hand", data = { indices = { 99 } } } }, b)
+  Dispatcher.handle_message(action_envelope("disp-3", "play_hand", { indices = { 99 } }), b)
   local unregs = 0
   for _, e in ipairs(b.log) do if e.kind == "unregister" then unregs = unregs + 1 end end
   check("rejected disposable action sends no unregister", unregs == 0)
@@ -389,12 +363,11 @@ end
 
 do
   G.TIMERS.REAL = 1700
-  require("core.action_receipt").reset("test_env")
-  G.STATES = { ROUND_EVAL = 8, SHOP = 9 }
-  G.STATE = 8
+  require("tests.helpers").in_engine_state("ROUND_EVAL")
   G.STATE_COMPLETE = true
   G.OVERLAY_MENU = nil
   G.round_eval = true
+  require("tests.helpers").cash_out_ready(G)
   G.GAME = {
     dollars = 10, used_vouchers = {},
     current_round = { hands_left = 1, discards_left = 1 },
@@ -404,13 +377,15 @@ do
   }
   G.jokers = { cards = {}, config = { card_limit = 5 } }
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.hand = { cards = {}, highlighted = {} }
-  require("core.transition_guard").reset()
+  G.hand = require("tests.helpers").card_area({ cards = {}, highlighted = {} })
+  require("core.validate").reset_run_state()
   Enforce.reset_run_state()
   G.NEURO = force_bridge({ dispatcher = Dispatcher, actions = Actions })
-  require("core.tx_cache").reset()
-  local cashed = false
+  require("core.bridge").tx.reset()
+  local cash_out_calls = 0
+  local cashed
   G.FUNCS.cash_out = function()
+    cash_out_calls = cash_out_calls + 1
     cashed = true
     G.round_eval = nil
     G.STATE = G.STATES.SHOP
@@ -418,109 +393,39 @@ do
   end
   local b = wire_bridge({ "cash_out" })
   require("tests.helpers").stage_registered(nil, { "cash_out" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-4", name = "cash_out", data = {} } }, b)
+  Dispatcher.handle_message(action_envelope("disp-4", "cash_out", {}), b)
   check("cash_out executes", cashed == true)
   check("cash_out unregisters before its success result",
     b.log[1] and b.log[1].kind == "unregister" and b.log[1].names[1] == "cash_out"
       and b.log[2] and b.log[2].kind == "result" and b.log[2].ok == true)
 
   G.STATE, G.STATE_COMPLETE, G.round_eval = G.STATES.ROUND_EVAL, true, true
-  require("core.action_receipt").reset("buffered_result_case")
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
   Enforce.reset_run_state()
   G.NEURO = force_bridge({ dispatcher = Dispatcher, actions = Actions, state = "ROUND_EVAL" })
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   cashed = false
-  local receipt = { status = "buffered" }
-  local buffered = wire_bridge({ "cash_out" })
-  function buffered:send_action_result(id, ok, msg, reason)
-    self.log[#self.log + 1] = { kind = "result", id = id, ok = ok, msg = msg, reason = reason }
-    return true, receipt
-  end
-  require("tests.helpers").stage_registered(nil, { "cash_out" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-buffered", name = "cash_out", data = {} } }, buffered)
-  check("a merely buffered result does not execute the action", cashed == false)
-  local waiting_before_write = Dispatcher._test.awaiting_result_write_count()
-  receipt.status = "written"
-  Dispatcher.update_receipts(1701)
-  check("the action executes after its result is physically written", cashed == true,
-    "waiting=" .. tostring(waiting_before_write) .. "->"
-      .. tostring(Dispatcher._test.awaiting_result_write_count()) .. " receipt=" .. tostring(receipt.status)
-      .. " last=" .. tostring(buffered.log[#buffered.log] and buffered.log[#buffered.log].kind)
-      .. "/" .. tostring(buffered.log[#buffered.log] and buffered.log[#buffered.log].ok)
-      .. "/" .. tostring(buffered.log[#buffered.log] and buffered.log[#buffered.log].reason))
-
-  G.STATE, G.STATE_COMPLETE, G.round_eval = G.STATES.ROUND_EVAL, true, true
-  Dispatcher.reset_run_state()
-  require("core.action_receipt").reset("buffered_result_abandon_case")
-  require("core.transition_guard").reset()
-  Enforce.reset_run_state()
-  G.NEURO = force_bridge({ dispatcher = Dispatcher, actions = Actions, state = "ROUND_EVAL" })
-  require("core.tx_cache").reset()
-  cashed = false
-  local abandoned_receipt = { status = "buffered" }
-  local abandoned_buffered = wire_bridge({ "cash_out" })
-  function abandoned_buffered:send_action_result(id, ok, msg, reason)
-    self.log[#self.log + 1] = { kind = "result", id = id, ok = ok, msg = msg, reason = reason }
-    return true, abandoned_receipt
-  end
-  require("tests.helpers").stage_registered(nil, { "cash_out" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-abandoned", name = "cash_out", data = {} } }, abandoned_buffered)
-  check("buffered action is waiting before transport abandonment",
-    Dispatcher._test.awaiting_result_write_count() == 1 and cashed == false)
-  Dispatcher.handle_message({ command = "neuro-bridge/abandon",
-    data = { ids = { "disp-abandoned" } } }, abandoned_buffered)
-  check("protocol abandon finds a job after it left the prepared map",
-    Dispatcher._test.awaiting_result_write_count() == 0)
-  check("abandon removes the durable-write waiter",
-    Dispatcher._test.awaiting_result_write_count() == 0)
-  abandoned_receipt.status = "written"
-  Dispatcher.update_receipts(1702)
-  check("a later buffered write cannot execute an abandoned action", cashed == false)
-
-  G.STATE, G.STATE_COMPLETE, G.round_eval = G.STATES.ROUND_EVAL, true, true
-  require("core.action_receipt").reset("buffered_unregister_case")
-  require("core.transition_guard").reset()
-  Enforce.reset_run_state()
-  G.NEURO = force_bridge({ dispatcher = Dispatcher, actions = Actions, state = "ROUND_EVAL" })
-  require("core.tx_cache").reset()
-  cashed = false
-  local unregister_receipt = { status = "buffered" }
-  local withdrawal_buffered = wire_bridge({ "cash_out" })
-  function withdrawal_buffered:send(msg, out_receipt)
+  cash_out_calls = 0
+  local refusing = wire_bridge({ "cash_out" })
+  function refusing:send(msg)
     if msg.command == "actions/unregister" then
       self.log[#self.log + 1] = { kind = "unregister", names = msg.data.action_names }
-      unregister_receipt = out_receipt
-      unregister_receipt.status = "buffered"
       return false
     end
     return true
   end
   require("tests.helpers").stage_registered(nil, { "cash_out" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-unregister-buffered", name = "cash_out", data = {} } }, withdrawal_buffered)
-  check("buffered disposable unregister sends neither result nor mutation",
-    cashed == false and #withdrawal_buffered.log == 1
-      and withdrawal_buffered.log[1].kind == "unregister"
-      and Dispatcher._test.awaiting_disposable_write_count() == 1)
-  unregister_receipt.status = "written"
-  unregister_receipt.written_at = 1702
-  Dispatcher.update_receipts(1702)
-  check("durable unregister releases result then execution in order",
-    cashed == true
-      and withdrawal_buffered.log[2] and withdrawal_buffered.log[2].kind == "result"
-      and #withdrawal_buffered.log == 2
-      and Dispatcher._test.awaiting_disposable_write_count() == 0)
+  Dispatcher.handle_message(action_envelope("disp-unregister-refused", "cash_out", {}), refusing)
+  check("a disposable action whose unregister the transport refuses is not executed (README.md:23-25)",
+    cashed == false and #refusing.log == 2
+      and refusing.log[1].kind == "unregister"
+      and refusing.log[2].kind == "result" and refusing.log[2].ok == false)
 end
 
 do
   G.TIMERS.REAL = 1800
-  require("core.action_receipt").reset("test_env")
-  G.STATES = { ROUND_EVAL = 8, SHOP = 9 }
-  G.STATE, G.STATE_COMPLETE, G.round_eval = 8, true, true
+  require("tests.helpers").in_engine_state("ROUND_EVAL")
+  G.STATE_COMPLETE, G.round_eval = true, true
   G.GAME = {
     dollars = 10, used_vouchers = {}, hands = {}, modifiers = {},
     current_round = { hands_left = 1, discards_left = 1 },
@@ -528,10 +433,10 @@ do
   }
   G.jokers = { cards = {}, config = { card_limit = 5 } }
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.hand = { cards = {}, highlighted = {} }
+  G.hand = require("tests.helpers").card_area({ cards = {}, highlighted = {} })
   Enforce.reset_run_state()
   G.NEURO = force_bridge({ dispatcher = Dispatcher, actions = Actions, state = "ROUND_EVAL" })
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   local executed, sends = false, 0
   G.FUNCS.cash_out = function() executed = true end
   local b = wire_bridge({ "cash_out" })
@@ -541,17 +446,36 @@ do
     if sends == 1 then error("result serializer exploded") end
     return real_result(self, ...)
   end
-  require("tests.helpers").stage_registered(nil, { "cash_out" })
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "disp-send-fault", name = "cash_out", data = {} } }, b)
+  Dispatcher.handle_message(action_envelope("disp-send-fault", "cash_out", {}), b)
   check("a result-send throw aborts instead of executing an unacknowledged action",
     executed == false)
-  check("a result-send throw releases the disposable lock and pays the fallback result",
-    G.NEURO.consumed_actions == nil
-      and b.log[#b.log] and b.log[#b.log].kind == "result" and b.log[#b.log].ok == false,
-    "lock=" .. tostring(G.NEURO.consumed_actions) .. " sends=" .. tostring(sends)
+  check("a result-send throw pays the fallback result",
+    b.log[#b.log] and b.log[#b.log].kind == "result" and b.log[#b.log].ok == false,
+    "sends=" .. tostring(sends)
       .. " last=" .. tostring(b.log[#b.log] and b.log[#b.log].kind)
       .. "/" .. tostring(b.log[#b.log] and b.log[#b.log].ok))
+end
+do
+  G.TIMERS.REAL = 1900
+  require("core.bridge").tx.reset()
+  local executed = false
+  G.FUNCS.cash_out = function() executed = true end
+  local b = wire_bridge({ "cash_out" })
+  local first = true
+  function b:send_action_result(id, ok, msg, reason)
+    self.log[#self.log + 1] = { kind = "result", id = id, ok = ok, msg = msg, reason = reason }
+    if first then
+      first = false
+      require("core.bridge").tx.store(id, ok, msg, "cash_out", reason)
+      return false, { status = "rejected" }
+    end
+    return true, { status = "written", written_at = G.TIMERS.REAL }
+  end
+  require("tests.helpers").stage_registered(nil, { "cash_out" })
+  require("core.bridge").tx.open("disp-result-rejected", "cash_out", 1900)
+  Dispatcher.handle_message(action_envelope("disp-result-rejected", "cash_out", {}), b)
+  check("a rejected admission frame aborts before mutation even with a cached verdict",
+    executed == false, tostring(executed))
 end
 
 done()

@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 
 _G.NEURO_TEST = true
 if not love then
@@ -20,6 +21,43 @@ local function count_sub(s, sub)
   return n
 end
 
+local function shop_stand_in(wire, clock, edit, force)
+  local N = H.started_bridge({ enabled = true, persona = "neuro", llm_paused = false, reserved_dollars = 0,
+    once_serials = {}, session_once_serials = {}, run_generation = 1 })
+  function N:send_context(msg) wire[#wire + 1] = tostring(msg); return true end
+  function N:register_actions() end
+  function N:send_action_result() end
+  function N:update() end
+  function N:is_transport_saturated() return false end
+  if force then function N:force_actions() return false end end
+  local STATES = require("tests.engine_cards").states()
+  _G.G = {
+    P_CENTERS = require("tests.engine_centers").centers(),
+    STATE = STATES.SHOP, STATES = STATES, STATE_COMPLETE = true,
+    TIMERS = { REAL = clock }, SETTINGS = { GAMESPEED = 1 }, CONTROLLER = { locks = {} },
+    GAME = {
+      dollars = 20, round = 3, chips = 0, STOP_USE = 0,
+      current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
+      round_resets = { ante = 2 }, blind = { name = "Small Blind" },
+      used_vouchers = {}, modifiers = {}, pack_choices = 2,
+      hands = { Pair = { visible = true, level = 1, chips = 10, mult = 2, s_chips = 10, s_mult = 2, l_chips = 0, l_mult = 0, played = 0 } },
+      consumeable_usage_total = { tarot = 0 }, probabilities = { normal = 1 },
+    },
+    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
+    jokers = { cards = {}, config = { card_limit = 5 } },
+    consumeables = { cards = {}, config = { card_limit = 2 } },
+    deck = { cards = {} },
+    shop_jokers = { cards = {}, config = { card_limit = 2 } },
+    shop_vouchers = { cards = {}, config = { card_limit = 1 } },
+    shop_booster = { cards = {}, config = { card_limit = 2 } },
+    shop = {},
+    FUNCS = { get_poker_hand_info = require("tests.engine_hand_info").stub("Pair") },
+    blind_select = {}, NEURO = N,
+  }
+  edit(G)
+  return N
+end
+
 do
   local ContextCompact = require("context.context_compact")
   local ContextReadable = require("context.context_readable")
@@ -28,7 +66,8 @@ do
 
   local function shop_world(hands)
     _G.G = {
-      STATES = { SHOP = 5, SELECTING_HAND = 2 }, STATE = 5, STATE_COMPLETE = true,
+      P_CENTERS = require("tests.engine_centers").centers(),
+      STATES = ES, STATE = ES.SHOP, STATE_COMPLETE = true,
       NEURO = { enabled = true },
       TIMERS = { REAL = 100 },
       FUNCS = {},
@@ -41,14 +80,13 @@ do
       consumeables = { cards = {}, config = { card_limit = 2 } },
       deck = { cards = {} },
     }
-    ContextCompact.invalidate_cache()
     FactHints.reset_pending()
     require("core.context_delivery").reset_transport()
   end
 
   local function build_stable()
     local ok, list = pcall(ContextCompact.build, "SHOP", nil,
-      { split = "stable", full_jokers = true, no_cache = true, return_list = true })
+      { split = "stable", return_list = true })
     return ok and table.concat(list or {}, "\n") or nil
   end
   local function build_force()
@@ -60,7 +98,6 @@ do
     Flush = { visible = true, level = 1, chips = 35, mult = 4, s_chips = 35, s_mult = 4, l_chips = 0, l_mult = 0, played = 0 },
   })
 
-  -- The exact order of core/orchestrator.lua:549-550 inside one force-arming pass.
   local stable_txt = build_stable()
   local force_txt = build_force()
 
@@ -84,7 +121,6 @@ do
   check("the gate is spent only once the text is on the wire",
     Once.peek(GATE, "session") == false)
 
-  ContextCompact.invalidate_cache()
   build_stable()
   local again = build_force()
   check("a later SHOP rebuild queues nothing (once per session, not per rebuild)",
@@ -114,9 +150,9 @@ do
     Pair  = { visible = true, level = 1, chips = 10, mult = 2, s_chips = 10, s_mult = 2, l_chips = 0, l_mult = 0, played = 0 },
     Flush = { visible = true, level = 1, chips = 35, mult = 4, s_chips = 35, s_mult = 4, l_chips = 0, l_mult = 0, played = 0 },
   })
-  G.STATE = 2 -- SELECTING_HAND
+  G.STATE = G.STATES.BLIND_SELECT
   local ok_bs, blind = pcall(ContextCompact.build, "BLIND_SELECT", nil,
-    { split = "volatile", no_cache = true })
+    { split = "volatile" })
   check("outside SHOP nothing is queued (no scope creep)",
     ok_bs and FactHints.pending_count() == 0,
     tostring(ok_bs) .. "/" .. tostring(FactHints.pending_count()) .. "/" .. tostring(blind))
@@ -138,13 +174,11 @@ do
   G.GAME.hands.Pair.chips = 30
   G.GAME.hands.Pair.mult = 4
   G.GAME.hands.Pair.played = 5
-  ContextCompact.invalidate_cache()
   build_stable(); build_force()
   check("levelling a hand does not re-open the gate (#185 saving intact)",
     FactHints.pending_count() == 0, tostring(FactHints.pending_count()))
 
   G.GAME.hands["Five of a Kind"].visible = true
-  ContextCompact.invalidate_cache()
   build_stable()
   local after = build_force()
   check("a newly revealed hand type re-opens the gate exactly once",
@@ -153,7 +187,6 @@ do
   check("and the secret hand finally gets its numbers",
     revealed:find("Five of a Kind: 120 chips x 12 mult", 1, true) ~= nil,
     revealed .. " | ctx=" .. after)
-  ContextCompact.invalidate_cache()
   build_stable(); build_force()
   check("the very next rebuild queues nothing again",
     FactHints.pending_count() == 0, tostring(FactHints.pending_count()))
@@ -163,67 +196,34 @@ do
   local FactHints = require("facts.fact_hints")
   local ContextCompact = require("context.context_compact")
   require("core.context_delivery").reset_transport()
-  local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, GAME_OVER = 4, MENU = 11 }
-
-  _G.G = {
-    STATE = STATES.SHOP, STATES = STATES, STATE_COMPLETE = true,
-    TIMERS = { REAL = 1000 }, SETTINGS = { GAMESPEED = 1 },
-    GAME = {
-      dollars = 20, blind_on_deck = "Small", round = 11, chips = 0, STOP_USE = 0,
-      current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
-      round_resets = { ante = 4,
-        blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_club" },
-        blind_states = { Small = "Select", Big = "Upcoming", Boss = "Upcoming" } },
-      blind = { name = "Big Blind" }, used_vouchers = {}, modifiers = {}, pack_choices = 2,
-      hands = {
-        Pair  = { visible = true, level = 1, chips = 10, mult = 2, s_chips = 10, s_mult = 2, l_chips = 0, l_mult = 0, played = 0 },
-        Flush = { visible = true, level = 1, chips = 35, mult = 4, s_chips = 35, s_mult = 4, l_chips = 0, l_mult = 0, played = 0 },
-        ["Five of a Kind"] = { visible = false, level = 1, chips = 120, mult = 12, s_chips = 120, s_mult = 12, l_chips = 0, l_mult = 0, played = 0 },
-      },
-    },
-    P_BLINDS = { bl_small = { key = "bl_small", name = "Small Blind" },
-      bl_big = { key = "bl_big", name = "Big Blind" },
-      bl_club = { key = "bl_club", name = "The Club" } },
-    jokers = { cards = { { cost = 4, sell_cost = 2,
+  H.orch_board({ kind = "club", state = "SHOP", edit = function(g)
+    g.GAME.hands = {
+      Pair  = { visible = true, level = 1, chips = 10, mult = 2, s_chips = 10, s_mult = 2, l_chips = 0, l_mult = 0, played = 0 },
+      Flush = { visible = true, level = 1, chips = 35, mult = 4, s_chips = 35, s_mult = 4, l_chips = 0, l_mult = 0, played = 0 },
+      ["Five of a Kind"] = { visible = false, level = 1, chips = 120, mult = 12, s_chips = 120, s_mult = 12, l_chips = 0, l_mult = 0, played = 0 },
+    }
+    g.jokers.cards[1] = { cost = 4, sell_cost = 2,
       ability = { set = "Joker", name = "Joker", mult = 4 },
       config = { center = { key = "j_joker", name = "Joker", set = "Joker",
-        loc_txt = { name = "Joker", description = "+4 Mult" } } } } }, config = { card_limit = 5 } },
-    consumeables = { cards = {}, config = { card_limit = 2 } },
-    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-    deck = { cards = {} },
-    shop_jokers = { cards = {}, config = { card_limit = 2 } },
-    shop_vouchers = { cards = {}, config = { card_limit = 1 } },
-    shop_booster = { cards = {}, config = { card_limit = 2 } },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end,
-      select_blind = function() end },
-    CONTROLLER = { locks = {} },
-    blind_select = {},
-    E_MANAGER = { queues = {} },
-  }
+        loc_txt = { name = "Joker", description = "+4 Mult" } } } }
+    g.shop = {}
+  end })
 
   local Dispatcher = require("core.dispatcher")
   local Actions = require("core.actions")
-  local wire = {}   -- everything the bridge was handed, in order
+  local wire = {}
 
-  G.NEURO = {
-    enabled = true, persona = "neuro", run_generation = 1,
-    dispatcher = Dispatcher, actions = Actions,
-    _decision_windows = {}, once_serials = {}, session_once_serials = {},
-    decision_serial = 1, state_enter_serial = 1, reserved_dollars = 0,
-    update = function() end,
-    send_action_result = function() end,
-  }
+  G.NEURO = H.orch_neuro({ session_once_serials = {}, dispatcher = Dispatcher, actions = Actions,
+    send_action_result = "noop" })
   function G.NEURO:send_context(msg, _silent) wire[#wire + 1] = tostring(msg) return true end
   function G.NEURO:register_actions() end
-  function G.NEURO:unregister_actions() end
   function G.NEURO:force_actions(ctx, query)
     wire[#wire + 1] = tostring(ctx)
     wire[#wire + 1] = tostring(query)
   end
 
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
   FactHints.reset_pending()
-  ContextCompact.invalidate_cache()
   local Orchestrator = require("core.orchestrator")
   Orchestrator.reset_run_state()
 
@@ -232,10 +232,10 @@ do
     for _ = 1, n do
       G.TIMERS.REAL = G.TIMERS.REAL + 0.1
       pcall(Orchestrator.update, 0.1)
-      if require("core.force_state").window_is_open() then forced = true end
+      if require("core.window").current() ~= nil then forced = true end
     end
   end
-  ticks(200)   -- 20 s of ticks
+  ticks(200)
 
   local transmitted = table.concat(wire, "\n")
   check("the SHOP force actually shipped (the run is meaningful)",
@@ -253,8 +253,7 @@ do
 
   local mark = #wire
   G.GAME.hands["Five of a Kind"].visible = true
-  require("core.force_state").clear_force_state()
-  require("core.neuro_lifecycle").mark_force_dirty()
+  require("core.window").reset()
   G.NEURO.stable_refresh_due = true
   ticks(200)
   local after = table.concat(wire, "\n", math.min(mark + 1, #wire), #wire)
@@ -263,7 +262,7 @@ do
   check("it re-opens the gate exactly once, not once per rebuild",
     count_sub(after, BASE_MARK) == 1, tostring(count_sub(after, BASE_MARK)))
 
-  require("core.force_state").clear_force_state()
+  require("core.window").reset()
   Orchestrator.reset_run_state()
 end
 
@@ -295,14 +294,10 @@ do
   local cards = {}
   for i = 1, 8 do
     local suit = SUITS[((i - 1) % 4) + 1]
-    cards[i] = {
-      base = { value = VALN[RANKS[i]] or RANKS[i], suit = suit },
-      sort_id = i,
-      config = { center = { key = "c_base", set = "Default" } },
-      is_suit = function(_, s) return s == suit end,
-    }
+    cards[i] = require("tests.engine_cards").playing(VALN[RANKS[i]] or RANKS[i], suit, { sort_id = i })
   end
   _G.G = {
+    P_CENTERS = require("tests.engine_centers").centers(),
     hand = { cards = cards, config = { highlighted_limit = 5 }, highlighted = {} },
     GAME = {
       blind = { name = "Small Blind", debuff = {}, hands = {}, only_hand = false },
@@ -335,14 +330,12 @@ do
   check("force_selecting_hand.lua no longer emits its own copy",
     not query_text:find("Card rank chips", 1, true) and not flushed:find("Card rank chips", 1, true),
     "query=" .. query_text .. " | flushed=" .. flushed)
-  check("facts/token_legends.lua stays the sole canonical source",
-    TokenLegends.READABLE_STATE.SELECTING_HAND:find("Card rank chips", 1, true) ~= nil)
   Actions.is_action_valid = real_is_action_valid
 end
 
 do
   local Once = require("util.once")
-  _G.G = { NEURO = {} }
+  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), NEURO = {} }
 
   check("a 'session' epoch booking is recorded", Once.once_until("k_session", "session") == true)
   check("repeat booking at the same epoch is suppressed", Once.once_until("k_session", "session") == false)
@@ -353,7 +346,7 @@ do
     "expected already-seen (peek=false) right after a run reset")
 
   check("a default-epoch booking is recorded", Once.once_until("k_run", 1) == true)
-  G.NEURO.once_serials = nil -- run reset again
+  G.NEURO.once_serials = nil
   check("a default-epoch booking is GONE after a run reset (once_serials wiped)",
     Once.peek("k_run", 1) == true,
     "expected fresh again (peek=true) after a run reset")
@@ -361,46 +354,45 @@ end
 
 do
   local FactHints = require("facts.fact_hints")
-  _G.G = { NEURO = {} }
+  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), NEURO = {} }
 
-  local function fire(tag, txt)
-    FactHints.once_per_session_hint(tag, txt)
+  local SESSION_TAG = "voucher_basics_run"
+  local function fire(txt)
+    FactHints.emit(SESSION_TAG, txt)
     return H.drain_hints()
   end
 
-  check("once_per_session_hint fires on first sight", fire("t214", "TXT") == "TXT")
-  check("once_per_session_hint is suppressed on repeat (same run)", fire("t214", "TXT") == "")
+  check("a session-cadence hint fires on first sight", fire("TXT") == "TXT")
+  check("a session-cadence hint is suppressed on repeat (same run)", fire("TXT") == "")
 
   G.NEURO.once_serials = nil
-  check("once_per_session_hint STAYS suppressed across a run reset",
-    fire("t214", "TXT") == "")
+  check("a session-cadence hint STAYS suppressed across a run reset",
+    fire("TXT") == "")
 end
 
 do
-  local FS = require("core.force_state")
   local Once = require("util.once")
-  _G.G = { NEURO = { once_serials = {}, session_once_serials = {} } }
+  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), NEURO = { once_serials = {}, session_once_serials = {} } }
 
-  local snap = FS.snapshot_once_serials()
-  check("a snapshot is produced", snap ~= nil)
+  local journal = Once.begin_journal()
 
   Once.once_until("k_run", 1)
   Once.once_until("k_sess", "session")
   check("the discarded build did book the run-scoped gate", Once.peek("k_run", 1) == false)
   check("the discarded build did book the session gate", Once.peek("k_sess", "session") == false)
 
-  FS.restore_once_serials(snap)
+  Once.rollback_journal(journal)
   check("the rollback rewinds the run-scoped store",
     Once.peek("k_run", 1) == true)
   check("the rollback rewinds the session store too",
     Once.peek("k_sess", "session") == true,
     "session booking survived the rollback -- a once-per-session line would be charged, never sent")
 
-  _G.G = { NEURO = { once_serials = {}, session_once_serials = {} } }
+  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), NEURO = { once_serials = {}, session_once_serials = {} } }
   Once.once_until("k_old", "session")
-  local snap2 = FS.snapshot_once_serials()
+  local journal2 = Once.begin_journal()
   Once.once_until("k_new", "session")
-  FS.restore_once_serials(snap2)
+  Once.rollback_journal(journal2)
   check("an already-delivered session booking survives the rollback",
     Once.peek("k_old", "session") == false)
   check("only the discarded build's session booking is rewound",
@@ -425,7 +417,8 @@ do
   local function SLY() return joker("j_sly", "Sly Joker", { t_chips = 50 }, "+50 Chips if played hand contains a Pair") end
 
   _G.G = {
-    STATE = 5, STATES = { SHOP = 5, SELECTING_HAND = 2 }, STATE_COMPLETE = true,
+    P_CENTERS = require("tests.engine_centers").centers(),
+    STATE = ES.SHOP, STATES = ES, STATE_COMPLETE = true,
     TIMERS = { REAL = 100 }, FUNCS = {},
     NEURO = { enabled = true, run_generation = 1, jokers_sold_run = 0,
       once_serials = {}, session_once_serials = {} },
@@ -438,13 +431,11 @@ do
   }
 
   local function frame()
-    ContextCompact.invalidate_cache()
     FactHints.reset_pending()
     local rules = ContextCompact.build("SHOP", nil,
-      { split = "rule", no_cache = true }) or ""
-    ContextCompact.invalidate_cache()
+      { split = "rule" }) or ""
     local state = ContextCompact.build("SHOP", { "buy_from_shop" },
-      { split = "state", no_cache = true, force_phase = true }) or ""
+      { split = "state" }) or ""
     local retained = H.drain_hints()
     return state:find("Joker order:", 1, true) ~= nil,
       (rules .. retained):find("Joker order:", 1, true) ~= nil
@@ -492,7 +483,7 @@ do
     store_size(G.NEURO.once_serials) == run_before,
     store_size(G.NEURO.once_serials) .. " vs " .. run_before)
 
-  require("core.lifecycle_registry").reset("run", G.NEURO, {})
+  require("core.neuro_lifecycle").registry.reset("run", G.NEURO, {})
   G.NEURO.run_generation = 2
   check("a run reset empties the run store",
     store_size(G.NEURO.once_serials) == 0, tostring(store_size(G.NEURO.once_serials)))
@@ -509,7 +500,6 @@ do
   local Orchestrator = require("core.orchestrator")
   local ContextCompact = require("context.context_compact")
   require("core.context_delivery").reset_transport()
-  local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, GAME_OVER = 4, MENU = 11 }
   local wire = {}
 
   local function shop_joker(key, name, edition)
@@ -525,38 +515,10 @@ do
         loc_txt = { name = name, description = "voucher" } } } }
   end
 
-  local N = { enabled = true, persona = "neuro", llm_paused = false, reserved_dollars = 0,
-    once_serials = {}, session_once_serials = {}, run_generation = 1 }
-  function N:send_context(msg) wire[#wire + 1] = tostring(msg); return true end
-  function N:register_actions() end
-  function N:unregister_actions() end
-  function N:send_action_result() end
-  function N:update() end
-  function N:is_transport_saturated() return false end
-
-  _G.G = {
-    STATE = STATES.SHOP, STATES = STATES, STATE_COMPLETE = true,
-    TIMERS = { REAL = 1000 }, SETTINGS = { GAMESPEED = 1 }, CONTROLLER = { locks = {} },
-    GAME = {
-      dollars = 20, round = 3, chips = 0, STOP_USE = 0,
-      current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
-      round_resets = { ante = 2 }, blind = { name = "Small Blind" },
-      used_vouchers = {}, modifiers = {}, pack_choices = 2,
-      hands = { Pair = { visible = true, level = 1, chips = 10, mult = 2, s_chips = 10, s_mult = 2, l_chips = 0, l_mult = 0, played = 0 } },
-      consumeable_usage_total = { tarot = 0 }, probabilities = { normal = 1 },
-    },
-    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-    jokers = { cards = {}, config = { card_limit = 5 } },
-    consumeables = { cards = {}, config = { card_limit = 2 } },
-    deck = { cards = {} },
-    shop_jokers = { cards = { shop_joker("j_a", "Baron", { polychrome = true }) },
-      config = { card_limit = 2 } },
-    shop_vouchers = { cards = { shop_voucher("v_hone", "Hone") }, config = { card_limit = 1 } },
-    shop_booster = { cards = {}, config = { card_limit = 2 } },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end },
-    blind_select = {}, NEURO = N,
-  }
-  ContextCompact.invalidate_cache()
+  local N = shop_stand_in(wire, 1000, function(g)
+    g.shop_jokers.cards[1] = shop_joker("j_a", "Baron", { polychrome = true })
+    g.shop_vouchers.cards[1] = shop_voucher("v_hone", "Hone")
+  end, true)
 
   local function tick(seconds)
     for _ = 1, math.floor(seconds / 0.1) do
@@ -579,13 +541,13 @@ do
   check("the primer reached the model even though every force was discarded",
     on_wire("A voucher is a permanent"), "voucher basics never left the retention channel")
   check("the glossary DID go out in that same frame (the frame really ran)",
-    on_wire("How to decide:"), "no glossary -- the fixture never armed a force")
+    on_wire("## How to decide\n"), "no glossary -- the fixture never armed a force")
   check("and exactly once across all those frames, with the gate booked after delivery",
     count_on_wire("A voucher is a permanent") == 1
       and Once.peek("shint:voucher_basics_run", "session") == false,
     count_on_wire("A voucher is a permanent") .. " sends")
   check("the shop-edition fact never reaches the retained channel",
-    count_on_wire("Shop editions:") == 0, count_on_wire("Shop editions:") .. " sends")
+    count_on_wire("A shop joker's edition is attached") == 0, count_on_wire("A shop joker's edition is attached") .. " sends")
   check("R4b: it rides the shop force instead, on every build",
     (function()
       local FS = require("force.force_shop")
@@ -596,14 +558,16 @@ do
       local a = ((FS.build() or {}).query or "")
       local b = ((FS.build() or {}).query or "")
       require("core.actions").is_action_valid = real
-      return a:find("Baron (Polychrome)", 1, true) ~= nil
-        and b:find("Baron (Polychrome)", 1, true) ~= nil, a
+      local row = require("context.ctx_shop").shop_section() or ""
+      return a:find("A shop joker's edition is attached", 1, true) ~= nil
+        and b:find("A shop joker's edition is attached", 1, true) ~= nil
+        and row:find("[Polychrome edition]", 1, true) ~= nil, a
     end)())
   check("the ALREADY DELIVERED glossary is committed, out of the journal's reach",
     not pcall(require("core.context_delivery").rule, "gloss:readable_common", "DIFFERENT TEXT"),
     "the glossary was never committed, so a rollback could re-send it")
 
-  local glossary_sends = count_on_wire("How to decide:")
+  local glossary_sends = count_on_wire("## How to decide\n")
   N.force_actions = function(_, ctx, query)
     wire[#wire + 1] = "FORCE:" .. tostring(ctx or "") .. " " .. tostring(query or "")
   end
@@ -612,17 +576,24 @@ do
     count_on_wire("A voucher is a permanent") == 1,
     count_on_wire("A voucher is a permanent") .. " sends")
   check("nor the shop-edition text",
-    count_on_wire("Shop editions:") == 1, count_on_wire("Shop editions:") .. " sends")
+    count_on_wire("A shop joker's edition is attached") == 1, count_on_wire("A shop joker's edition is attached") .. " sends")
   check("the glossary was not re-sent by the rollback",
-    count_on_wire("How to decide:") == glossary_sends,
-    count_on_wire("How to decide:") .. " sends, expected " .. glossary_sends)
+    count_on_wire("## How to decide\n") == glossary_sends,
+    count_on_wire("## How to decide\n") .. " sends, expected " .. glossary_sends)
 
-  Once.begin_journal()
-  check("a first build can reserve a gate", Once.once_until("orphaned-build", "run") == true)
-  Once.begin_journal()
-  check("beginning the next build rolls back an exception-orphaned journal",
-    Once.once_until("orphaned-build", "run") == true)
-  Once.rollback_journal()
+  local started = Once.begin_journal()
+  local journal_key = "nested-journal-probe"
+  check("a first build can reserve a gate",
+    started ~= nil and started ~= false and Once.once_until(journal_key, "run") == true)
+  local nested_started = Once.begin_journal()
+  check("beginning a new journal unwinds the stale one and re-arms",
+    nested_started ~= started and Once.once_until(journal_key, "run") == true)
+  check("a stale token can no longer resolve the live journal",
+    Once.commit_journal(started) == false)
+  Once.rollback_journal(nested_started)
+  check("rolling back the active journal releases its reservation",
+    Once.once_until(journal_key, "run") == true)
+  G.NEURO.once_serials[journal_key] = nil
 
   local function wire_line(sub)
     for _, m in ipairs(wire) do if m:find(sub, 1, true) then return m end end
@@ -631,9 +602,11 @@ do
   local SCORE_ORDER = "before any joker's flat +Mult"
   check("SO R1: the invariant frame carries the full score order",
     on_wire(SCORE_ORDER), "the score-order rule never reached the model")
+  local rules_line = wire_line(SCORE_ORDER) or ""
   check("SO R2: it rides the RULES frame, not a force query",
-    (wire_line(SCORE_ORDER) or ""):find("RULES. Score = Chips x Mult", 1, true) ~= nil,
-    tostring(wire_line(SCORE_ORDER)))
+    rules_line:find("RULES.", 1, true) == 1
+      and rules_line:find("## Scoring\nScore = Chips x Mult", 1, true) ~= nil,
+    rules_line)
   check("SO R3: and is sent once across every frame, not per decision",
     count_on_wire(SCORE_ORDER) == 1, count_on_wire(SCORE_ORDER) .. " sends")
 end
@@ -643,8 +616,6 @@ do
   local ContextReadable = require("context.context_readable")
   local CtxHand = require("context.ctx_hand")
   require("core.context_delivery").reset_transport()
-  local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, TAROT_PACK = 6,
-    STANDARD_PACK = 7, GAME_OVER = 4, MENU = 11 }
   local wire = {}
 
   local function plain_card(i)
@@ -655,37 +626,10 @@ do
   local deck = {}
   for i = 1, 8 do deck[i] = plain_card(i) end
 
-  local N = { enabled = true, persona = "neuro", llm_paused = false, reserved_dollars = 0,
-    once_serials = {}, session_once_serials = {}, run_generation = 1 }
-  function N:send_context(msg) wire[#wire + 1] = tostring(msg); return true end
-  function N:register_actions() end
-  function N:unregister_actions() end
-  function N:send_action_result() end
-  function N:update() end
-  function N:is_transport_saturated() return false end
-
-  _G.G = {
-    STATE = STATES.SHOP, STATES = STATES, STATE_COMPLETE = true,
-    TIMERS = { REAL = 5000 }, SETTINGS = { GAMESPEED = 1 }, CONTROLLER = { locks = {} },
-    GAME = {
-      dollars = 20, round = 3, chips = 0, STOP_USE = 0,
-      current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
-      round_resets = { ante = 2 }, blind = { name = "Small Blind" },
-      used_vouchers = {}, modifiers = {}, pack_choices = 2,
-      hands = { Pair = { visible = true, level = 1, chips = 10, mult = 2, s_chips = 10, s_mult = 2, l_chips = 0, l_mult = 0, played = 0 } },
-      consumeable_usage_total = { tarot = 0 }, probabilities = { normal = 1 },
-    },
-    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-    jokers = { cards = {}, config = { card_limit = 5 } },
-    consumeables = { cards = {}, config = { card_limit = 2 } },
-    deck = { cards = deck }, playing_cards = deck,
-    shop_jokers = { cards = {}, config = { card_limit = 2 } },
-    shop_vouchers = { cards = {}, config = { card_limit = 1 } },
-    shop_booster = { cards = {}, config = { card_limit = 2 } },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end },
-    blind_select = {}, NEURO = N,
-  }
-  ContextCompact.invalidate_cache()
+  local N = shop_stand_in(wire, 5000, function(g)
+    g.deck.cards = deck
+    g.playing_cards = deck
+  end)
 
   local function count_on_wire(sub)
     local n = 0
@@ -695,13 +639,11 @@ do
   local MARK = "Card modifiers ("
 
   local function payload(state_name, actions)
-    ContextCompact.invalidate_cache()
     return ContextReadable.build(state_name, actions)
-      or ContextCompact.build(state_name, actions, { split = "state", no_cache = true }) or ""
+      or ContextCompact.build(state_name, actions, { split = "state" }) or ""
   end
   local function rules_split(state_name)
-    ContextCompact.invalidate_cache()
-    return ContextCompact.build(state_name, nil, { split = "rule", no_cache = true }) or ""
+    return ContextCompact.build(state_name, nil, { split = "rule" }) or ""
   end
 
   check("CM R1: an unmodified starting deck states an explicit 'none'",
@@ -727,7 +669,7 @@ do
   check("CM R5: and still none of it reached the retained channel",
     count_on_wire(MARK) == 0, count_on_wire(MARK) .. " sends")
 
-  for _, st in ipairs({ "SELECTING_HAND", "SHOP", "BLIND_SELECT", "TAROT_PACK", "STANDARD_PACK" }) do
+  for _, st in ipairs({ "SELECTING_HAND", "SHOP", "BLIND_SELECT", "SMODS_BOOSTER_OPENED" }) do
     local state_text = payload(st, nil)
     check("CM R6 " .. st .. ": the decision payload carries the tally",
       tostring(state_text):find(MARK, 1, true) ~= nil, tostring(state_text))
@@ -740,15 +682,13 @@ do
     G.jokers.cards[1] = { sort_id = 900, ability = { set = "Joker", name = "Joker", mult = 4 },
       sell_cost = 2, config = { center = { key = "j_joker", set = "Joker" } } }
     local IN_RUN_ELIGIBLE = { "SELECTING_HAND", "SHOP", "BLIND_SELECT",
-      "TAROT_PACK", "PLANET_PACK", "SPECTRAL_PACK", "STANDARD_PACK", "BUFFOON_PACK",
       "SMODS_BOOSTER_OPENED" }
     local STABLE_ELIGIBLE = { "MENU", "RUN_SETUP", "SPLASH", "GAME_OVER" }
     for _, st in ipairs(IN_RUN_ELIGIBLE) do STABLE_ELIGIBLE[#STABLE_ELIGIBLE + 1] = st end
     local shape, mismatched = nil, {}
     for _, st in ipairs(STABLE_ELIGIBLE) do
-      ContextCompact.invalidate_cache()
       local list = ContextCompact.build(st, nil,
-        { split = "rule", no_cache = true, return_list = true }) or {}
+        { split = "rule", return_list = true }) or {}
       local joined = table.concat(list, "\n")
       if shape == nil then
         shape = joined
@@ -772,8 +712,7 @@ do
 
     local missing = {}
     for _, st in ipairs(IN_RUN_ELIGIBLE) do
-      ContextCompact.invalidate_cache()
-      local state_text = ContextCompact.build(st, nil, { split = "state", no_cache = true }) or ""
+      local state_text = ContextCompact.build(st, nil, { split = "state" }) or ""
       for _, prefix in ipairs({ "RUN|", "Vouchers you own:", "Card modifiers (" }) do
         if not state_text:find(prefix, 1, true) then
           missing[#missing + 1] = st .. " lacks '" .. prefix .. "'"

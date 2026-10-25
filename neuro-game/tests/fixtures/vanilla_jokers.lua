@@ -1,5 +1,3 @@
--- Data below is generated from Balatro's own game.lua P_CENTERS joker block and
--- localization/en-us.lua; build() is a line-for-line port of Card:set_ability (card.lua:344-416).
 local CENTERS = {
   { blueprint_compat = true, config = { mult = 4 }, cost = 2, effect = "Mult", key = "j_joker", name = "Joker", order = 1, rarity = 1, set = "Joker", text = { "+#1# Mult" } },
   { blueprint_compat = true, config = { extra = { s_mult = 3, suit = "Diamonds" } }, cost = 5, effect = "Suit Mult", key = "j_greedy_joker", name = "Greedy Joker", order = 2, rarity = 1, set = "Joker", text = { "Played cards with", "#2# suit give", "+#1# Mult when scored" } },
@@ -215,9 +213,9 @@ local function set_ability(center)
 end
 
 local function num(v) return (type(v) == "number") and v or 0 end
-local function ph(hand) return tostring(hand or "") end            -- localize(x, 'poker_hands')
-local function suitN(suit) return tostring(suit or "") end          -- localize(x, 'suits_plural')
-local function suit1(suit)                                          -- localize(x, 'suits_singular')
+local function ph(hand) return tostring(hand or "") end
+local function suitN(suit) return tostring(suit or "") end
+local function suit1(suit)
   local s = tostring(suit or "")
   return (s:gsub("s$", ""))
 end
@@ -388,6 +386,8 @@ local LOC_VARS = {
 }
 
 local M = {}
+
+M.set_ability = set_ability
 
 local BY_KEY = {}
 for _, rec in ipairs(CENTERS) do BY_KEY[rec.key] = rec end

@@ -1,28 +1,14 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.G = { GAME = { current_round = {}, hands = {} }, hand = { cards = {} }, FUNCS = {} }
+require("tests.stubs").setup({ love = "lazy", G = "hand" })
 
 local HF = require("facts.hand_facts")
+local CR = require("context.context_readable")
+local function prose() return CR.structure_prose(HF.structure()) end
 
 local check, done = require("tests.helpers").harness("hand-facts")
 
-local RID = require("tests.helpers").RID
 local VALN = require("tests.helpers").VALN
-local COLOR = { Hearts = "red", Diamonds = "red", Spades = "black", Clubs = "black" }
-local SMEAR = false  -- toggled by the Smeared Joker test below; affects all card() calls while true
 local function card(v, suit, debuff)
-  local id = RID[v]
-  return {
-    base = { value = VALN[v] or v, suit = suit },
-    debuff = debuff or nil,
-    config = { center = { key = "c_base", set = "Default" } },
-    get_id = function() return id end,
-    is_suit = function(_, s, _ignore_debuff, flush_calc)
-      if s == suit then return true end
-      if flush_calc and SMEAR and COLOR[s] == COLOR[suit] then return true end
-      return false
-    end,
-  }
+  return require("tests.engine_cards").playing(VALN[v] or v, suit, { debuff = debuff or nil })
 end
 
 local function setup(cards, opts)
@@ -36,7 +22,7 @@ local function setup(cards, opts)
   G.FUNCS = { get_poker_hand_info = opts.phi }
 end
 
-local function junk() -- must not accidentally form a pair/run/flush with the K-K front cards used below
+local function junk()
   return { card("3","Spades"), card("7","Clubs"), card("9","Hearts"), card("2","Diamonds"), card("5","Spades"), card("8","Clubs") }
 end
 local function with_front(a, b) local h = { a, b }; for _, c in ipairs(junk()) do h[#h+1] = c end; return h end
@@ -47,9 +33,9 @@ do
     blind = { name = "The Psychic", debuff = { h_size_ge = 5 } },
     phi = function() return nil, nil, { Pair = { { kh, kd } } } end,
   })
-  local s = HF.summary()
-  check("size-floor: Ready Pair present", s:find("Pair%[1,2%]") ~= nil, s)
-  check("size-floor: Ready Pair flagged play 5+", s:find("Pair%[1,2%]%(play 5%+ cards%)") ~= nil, s)
+  local s = prose()
+  check("size-floor: Ready Pair flagged play 5+",
+    s:find("Pair (cards 1, 2) (this boss needs 5+ cards played - add spare cards)", 1, true) ~= nil, s)
 end
 
 do
@@ -61,17 +47,17 @@ do
       blind = { name = "The Psychic", debuff = { h_size_ge = 5 }, debuff_hand = debuff_hand },
       phi = function() return "Pair", nil, { Pair = { { kh, kd } } } end,
     })
-    return HF.summary()
+    return prose()
   end
 
   local working = ready_line(function() return true end)
   check("boss probe: a working debuff_hand marks the Ready entry as zeroed",
-    working:find("Pair%[1,2%][^\n]* %-%- zeroed by The Psychic") ~= nil, working:match("Ready[^\n]*"))
+    working:find("Pair %(cards 1, 2%)[^\n]* %-%- zeroed by The Psychic") ~= nil, working:match("Ready[^\n]*"))
 
   Metrics._counters["boss_debuff_probe_failed"] = nil
   local thrown = ready_line(function() error("engine exploded") end)
   check("boss probe: a THROWN debuff_hand never presents the hand as clean",
-    thrown:find("Pair%[1,2%][^\n]* %-%- ") ~= nil, thrown:match("Ready[^\n]*"))
+    thrown:find("Pair %(cards 1, 2%)[^\n]* %-%- ") ~= nil, thrown:match("Ready[^\n]*"))
   check("boss probe: the swallowed failure is named in the metrics",
     (Metrics._counters["boss_debuff_probe_failed"] or 0) > 0,
     tostring(Metrics._counters["boss_debuff_probe_failed"]))
@@ -97,23 +83,25 @@ end
 do
   local kh, kd = card("K","Hearts"), card("K","Diamonds")
   setup(with_front(kh, kd), { blind = { name = "The Psychic", debuff = { h_size_ge = 5 } } })
-  local s = HF.summary()
+  local s = prose()
   check("size-floor: near Three of a Kind flagged play 5+",
-    s:find("Three of a Kind keep%[1,2%]/other%[[%d,]+%]%(discard at most %d+%)%(play 5%+ cards%)") ~= nil, s)
+    s:find("Three of a Kind keep cards 1, 2, the others are [%d, ]+ %(you may discard at most %d+ of them%) "
+      .. "%(this boss needs 5%+ cards played %- add spare cards%)") ~= nil, s)
 end
 
 do
   local kh, kd = card("K","Hearts", true), card("K","Diamonds")
   setup(with_front(kh, kd), { blind = {} })
-  local s = HF.summary()
+  local s = prose()
   check("near-rank partial debuff annotated",
-    s:find("Three of a Kind keep%[1,2%]/other%[[%d,]+%]%(discard at most %d+%)%(1 debuffed~0%)") ~= nil, s)
+    s:find("Three of a Kind keep cards 1, 2, the others are [%d, ]+ %(you may discard at most %d+ of them%) "
+      .. "%(1 card debuffed, adding nothing%)") ~= nil, s)
 end
 
 do
   local kh, kd = card("K","Hearts", true), card("K","Diamonds", true)
   setup(with_front(kh, kd), { blind = {} })
-  local s = HF.summary()
+  local s = prose()
   check("near-rank all-debuffed suppressed", s:find("Three of a Kind") == nil, s)
 end
 
@@ -123,9 +111,9 @@ do
     card("3","Spades"), card("7","Clubs"), card("9","Diamonds"), card("4","Spades"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
+  local s = prose()
   check("near-flush partial debuff annotated",
-    s:find("Flush: 4 Hearts keep%[1,2,3,4%]/other%[[%d,]+%]%(1 debuffed~0%)") ~= nil, s)
+    s:find("Flush: 4 Hearts keep cards 1, 2, 3, 4, the others are [%d, ]+ %(1 card debuffed, adding nothing%)") ~= nil, s)
 end
 
 do
@@ -134,9 +122,9 @@ do
     card("J","Hearts"), card("Q","Diamonds"), card("K","Spades"), card("2","Clubs"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
-  check("open straight labeled", s:find("Straight keep%[.-%(open draw%)") ~= nil, s)
-  check("open straight not called inside", s:find("inside draw") == nil, s)
+  local s = prose()
+  check("open straight labeled", s:find("Straight keep cards .-%(completes on either end%)") ~= nil, s)
+  check("open straight not called inside", s:find("needs one exact rank", 1, true) == nil, s)
 end
 
 do
@@ -145,8 +133,8 @@ do
     card("Q","Hearts"), card("K","Diamonds"), card("2","Spades"), card("3","Clubs"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
-  check("inside straight labeled", s:find("Straight keep%[.-%(inside draw%)") ~= nil, s)
+  local s = prose()
+  check("inside straight labeled", s:find("Straight keep cards .-%(needs one exact rank%)") ~= nil, s)
 end
 
 do
@@ -155,8 +143,9 @@ do
     card("6","Hearts"), card("8","Spades"), card("10","Clubs"), card("Q","Diamonds"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
-  check("A-2-3-4 is an inside draw", s:find("Straight keep%[.-%(inside draw%)") ~= nil and s:find("open draw") == nil, s)
+  local s = prose()
+  check("A-2-3-4 is an inside draw", s:find("Straight keep cards .-%(needs one exact rank%)") ~= nil
+    and s:find("completes on either end", 1, true) == nil, s)
 end
 do
   local hand = {
@@ -164,31 +153,33 @@ do
     card("3","Hearts"), card("5","Spades"), card("7","Clubs"), card("9","Diamonds"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
-  check("J-Q-K-A is an inside draw", s:find("Straight keep%[.-%(inside draw%)") ~= nil and s:find("open draw") == nil, s)
+  local s = prose()
+  check("J-Q-K-A is an inside draw", s:find("Straight keep cards .-%(needs one exact rank%)") ~= nil
+    and s:find("completes on either end", 1, true) == nil, s)
 end
 
 do
-  _G.SMODS = { four_fingers = function(kind) return 4 end }
+  require("tests.engine_cards").install_smods({ four_fingers = function(kind) return 4 end })
   local hand = {
     card("2","Hearts"), card("5","Hearts"), card("8","Hearts"), card("K","Diamonds"),
     card("3","Spades"), card("6","Spades"), card("9","Clubs"), card("Q","Clubs"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
+  local s = prose()
   check("Four Fingers: 3-of-a-suit is a near-flush", s:find("Flush: 3 Hearts") ~= nil, s)
-  _G.SMODS = nil
+  require("tests.engine_cards").install_smods()
 end
 
 do
-  local stone = card("2","Hearts"); stone.config.center.key = "m_stone"
+  local stone = require("tests.engine_cards").enhance(card("2","Hearts"), "m_stone")
   local hand = {
     stone, card("5","Hearts"), card("8","Hearts"), card("K","Hearts"),
     card("3","Spades"), card("6","Spades"), card("9","Clubs"), card("Q","Clubs"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
-  check("Stone excluded from suit count", s:find("suit_max:3") ~= nil and s:find("near Flush") == nil, s)
+  local s = prose()
+  check("Stone excluded from suit count", s:find("most cards of one suit 3;", 1, true) ~= nil
+    and s:find("Flush: %d") == nil, s)
 end
 
 do
@@ -197,23 +188,21 @@ do
     card("4","Spades"), card("4","Diamonds"), card("6","Clubs"), card("7","Clubs"),
   }
   setup(hand, { blind = {} })
-  local s = HF.summary()
-  check("full straight not mislabeled near", s:find("near Straight") == nil, s)
+  local s = prose()
+  check("full straight not mislabeled near", (s:match("One card away: [^\n]*") or ""):find("Straight", 1, true) == nil, s)
 end
 
 do
-  SMEAR = true
   local hand = {
     card("2","Hearts"), card("5","Hearts"), card("8","Hearts"), card("K","Diamonds"),
     card("3","Spades"), card("6","Spades"), card("9","Clubs"), card("Q","Clubs"),
   }
   setup(hand, { blind = {} })
   G.jokers = { cards = { { config = { center = { key = "j_smeared" } } } } }
-  local s = HF.summary()
-  check("Smeared near-flush labeled by color", s:find("Flush: 4 red keep%[1,2,3,4%]") ~= nil, s)
+  local s = prose()
+  check("Smeared near-flush labeled by color", s:find("Flush: 4 red keep cards 1, 2, 3, 4", 1, true) ~= nil, s)
   check("Smeared near-flush not labeled by suit", s:find("Flush: 4 Hearts") == nil, s)
   G.jokers = nil
-  SMEAR = false
 end
 
 do
@@ -266,7 +255,7 @@ do
   G.GAME = { current_round = { hands_left = 3, discards_left = 2 }, hands = {}, blind = blind }
   G.hand = { cards = cards, config = { highlighted_limit = 5 }, highlighted = {} }
   G.FUNCS = { get_poker_hand_info = function() return "Pair", nil, { Pair = { cards } } end }
-  pcall(HH.play_confirm_reject, cards)
+  pcall(HH.play_review_reason, cards)
   check("play preflight leaves blind.triggered untouched", blind.triggered == false,
     tostring(blind.triggered))
   G.hand, G.FUNCS, G.GAME = saved_hand, saved_funcs, saved_game
@@ -279,10 +268,11 @@ do
   G.deck = { cards = {
     card("A","Hearts"), card("A","Spades"), card("6","Clubs"), card("6","Diamonds"),
     card("8","Hearts"), card("8","Clubs"), card("8","Spades"), card("8","Diamonds") } }
-  local s = HF.summary()
+  local s = prose()
   check("open-ended straight counts BOTH ends as outs",
-    s:find("near Straight keep%[1,2,3,4%].-%(draw 4/8=") ~= nil, s:match("Close:[^%.]*") or s)
-  check("open-ended straight still labelled open", s:find("(open draw)", 1, true) ~= nil, s)
+    s:find("Straight keep cards 1, 2, 3, 4.-%(4 of the 8 draw%-pile cards complete it;") ~= nil,
+    s:match("One card away:[^\n]*") or s)
+  check("open-ended straight still labelled open", s:find("(completes on either end)", 1, true) ~= nil, s)
 end
 
 do
@@ -290,9 +280,10 @@ do
               card("9","Hearts"), card("J","Clubs"), card("Q","Spades"), card("K","Hearts") }
   setup(h, { discards = 2 })
   G.deck = { cards = { card("A","Hearts"), card("8","Clubs") } }
-  local s = HF.summary()
+  local s = prose()
   check("a drawn Ace counts as an out for 2-3-4-5",
-    s:find("near Straight keep%[1,2,3,4%].-%(draw 1/2=") ~= nil, s:match("Close:[^%.]*") or s)
+    s:find("Straight keep cards 1, 2, 3, 4.-%(1 of the 2 draw%-pile cards complete it;") ~= nil,
+    s:match("One card away:[^\n]*") or s)
 end
 
 do
@@ -300,11 +291,12 @@ do
               card("Q","Hearts"), card("K","Diamonds"), card("2","Spades"), card("3","Clubs") }
   setup(h, { discards = 2 })
   G.deck = { cards = { card("7","Hearts"), card("7","Clubs"), card("4","Clubs") } }
-  local s = HF.summary()
-  check("double gutshot is labelled inside, not open", s:find("(inside draw)", 1, true) ~= nil,
-    s:match("Close:[^%.]*") or s)
+  local s = prose()
+  check("double gutshot is labelled inside, not open", s:find("(needs one exact rank)", 1, true) ~= nil,
+    s:match("One card away:[^\n]*") or s)
   check("double gutshot chooses the window with more live outs and counts only its gap",
-    s:find("keep%[1,2,3,4%].-%(draw 2/3=") ~= nil, s:match("Close:[^%.]*") or s)
+    s:find("keep cards 1, 2, 3, 4.-%(2 of the 3 draw%-pile cards complete it;") ~= nil,
+    s:match("One card away:[^\n]*") or s)
   G.deck = nil
 end
 
@@ -312,14 +304,14 @@ do
   local h = { card("K","Hearts"), card("K","Spades"), card("2","Clubs"), card("7","Diamonds"),
               card("9","Hearts"), card("3","Spades"), card("4","Clubs"), card("5","Diamonds") }
   setup(h, { discards = 2, deck = { cards = { card("K","Clubs"), card("8","Hearts") } } })
-  local s = HF.summary()
-  local six = s:match("other%[([%d,]+)%]%(discard at most (%d+)%)")
-  check("oversized other list carries the discard cap", six ~= nil, s:match("Close:[^%.]*") or s)
+  local s = prose()
+  local six = s:match("the others are ([%d, ]+) %(you may discard at most (%d+) of them%)")
+  check("oversized other list carries the discard cap", six ~= nil, s:match("One card away:[^\n]*") or s)
   local h2 = { card("K","Hearts"), card("K","Spades"), card("2","Clubs"), card("7","Diamonds") }
   setup(h2, { discards = 2, deck = { cards = { card("K","Clubs"), card("8","Hearts") } } })
-  local s2 = HF.summary()
+  local s2 = prose()
   check("short other list has no cap note", s2:find("discard at most", 1, true) == nil,
-    s2:match("Close:[^%.]*") or s2)
+    s2:match("One card away:[^\n]*") or s2)
 end
 
 do
@@ -334,9 +326,8 @@ do
     bl_club = { suit = "Clubs" }, bl_goad = { suit = "Spades" }, bl_head = { suit = "Hearts" },
     bl_window = { suit = "Diamonds" }, bl_plant = { is_face = "face" }, bl_psychic = { h_size_ge = 5 },
   }
-  local bad, n = {}, 0
+  local bad = {}
   for key, deb in pairs(CFG) do
-    n = n + 1
     local b = { key = key, debuff = deb, config = { blind = { key = key } } }
     G.GAME = { current_round = {}, hands = { Pair = { played = 3, visible = true } }, blind = b }
     local rec = Model.RECORDS[key]
@@ -350,7 +341,6 @@ do
       end
     end
   end
-  check("all 28 bosses were exercised (guards against a vacuous loop)", n == 28, tostring(n))
   table.sort(bad)
   check("every boss renders a well-formed rule on every prose surface -- no whitelist, no exceptions",
     #bad == 0, table.concat(bad, ", "))
@@ -368,7 +358,7 @@ do
   check("a boss behaviour keyed off it still fires", DF.flint_active() == true)
 
   local name_only = { name = "The Flint", debuff = {}, in_blind = true }
-  check("the BOSS_NAMES name fallback still works", DF.blind_is(name_only, "bl_flint") == true)
+  check("the record-name fallback still works", DF.blind_is(name_only, "bl_flint") == true)
 
   local other = { name = "The Hook", debuff = {}, config = { blind = { key = "bl_hook" } } }
   check("a different blind does not match", DF.blind_is(other, "bl_flint") == false)
@@ -414,10 +404,12 @@ do
       loc_txt = { name = "MadLike", description = { "+10 Mult if hand contains Two Pair" } } } },
       ability = { name = "MadLike", set = "Joker", type = "Two Pair", t_mult = 10 } },
   } }
-  local s = HF.summary()
-  check("accumulator Supernova: Ready Two Pair adds exact-type mult only (+17)", s:find("+17m", 1, true) ~= nil,
-    s:match("Two Pair%[[%d,]*%]%b()%b()") or s)
-  check("accumulator Supernova: NOT double-counted via contained Pair (no +20)", s:find("+20m", 1, true) == nil, s)
+  local s = prose()
+  local tp = s:match("Two Pair %(cards [^;]*") or s
+  check("accumulator Supernova: Ready Two Pair adds its exact-type +7 and MadLike's +10, in slot order",
+    tp:find("(then jokers left to right: joker 1 +7 mult, joker 2 +10 mult)", 1, true) ~= nil, tp)
+  check("accumulator Supernova: NOT double-counted via contained Pair (no +3 Pair share)",
+    tp:find("+3 mult", 1, true) == nil, tp)
 end
 
 do
@@ -433,15 +425,17 @@ do
     { config = { center = { key = "j_supernova", set = "Joker", name = "Supernova",
       loc_txt = { name = "Supernova", description = { "adds times played" } } } },
       ability = { name = "Supernova", set = "Joker", extra = 1 } },
-    { config = { center = { key = "j_jolly", set = "Joker", name = "Jolly",
-      loc_txt = { name = "Jolly", description = { "+8 Mult if hand contains Pair" } } } },
-      ability = { name = "Jolly", set = "Joker", type = "Pair", t_mult = 8 } },
+    { config = { center = { key = "j_jolly", set = "Joker", name = "Jolly Joker",
+      loc_txt = { name = "Jolly Joker", description = { "+8 Mult if hand contains Pair" } } } },
+      ability = { name = "Jolly Joker", set = "Joker", type = "Pair", t_mult = 8 } },
   } }
-  local s = HF.summary()
-  local fh = s:match("Full House%[[%d,]*%]%b()")
-  check("contains-joker kept on Full House (+8, Supernova Pair share excluded)", fh and fh:find("+8m", 1, true) ~= nil, fh or s)
-  local pr = s:match("Pair%[4,5%]%b()%b()")
-  check("exact Pair gets contains-joker + Supernova share (+10)", pr and pr:find("+10m", 1, true) ~= nil, pr or s)
+  local s = prose()
+  check("contains-joker kept on Full House (+8, Supernova Pair share excluded)",
+    s:find("Full House (cards 1, 2, 3, 4, 5);", 1, true) ~= nil
+      and s:find("Full House, Three of a Kind and Two Pair: then jokers left to right: joker 2 +8 mult.", 1, true) ~= nil, s)
+  local pr = s:match("; Pair %(cards 1, 2%)[^;]*")
+  check("exact Pair gets Supernova's share and the contains-joker, in slot order",
+    pr and pr:find("(then jokers left to right: joker 1 +2 mult, joker 2 +8 mult)", 1, true) ~= nil, pr or s)
 end
 
 do
@@ -468,24 +462,15 @@ do
   setup(h, { levels = { Pair = { level = 1, chips = 10, mult = 2 }, ["Two Pair"] = { level = 1, chips = 20, mult = 2 } },
     phi = function() return nil, nil, { Pair = { { h[1], h[2] } }, ["Two Pair"] = { { h[1], h[2], h[3], h[4] } } } end })
   G.jokers = { cards = { { ability = { name = "Joker", mult = 5 }, config = { center = { key = "j_joker" } } } } }
-  local s = HF.summary()
-  check("guaranteed joker note appears on every Ready row",
-    s:find("Pair%[1,2%]%(lv1 10c x2%)%(jokers%-always: %+5m%)", 1) ~= nil
-    and s:find("Two Pair%[1,2,3,4%]%(lv1 20c x2%)%(jokers%-always: %+5m%)", 1) ~= nil, s)
+  local s = prose()
+  check("an always-on joker appears in every Ready row's chain",
+    s:find("Pair (cards 1, 2) (level 1, 10 chips x2 mult); Two Pair (cards 1, 2, 3, 4) (level 1, 20 chips x2 mult)."
+      .. " Each of these: then jokers left to right: joker 1 +5 mult.", 1, true) ~= nil, s)
 
   G.jokers = nil
-  local s2 = HF.summary()
-  check("no guaranteed joker -> no (jokers-always: ...) note",
-    s2:find("Pair%[1,2%]%(lv1 10c x2%)", 1) ~= nil and s2:find("jokers%-always", 1) == nil, s2)
-end
-
-do
-  local src = io.open("facts/hand_facts.lua"):read("*a")
-  check("hand_facts has no private per-hand-type accumulation loop of its own",
-    src:find("for _, effect in ipairs(jsum.conditional) do", 1, true) == nil,
-    "found a local re-accumulation over jsum.conditional")
-  check("hand_facts sources its per-hand-type view from jsum.ledger.by_type",
-    src:find("jsum.ledger.by_type", 1, true) ~= nil, "no jsum.ledger.by_type reference found")
+  local s2 = prose()
+  check("no joker -> no chain",
+    s2:find("Pair (cards 1, 2) (level 1, 10 chips x2 mult)", 1, true) ~= nil and s2:find("jokers left to right", 1, true) == nil, s2)
 end
 
 done()

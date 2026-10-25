@@ -1,12 +1,12 @@
 local Utils = require("util.utils")
 local NeuroAnim = require("render.neuro-anim")
 local gfx = require("render.gfx")
+local RectMesh = require("render.rect_mesh")
+local set_col = gfx.set_col
 
 local Prims = {}
 
 Prims.Motion = NeuroAnim.Motion
-
-Prims.DEFAULT_MOTION = { pulse_hz = 2.7 }
 
 Prims.EVIL = {
   A_HAIR = 0.16,
@@ -33,16 +33,11 @@ function Prims.smoothstep01(f)
   return f * f * (3 - 2 * f)
 end
 
--- Snaps to 1/20 steps so alphas derived from an animating value stay usable as text-cache keys.
 function Prims.quant_alpha(f)
   return math.floor(f * 20 + 0.5) / 20
 end
 
-function Prims.ease_out_cubic01(f)
-  if f < 0 then f = 0 elseif f > 1 then f = 1 end
-  local inv = 1 - f
-  return 1 - inv * inv * inv
-end
+Prims.ease_out_cubic01 = Prims.Motion.ease_out_cubic
 
 function Prims.twinkle01(now, i)
   local t = 0.5 + 0.5 * math.sin(now * (1.1 + (i % 3) * 0.5) + i * 2.399)
@@ -137,11 +132,7 @@ function Prims.draw_cached_tracked_text(batch, key, s, x, y, opts)
   end
   local shadow_alpha = opts.shadow_alpha or 0
   if shadow_alpha > 0 and type(opts.shadow_color) ~= "table" then return false end
-  local lg = love and love.graphics
-  if not lg or type(lg.newText) ~= "function" or type(lg.draw) ~= "function"
-    or type(lg.setColor) ~= "function" then
-    return false
-  end
+  local lg = love.graphics
 
   local cache = batch._text_blocks
   if not cache then cache = {}; batch._text_blocks = cache; batch._text_blocks_n = 0 end
@@ -197,6 +188,8 @@ function Prims.candle01(t)
 end
 
 local WHITE_C = { 1, 1, 1 }
+Prims.WHITE = WHITE_C
+Prims.GLITCH_RED, Prims.GLITCH_CYAN = { 0.95, 0.10, 0.16 }, { 0.12, 0.80, 0.90 }
 
 local function set_color_if_changed(r, g, b, a)
   local get_color = love.graphics.getColor
@@ -243,7 +236,13 @@ local function parse_px(rows)
   return out
 end
 
-local BOW_PX = parse_px({
+local function cat(a, b)
+  local out = { unpack(a) }
+  for i = 1, #b do out[#out + 1] = b[i] end
+  return out
+end
+
+local BOW_HEAD = {
   "XX.........XX",
   "XXXX.....XXXX",
   "XXXX.OOO.XXXX",
@@ -251,22 +250,25 @@ local BOW_PX = parse_px({
   "XXXX.OOO.XXXX",
   "XXXX.....XXXX",
   "XX.........XX",
+}
+local BOW_LEGS = {
   "....XX.XX....",
   "....XX.XX....",
   "...XX...XX...",
   "...XX...XX...",
   "..XX.....XX..",
-})
-local BOW_HEAD_PX = parse_px({
-  "XX.........XX",
-  "XXXX.....XXXX",
-  "XXXX.OOO.XXXX",
-  "XXXXXOWOXXXXX",
-  "XXXX.OOO.XXXX",
-  "XXXX.....XXXX",
-  "XX.........XX",
-})
-local BOW_SKULL_PX = parse_px({
+}
+local HEART = {
+  ".XX.XX.",
+  "XWXXXXX",
+  "XXXXXXX",
+  ".XXXXX.",
+  "..XXX..",
+  "...X...",
+}
+local BOW_PX = parse_px(cat(BOW_HEAD, BOW_LEGS))
+local BOW_HEAD_PX = parse_px(BOW_HEAD)
+local BOW_SKULL_PX = parse_px(cat({
   "XX.........XX",
   "XXXX.WWW.XXXX",
   "XXXXWWWWWXXXX",
@@ -274,20 +276,8 @@ local BOW_SKULL_PX = parse_px({
   "XXXXWWWWWXXXX",
   "XXXX.W.W.XXXX",
   "XX.........XX",
-  "....XX.XX....",
-  "....XX.XX....",
-  "...XX...XX...",
-  "...XX...XX...",
-  "..XX.....XX..",
-})
-local HEART_PX = parse_px({
-  ".XX.XX.",
-  "XWXXXXX",
-  "XXXXXXX",
-  ".XXXXX.",
-  "..XXX..",
-  "...X...",
-})
+}, BOW_LEGS))
+local HEART_PX = parse_px(HEART)
 local SPARK_PX = parse_px({
   "..X..",
   "..X..",
@@ -305,16 +295,7 @@ local DARK_BOW_HEAD_PX = parse_px({
   "XXX.......XXX",
   "X.X.......X.X",
 })
-local EVIL_HEART_PX = parse_px({
-  "O.....O",
-  ".O...O.",
-  ".XX.XX.",
-  "XWXXXXX",
-  "XXXXXXX",
-  ".XXXXX.",
-  "..XXX..",
-  "...X...",
-})
+local EVIL_HEART_PX = parse_px(cat({ "O.....O", ".O...O." }, HEART))
 local HORNS_PX = parse_px({
   "O.......O",
   "OO.....OO",
@@ -430,85 +411,85 @@ local BADGE_GLYPH_PX = {
 
 local PIN_GLYPH_PX = {
   sticker = {
-    eternal = parse_px({          -- padlock: shackle, body, keyhole
+    eternal = parse_px({
       "..XXXX..", ".X....X.", ".X....X.", "XXXXXXXX",
       "XXX..XXX", "XXX..XXX", "XXXXXXXX", ".XXXXXX.",
     }),
-    perishable = parse_px({       -- hourglass: it is a countdown, not a state
+    perishable = parse_px({
       "XXXXXXXX", ".XXXXXX.", "..XXXX..", "...XX...",
       "...XX...", "..XXXX..", ".XXXXXX.", "XXXXXXXX",
     }),
-    rental = parse_px({           -- coin with the money leaving downward
+    rental = parse_px({
       ".XXXX...", "X....X..", "X....X..", ".XXXX...",
       "........", "XXXXXX..", ".XXXX...", "..XX....",
     }),
   },
   edition = {
-    Foil = parse_px({             -- two parallel strokes: a sheen, not a substance
+    Foil = parse_px({
       "....X..X", "...X..X.", "..X..X..", ".X..X...",
       "X..X....", "..X.....", ".X......", "X.......",
     }),
-    Holo = parse_px({             -- one band across the middle
+    Holo = parse_px({
       "........", "...XX...", "........", "XXXXXXXX",
       "XXXXXXXX", "........", "...XX...", "........",
     }),
-    Poly = parse_px({             -- a solid facet for the treatment stripes to run over
+    Poly = parse_px({
       "........", "...XX...", "..XXXX..", ".XXXXXX.",
       ".XXXXXX.", "..XXXX..", "...XX...", "........",
     }),
-    Neg = parse_px({              -- the only glyph drawn in the VARIANT colour, on an ink tile
+    Neg = parse_px({
       "........", ".XXXXXX.", ".XXXXXX.", ".XXXXXX.",
       ".XXXXXX.", ".XXXXXX.", ".XXXXXX.", "........",
     }),
   },
   seal = {
-    Gold = parse_px({             -- struck coin, slotted
+    Gold = parse_px({
       "..XXXX..", ".XXXXXX.", "XXX..XXX", "XXX..XXX",
       "XXX..XXX", "XXX..XXX", ".XXXXXX.", "..XXXX..",
     }),
-    Red = parse_px({              -- double chevron: it scores again
+    Red = parse_px({
       "X...X...", ".X...X..", "..X...X.", "...X...X",
       "..X...X.", ".X...X..", "X...X...", "........",
     }),
-    Blue = parse_px({             -- a planet with its ring
+    Blue = parse_px({
       "........", "...XX...", "..XXXX..", "XXXXXXXX",
       "XXXXXXXX", "..XXXX..", "...XX...", "........",
     }),
-    Purple = parse_px({           -- a star, for the arcana it hands over
+    Purple = parse_px({
       "...XX...", "...XX...", "XXXXXXXX", ".XXXXXX.",
       "..XXXX..", "..X..X..", ".X....X.", "........",
     }),
   },
   enhancement = {
-    m_bonus = parse_px({          -- plus: flat chips
+    m_bonus = parse_px({
       "........", "...XX...", "...XX...", ".XXXXXX.",
       ".XXXXXX.", "...XX...", "...XX...", "........",
     }),
-    m_mult = parse_px({           -- times
+    m_mult = parse_px({
       "........", ".X....X.", "..X..X..", "...XX...",
       "...XX...", "..X..X..", ".X....X.", "........",
     }),
-    m_wild = parse_px({           -- four corners: it is every suit at once
+    m_wild = parse_px({
       "XX....XX", "XX....XX", "........", "........",
       "........", "........", "XX....XX", "XX....XX",
     }),
-    m_glass = parse_px({          -- a pane, cracked
+    m_glass = parse_px({
       ".XXXXXX.", ".X....X.", ".X.X..X.", ".X..X.X.",
       ".X.X..X.", ".X..X.X.", ".X....X.", ".XXXXXX.",
     }),
-    m_steel = parse_px({          -- riveted beam: it works from the hand
+    m_steel = parse_px({
       "........", "........", "X......X", "XXXXXXXX",
       "XXXXXXXX", "X......X", "........", "........",
     }),
-    m_gold = parse_px({           -- an ingot, not a coin -- the seal already owns the coin
+    m_gold = parse_px({
       "........", "........", "..XXXX..", ".XXXXXX.",
       "XXXXXXXX", "XXXXXXXX", "........", "........",
     }),
-    m_lucky = parse_px({          -- four lobes
+    m_lucky = parse_px({
       ".XX..XX.", "XXXXXXXX", "XXXXXXXX", ".XXXXXX.",
       ".XXXXXX.", "XXXXXXXX", "XXXXXXXX", ".XX..XX.",
     }),
-    m_stone = parse_px({          -- a block with a corner knocked off
+    m_stone = parse_px({
       "........", ".XXXX...", ".XXXX...", ".XXXXXX.",
       ".XXXXXX.", ".XXXXXX.", ".XXXXXX.", "........",
     }),
@@ -597,12 +578,8 @@ local function silhouette(pat, dc)
 end
 
 local PX_MESH_VARIANTS = 4
-local DECO_MESH_LIMIT = 32
-local px_mesh_supported
-local deco_mesh_cache = {}
+local append_mesh_rect, build_mesh = RectMesh.add, RectMesh.build
 
--- Composites arrive both as arrays and as named pairs and may hold false slots and non-mesh
--- fields, so walk the whole table; a single mesh is userdata and carries release itself.
 local function release_deco_mesh(m)
   if type(m) == "table" and not m.release then
     for _, sub in pairs(m) do
@@ -613,59 +590,7 @@ local function release_deco_mesh(m)
     pcall(m.release, m)
   end
 end
-local deco_mesh_clock = 0
-
-local function append_mesh_rect(vertices, indices, x, y, w, h, r, g, b, a)
-  local v = #vertices
-  vertices[v + 1] = { x,     y,     0, 0, r, g, b, a }
-  vertices[v + 2] = { x + w, y,     0, 0, r, g, b, a }
-  vertices[v + 3] = { x + w, y + h, 0, 0, r, g, b, a }
-  vertices[v + 4] = { x,     y + h, 0, 0, r, g, b, a }
-  indices[#indices + 1] = v + 1
-  indices[#indices + 1] = v + 2
-  indices[#indices + 1] = v + 3
-  indices[#indices + 1] = v + 1
-  indices[#indices + 1] = v + 3
-  indices[#indices + 1] = v + 4
-end
-
-local function append_mesh_arc_pie(vertices, indices, cx, cy, radius, a1, a2, segments)
-  segments = segments or 16
-  local v = #vertices
-  vertices[v + 1] = { cx, cy, 0, 0, 1, 1, 1, 1 }
-  for i = 0, segments do
-    local t = a1 + (a2 - a1) * (i / segments)
-    vertices[v + 2 + i] = { cx + math.cos(t) * radius, cy + math.sin(t) * radius, 0, 0, 1, 1, 1, 1 }
-  end
-  for i = 1, segments do
-    indices[#indices + 1] = v + 1
-    indices[#indices + 1] = v + 1 + i
-    indices[#indices + 1] = v + 2 + i
-  end
-end
-
-local function build_mesh(vertices, indices)
-  if px_mesh_supported == false then return nil end
-  if type(love.graphics.newMesh) ~= "function" then
-    px_mesh_supported = false
-    return nil
-  end
-  local ok, mesh = pcall(function()
-    local m = love.graphics.newMesh(vertices, "triangles", "static")
-    if not m or type(m.setVertexMap) ~= "function" or type(m.getVertexCount) ~= "function" then
-      return nil
-    end
-    m:setVertexMap(indices)
-    if m:getVertexCount() ~= #vertices then return nil end
-    return m
-  end)
-  if not ok or not mesh then
-    px_mesh_supported = false
-    return nil
-  end
-  px_mesh_supported = true
-  return mesh
-end
+local deco = RectMesh.lru(32, release_deco_mesh)
 
 local function px_variant_mesh(cache, r0, g0, b0, r1, g1, b1, r2, g2, b2)
   for i = 1, PX_MESH_VARIANTS do
@@ -712,34 +637,8 @@ local function append_px_body(vertices, indices, pat, r0, g0, b0, r1, g1, b1, r2
   end
 end
 
-local function px_mesh(pat, col, col2, colw)
-  if px_mesh_supported == false then return nil end
-
-  local c1 = col2 or col
-  local c2 = colw or WHITE_C
-  local r0, g0, b0 = col[1], col[2], col[3]
-  local r1, g1, b1 = c1[1], c1[2], c1[3]
-  local r2, g2, b2 = c2[1], c2[2], c2[3]
-  local cache = pat.px_meshes
-  if cache then
-    local hit = px_variant_mesh(cache, r0, g0, b0, r1, g1, b1, r2, g2, b2)
-    if hit then return hit end
-  else
-    cache = { next = 1 }
-    pat.px_meshes = cache
-  end
-
-  local vertices, indices = {}, {}
-  append_px_body(vertices, indices, pat, r0, g0, b0, r1, g1, b1, r2, g2, b2)
-
-  local mesh = build_mesh(vertices, indices)
-  if not mesh then return nil end
-  px_variant_store(cache, mesh, r0, g0, b0, r1, g1, b1, r2, g2, b2)
-  return mesh
-end
-
-local function shadow_combo_mesh(pat, field, key, sil, off, col, col2, colw)
-  if px_mesh_supported == false then return nil end
+local function variant_mesh(pat, field, key, sil, off, col, col2, colw)
+  if not RectMesh.available() then return nil end
 
   local c1 = col2 or col
   local c2 = colw or WHITE_C
@@ -762,7 +661,7 @@ local function shadow_combo_mesh(pat, field, key, sil, off, col, col2, colw)
     for i = 1, #sil, 3 do
       append_mesh_rect(vertices, indices, sil[i], sil[i + 1], sil[i + 2], 1, 0, 0, 0, 0.55)
     end
-  else
+  elseif off then
     for i = 1, #pat, 4 do
       append_mesh_rect(vertices, indices, pat[i] + off, pat[i + 1] + off, pat[i + 2], 1,
         0, 0, 0, 0.55)
@@ -777,7 +676,7 @@ local function shadow_combo_mesh(pat, field, key, sil, off, col, col2, colw)
 end
 
 local function shape_mesh(pat)
-  if px_mesh_supported == false then return nil end
+  if not RectMesh.available() then return nil end
   if pat.shape_mesh_built then return pat.shape_mesh end
   pat.shape_mesh_built = true
   local vertices, indices = {}, {}
@@ -788,78 +687,24 @@ local function shape_mesh(pat)
   return pat.shape_mesh
 end
 
-local function deco_mesh_get(kind, w, u, p0, p1, p2, p3, p4, p5)
-  if px_mesh_supported == false then return nil end
-  for i = 1, #deco_mesh_cache do
-    local e = deco_mesh_cache[i]
-    if e.kind == kind and e.w == w and e.u == u
-      and e.p0 == p0 and e.p1 == p1 and e.p2 == p2
-      and e.p3 == p3 and e.p4 == p4 and e.p5 == p5
-    then
-      deco_mesh_clock = deco_mesh_clock + 1
-      e.used = deco_mesh_clock
-      return e.mesh
-    end
-  end
-  return nil
-end
-
-local function deco_mesh_put(kind, w, u, p0, p1, p2, p3, p4, p5, mesh)
-  deco_mesh_clock = deco_mesh_clock + 1
-  local slot = #deco_mesh_cache + 1
-  if slot > DECO_MESH_LIMIT then
-    slot = 1
-    for i = 2, #deco_mesh_cache do
-      if deco_mesh_cache[i].used < deco_mesh_cache[slot].used then slot = i end
-    end
-    -- Free the GPU buffer now; the finalizer piles up live meshes under a stopped collector.
-    -- Safe because get/put stamp `used`: a held entry is the most recent, never the LRU minimum.
-    release_deco_mesh(deco_mesh_cache[slot].mesh)
-  end
-  deco_mesh_cache[slot] = {
-    kind = kind, w = w, u = u,
-    p0 = p0, p1 = p1, p2 = p2, p3 = p3, p4 = p4, p5 = p5,
-    mesh = mesh, used = deco_mesh_clock,
-  }
-end
-
-local BAKE_LIMIT = 6
 local bake_supported
-local bake_cache = {}
-local bake_clock = 0
+local bakes = RectMesh.lru(6, function(e)
+  local c = e and e.canvas
+  if c and c.release then pcall(c.release, c) end
+end)
 
-local function bake_slot(kind, w, u, a, p0, p1, p2, p3, p4, p5)
-  for i = 1, #bake_cache do
-    local e = bake_cache[i]
-    if e.kind == kind and e.w == w and e.u == u and e.a == a
-      and e.p0 == p0 and e.p1 == p1 and e.p2 == p2
-      and e.p3 == p3 and e.p4 == p4 and e.p5 == p5
-    then
-      bake_clock = bake_clock + 1
-      e.used = bake_clock
-      return e
-    end
+local function bake_slot(kind, w, u, p1, p2, p3, p4, p5, p6)
+  local e = bakes:get(kind, w, u, p1, p2, p3, p4, p5, p6)
+  if not e then
+    e = { canvas = false }
+    bakes:put(kind, w, u, p1, p2, p3, p4, p5, p6, e)
   end
-  bake_clock = bake_clock + 1
-  local slot = #bake_cache + 1
-  if slot > BAKE_LIMIT then
-    slot = 1
-    for i = 2, #bake_cache do
-      if bake_cache[i].used < bake_cache[slot].used then slot = i end
-    end
-    local evicted = bake_cache[slot].canvas
-    if evicted and evicted.release then pcall(evicted.release, evicted) end
-  end
-  bake_cache[slot] = { kind = kind, w = w, u = u, a = a,
-    p0 = p0, p1 = p1, p2 = p2, p3 = p3, p4 = p4, p5 = p5,
-    canvas = false, ox = 0, oy = 0, used = bake_clock }
-  return nil
+  return e
 end
 
 local function bake_placement_ok(x, y)
   if x % 1 ~= 0 or y % 1 ~= 0 then return false end
   local tp = love.graphics.transformPoint
-  if type(tp) ~= "function" then return true end
   local ok, ox, oy = pcall(tp, 0, 0)
   if not ok or type(ox) ~= "number" or type(oy) ~= "number" then return true end
   local ok1, ux, uy = pcall(tp, 1, 1)
@@ -869,35 +714,22 @@ end
 
 local function bake_run(cw, ch, ox, oy, paint)
   if bake_supported == false then return nil end
-  if type(love.graphics.newCanvas) ~= "function" then bake_supported = false; return nil end
   local made, canvas = pcall(love.graphics.newCanvas, cw, ch)
   if not made or not canvas then bake_supported = false; return nil end
   bake_supported = true
   if canvas.setFilter then pcall(canvas.setFilter, canvas, "nearest", "nearest") end
 
   local prev_canvas = love.graphics.getCanvas()
-  local pr, pg, pb, pa = love.graphics.getColor()
-  local pmode, palpha = love.graphics.getBlendMode()
-  local plw = love.graphics.getLineWidth()
-  local pshader = love.graphics.getShader()
-  local ssx, ssy, ssw, ssh = love.graphics.getScissor()
-
-  love.graphics.push()
+  love.graphics.push("all")
   love.graphics.origin()
   love.graphics.setCanvas(canvas)
-  if ssx then love.graphics.setScissor() end
+  if love.graphics.getScissor() then love.graphics.setScissor() end
   love.graphics.setShader()
   love.graphics.setBlendMode("alpha", "alphamultiply")
   love.graphics.clear(0, 0, 0, 0)
   local painted = pcall(paint, ox, oy)
-
   if prev_canvas then love.graphics.setCanvas(prev_canvas) else love.graphics.setCanvas() end
   love.graphics.pop()
-  if ssx then love.graphics.setScissor(ssx, ssy, ssw, ssh) end
-  love.graphics.setShader(pshader)
-  love.graphics.setBlendMode(pmode, palpha)
-  love.graphics.setLineWidth(plw)
-  love.graphics.setColor(pr, pg, pb, pa)
 
   if not painted then
     if canvas.release then pcall(canvas.release, canvas) end
@@ -907,16 +739,16 @@ local function bake_run(cw, ch, ox, oy, paint)
   return canvas
 end
 
-local function bake_draw(canvas, dx, dy)
+local function bake_draw(canvas, dx, dy, a)
   local mode, alphamode = love.graphics.getBlendMode()
   love.graphics.setBlendMode("alpha", "premultiplied")
-  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.setColor(a, a, a, a)
   love.graphics.draw(canvas, dx, dy)
   love.graphics.setBlendMode(mode, alphamode)
 end
 
 local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
-  -- At or below one step of 8-bit alpha nothing worth a draw call lands.
+  -- Below one 8-bit alpha step, drawing has no visible effect.
   a = a or 1
   if a <= 1 / 255 then return end
   local x0 = round(cx - pat.w * s / 2)
@@ -926,8 +758,8 @@ local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
     local dc = (s > 0 and a >= 0.9 and so % s == 0) and so / s or nil
     local sil = dc and silhouette(pat, dc) or nil
     local off = (not sil) and s > 0 and s % 1 == 0 and so % 1 == 0 and so / s or nil
-    local mesh = (sil and shadow_combo_mesh(pat, "sil_combo", dc, sil, nil, col, col2, colw))
-      or (off and shadow_combo_mesh(pat, "off_combo", off, nil, off, col, col2, colw))
+    local mesh = (sil and variant_mesh(pat, "sil_combo", dc, sil, nil, col, col2, colw))
+      or (off and variant_mesh(pat, "off_combo", off, nil, off, col, col2, colw))
       or nil
     if mesh then
       set_color_if_changed(1, 1, 1, a)
@@ -953,7 +785,7 @@ local function draw_px(pat, cx, cy, s, col, a, col2, colw, shadow)
       end
     end
   end
-  local mesh = px_mesh(pat, col, col2, colw)
+  local mesh = variant_mesh(pat, "px_meshes", 1, nil, nil, col, col2, colw)
   if mesh then
     set_color_if_changed(1, 1, 1, a)
     love.graphics.draw(mesh, x0, y0, 0, s, s)
@@ -985,6 +817,11 @@ end
 
 function Prims.draw_heart(cx, cy, r, col, a)
   draw_px(HEART_PX, cx, cy, math.max(1, round(r / 3)), col, a)
+end
+
+function Prims.heart_extent(r)
+  local s = math.max(1, round(r / 3))
+  return HEART_PX.w * s, HEART_PX.h * s
 end
 
 local BOW_WINE = { 0.45, 0.09, 0.13 }
@@ -1030,8 +867,8 @@ function Prims.draw_evil_eye(cx, cy, u, acc, a, now, shadow, look, hold)
   draw_px(pat, cx, cy, math.max(1, round(u * 1.5)), acc, a, EYE_PUPIL, nil, shadow)
 end
 
-function Prims.draw_diamond(cx, cy, u, col, a, shadow)
-  draw_px(DIAMOND_PX, cx, cy, math.max(1, round(u * 0.75)), col, a, nil, nil, shadow)
+function Prims.draw_diamond(cx, cy, u, col, a)
+  draw_px(DIAMOND_PX, cx, cy, math.max(1, round(u * 0.75)), col, a)
 end
 
 local function pin_glyph_pat(kind, key)
@@ -1075,29 +912,27 @@ function Prims.pin_pips(n, x, y, w, h, col, a)
   local span = 3 * s + 2 * gap
   local x0 = x + math.floor((w - span) / 2)
   local y0 = y + math.floor((h - span) / 2)
-  love.graphics.setColor(col[1], col[2], col[3], a)
+  set_col(col, a)
   for i = 0, n - 1 do
     love.graphics.rectangle("fill", x0 + (i % 3) * (s + gap),
       y0 + math.floor(i / 3) * (s + gap), s, s)
   end
 end
 
-local function build_gothic_studs_mesh(w, h, u, gold)
-  local vertices, indices = {}, {}
+local function gothic_stud_rects(w, h, u, gold)
+  local list = {}
   local c2 = u * 2
-  local gr, gg, gb = gold[1], gold[2], gold[3]
   for sx2 = 0, 1 do
     for sy2 = 0, 1 do
       for i = 0, 2 do
         local sx = u * (1 + i * 2)
         local sy = u * (5 - i * 2)
-        local mx = sx2 == 0 and sx or (w - sx - c2)
-        local my = sy2 == 0 and sy or (h - sy - c2)
-        append_mesh_rect(vertices, indices, mx, my, c2, c2, gr, gg, gb, 1)
+        RectMesh.rect(list, sx2 == 0 and sx or (w - sx - c2), sy2 == 0 and sy or (h - sy - c2), c2, c2,
+          gold[1], gold[2], gold[3], 1)
       end
     end
   end
-  return build_mesh(vertices, indices)
+  return list
 end
 
 function Prims.gothic_frame(x, y, w, h, u, gold, frd, a, rad, pulse, quiet)
@@ -1105,45 +940,23 @@ function Prims.gothic_frame(x, y, w, h, u, gold, frd, a, rad, pulse, quiet)
   pulse = pulse or 0.5
   local E = Prims.EVIL
   love.graphics.setLineWidth(1)
-  love.graphics.setColor(gold[1], gold[2], gold[3], E.A_HAIR * a)
+  set_col(gold, E.A_HAIR * a)
   love.graphics.rectangle("line", x, y, w, h, rad, rad)
-  love.graphics.setColor(gold[1], gold[2], gold[3], 0.10 * a)
+  set_col(gold, 0.10 * a)
   love.graphics.rectangle("fill", x + rad + 1, y + 1, w - rad * 2 - 2, 1)
   if rad > 0 or quiet then return end
   if w < u * 40 or h < u * 24 then return end
-  love.graphics.setColor(frd[1], frd[2], frd[3], E.A_INSET * a)
+  set_col(frd, E.A_INSET * a)
   local i3 = u * 3
   love.graphics.rectangle("line", x + i3, y + i3, w - i3 * 2, h - i3 * 2)
-  -- Panel size eases frame by frame; keying the mesh cache on the raw size would miss on every
-  -- animating frame and churn the shared slots.
-  local studs, qw, qh
-  if px_mesh_supported ~= false then
-    qw, qh = math.floor(w / 4 + 0.5) * 4, math.floor(h / 4 + 0.5) * 4
-    if qw > 0 and qh > 0 then
-      studs = deco_mesh_get("gothic_studs", qw, u, qh, gold[1], gold[2], gold[3])
-      if not studs then
-        studs = build_gothic_studs_mesh(qw, qh, u, gold)
-        if studs then deco_mesh_put("gothic_studs", qw, u, qh, gold[1], gold[2], gold[3], nil, nil, studs) end
-      end
-    end
-  end
+  local qw, qh = math.floor(w / 4 + 0.5) * 4, math.floor(h / 4 + 0.5) * 4
+  local studs = qw > 0 and qh > 0 and RectMesh.cached(deco, "gothic_studs", qw, u, qh, gold[1], gold[2],
+    gold[3], nil, nil, gothic_stud_rects, qw, qh, u, gold)
   if studs then
     love.graphics.setColor(1, 1, 1, E.A_STRUCT * a)
     love.graphics.draw(studs, x, y, 0, w / qw, h / qh)
   else
-    love.graphics.setColor(gold[1], gold[2], gold[3], E.A_STRUCT * a)
-    local c2 = u * 2
-    for sx2 = 0, 1 do
-      for sy2 = 0, 1 do
-        for i = 0, 2 do
-          local sx = u * (1 + i * 2)
-          local sy = u * (5 - i * 2)
-          local mx = sx2 == 0 and (x + sx) or (x + w - sx - c2)
-          local my = sy2 == 0 and (y + sy) or (y + h - sy - c2)
-          love.graphics.rectangle("fill", mx, my, c2, c2)
-        end
-      end
-    end
+    RectMesh.paint(gothic_stud_rects(w, h, u, gold), x, y, 1, 1, 1, E.A_STRUCT * a)
   end
   local sa = (E.A_ACCENT + E.PULSE_AMP * pulse) * a
   Prims.draw_diamond(x + u * 8, y + u * 8, u, gold, sa)
@@ -1153,55 +966,40 @@ function Prims.gothic_frame(x, y, w, h, u, gold, frd, a, rad, pulse, quiet)
 end
 
 local DIVIDER_SEGS = 4
-local function divider_geom(w, weight)
-  local segw = math.ceil(w / (DIVIDER_SEGS * 2))
-  local segs = {}
-  for i = 0, DIVIDER_SEGS - 1 do
-    local hh = (i == 0) and 1 or weight
-    segs[#segs + 1] = {
-      left = { x = i * segw, y = -hh, w = segw, h = hh },
-      right = { x = w - (i + 1) * segw, y = -hh, w = segw, h = hh },
-    }
-  end
-  return { segw = segw, segs = segs }
+local function divider_seg_w(w) return math.ceil(w / (DIVIDER_SEGS * 2)) end
+local function divider_seg_h(i, weight) return (i == 1) and 1 or weight end
+local function divider_base(i)
+  return 0.30 + (Prims.EVIL.A_DIVIDER_MAX - 0.30) * i / DIVIDER_SEGS
 end
 
-local function build_divider_mesh(w, weight)
-  local vertices, indices = {}, {}
-  local geom = divider_geom(w, weight)
-  for i, seg in ipairs(geom.segs) do
-    local base = 0.30 + (Prims.EVIL.A_DIVIDER_MAX - 0.30) * i / DIVIDER_SEGS
-    append_mesh_rect(vertices, indices, seg.left.x, seg.left.y, seg.left.w, seg.left.h, 1, 1, 1, base)
-    append_mesh_rect(vertices, indices, seg.right.x, seg.right.y, seg.right.w, seg.right.h, 1, 1, 1, base)
+local function divider_rects(w, weight)
+  local list = {}
+  local segw = divider_seg_w(w)
+  for i = 1, DIVIDER_SEGS do
+    local hh, base = divider_seg_h(i, weight), divider_base(i)
+    RectMesh.rect(list, (i - 1) * segw, -hh, segw, hh, 1, 1, 1, base)
+    RectMesh.rect(list, w - i * segw, -hh, segw, hh, 1, 1, 1, base)
   end
-  return build_mesh(vertices, indices)
+  return list
 end
 
 function Prims.evil_divider(x, y, w, u, acc, gold, a, pulse, weight, no_center, ignite01)
   a = a or 1
   pulse = pulse or 0.5
   weight = weight or 2
-  local E = Prims.EVIL
-  local segs = DIVIDER_SEGS
-  local mesh
-  if not ignite01 and px_mesh_supported ~= false then
-    mesh = deco_mesh_get("evil_divider", w, weight)
-    if not mesh then
-      mesh = build_divider_mesh(w, weight)
-      if mesh then deco_mesh_put("evil_divider", w, weight, nil, nil, nil, nil, nil, nil, mesh) end
-    end
-  end
+  local mesh = not ignite01 and RectMesh.cached(deco, "evil_divider", w, weight, nil, nil, nil, nil, nil, nil,
+    divider_rects, w, weight)
   if mesh then
-    love.graphics.setColor(acc[1], acc[2], acc[3], (0.85 + 0.10 * pulse) * a)
+    set_col(acc, (0.85 + 0.10 * pulse) * a)
     love.graphics.draw(mesh, x, y)
   else
-    local geom = divider_geom(w, weight)
-    for i, seg in ipairs(geom.segs) do
-      local ik = ignite01 and Prims.smoothstep01((ignite01 - (segs - i) * 0.18) / 0.35) or 1
-      local aa = (0.30 + (E.A_DIVIDER_MAX - 0.30) * i / segs) * (0.85 + 0.10 * pulse) * ik * a
-      love.graphics.setColor(acc[1], acc[2], acc[3], aa)
-      love.graphics.rectangle("fill", x + seg.left.x, y + seg.left.y, seg.left.w, seg.left.h)
-      love.graphics.rectangle("fill", x + seg.right.x, y + seg.right.y, seg.right.w, seg.right.h)
+    local segw = divider_seg_w(w)
+    for i = 1, DIVIDER_SEGS do
+      local ik = ignite01 and Prims.smoothstep01((ignite01 - (DIVIDER_SEGS - i) * 0.18) / 0.35) or 1
+      local hh = divider_seg_h(i, weight)
+      set_col(acc, divider_base(i) * (0.85 + 0.10 * pulse) * ik * a)
+      love.graphics.rectangle("fill", x + (i - 1) * segw, y - hh, segw, hh)
+      love.graphics.rectangle("fill", x + w - i * segw, y - hh, segw, hh)
     end
   end
   if no_center then return end
@@ -1212,7 +1010,7 @@ function Prims.plate_label(x, y, w, h, gold, a, rivets, fill_a)
   a = a or 1
   love.graphics.setColor(0, 0, 0, (fill_a or 0.35) * a)
   love.graphics.rectangle("fill", x, y, w, h)
-  love.graphics.setColor(gold[1], gold[2], gold[3], Prims.EVIL.A_PLATE * a)
+  set_col(gold, Prims.EVIL.A_PLATE * a)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", x, y, w, h)
   if rivets then
@@ -1239,10 +1037,10 @@ function Prims.candle_finial(cx, base_y, u, gold, a, now, flare)
   love.graphics.setColor(1, 0.95, 0.85, 0.95 * a)
   love.graphics.rectangle("fill", cx - math.floor(u / 2), fy, u, u)
   local gr = u * 6 + math.floor(u * 4 * flare)
-  love.graphics.setColor(gold[1], gold[2], gold[3], (0.05 + 0.04 * flick + 0.08 * flare) * a)
+  set_col(gold, (0.05 + 0.04 * flick + 0.08 * flare) * a)
   love.graphics.rectangle("fill", cx - gr, fy - u * 4 - gr, gr * 2, gr * 2)
   local gr2 = math.floor(gr * 0.55)
-  love.graphics.setColor(gold[1], gold[2], gold[3], (0.08 + 0.05 * flick + 0.10 * flare) * a)
+  set_col(gold, (0.08 + 0.05 * flick + 0.10 * flare) * a)
   love.graphics.rectangle("fill", cx - gr2, fy - u * 4 - gr2, gr2 * 2, gr2 * 2)
   local s = math.max(1, round(u * (1 + 0.5 * flick + 0.8 * flare)))
   local pat = (flick > 0.5) and FLAME_A_PX or FLAME_B_PX
@@ -1257,7 +1055,7 @@ function Prims.ember_bloom(cx, cy, r, u, t01, gold, a)
   cx, cy = round(cx), round(cy)
   for _, rf in ipairs(EMBER_BLOOM_RINGS) do
     local rr = round(r * rf[1])
-    love.graphics.setColor(gold[1], gold[2], gold[3], rf[2] * env * a)
+    set_col(gold, rf[2] * env * a)
     love.graphics.rectangle("fill", cx - rr, cy - rr, rr * 2, rr * 2)
   end
   local rise = Prims.ease_out_cubic01(t01)
@@ -1287,10 +1085,10 @@ local function panel_shadow_corners(x, y, w, h, rad)
   local right, bottom = x + w, y + h
   if shadow_sink then
     local PI = math.pi
-    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, x + rad, y + rad, rad, PI, PI * 1.5)
-    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, right - rad, y + rad, rad, PI * 1.5, PI * 2)
-    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, right - rad, bottom - rad, rad, 0, PI * 0.5)
-    append_mesh_arc_pie(shadow_sink.v, shadow_sink.i, x + rad, bottom - rad, rad, PI * 0.5, PI)
+    RectMesh.add_pie(shadow_sink.v, shadow_sink.i, x + rad, y + rad, rad, PI, PI * 1.5)
+    RectMesh.add_pie(shadow_sink.v, shadow_sink.i, right - rad, y + rad, rad, PI * 1.5, PI * 2)
+    RectMesh.add_pie(shadow_sink.v, shadow_sink.i, right - rad, bottom - rad, rad, 0, PI * 0.5)
+    RectMesh.add_pie(shadow_sink.v, shadow_sink.i, x + rad, bottom - rad, rad, PI * 0.5, PI)
     return
   end
   love.graphics.arc("fill", "pie", x + rad, y + rad, rad, math.pi, math.pi * 1.5)
@@ -1329,7 +1127,7 @@ local function panel_shadow_ring(x, y, w, h, rad, square, plate_x, plate_y, plat
   panel_shadow_corners(x, y, w, h, rad)
 end
 
-local function build_panel_shadow_meshes(w, h, rad, ux, uy)
+local function build_panel_shadow_meshes(w, h, rad, ux, uy, square)
   local out = {}
   for i = 1, #Prims.SHADOW_LAYERS do
     local L = Prims.SHADOW_LAYERS[i]
@@ -1337,7 +1135,7 @@ local function build_panel_shadow_meshes(w, h, rad, ux, uy)
     local sr = rad + sp
     local v, idx = {}, {}
     shadow_sink = { v = v, i = idx }
-    panel_shadow_ring(-sp + L[1] * ux, -sp + L[2] * uy, w + sp * 2, h + sp * 2, sr, sr <= 0,
+    panel_shadow_ring(-sp + L[1] * ux, -sp + L[2] * uy, w + sp * 2, h + sp * 2, sr, square or sr <= 0,
       0, 0, w, h)
     shadow_sink = nil
     if #v == 0 then
@@ -1373,7 +1171,7 @@ local function panel_body(x, y, w, h, rad, bg, bg_a, bands)
   end
 
   if not tiled then
-    love.graphics.setColor(bg[1], bg[2], bg[3], bg_a)
+    set_col(bg, bg_a)
     love.graphics.rectangle("fill", x, y, w, h, rad, rad)
     return false
   end
@@ -1385,7 +1183,7 @@ local function panel_body(x, y, w, h, rad, bg, bg_a, bands)
     local inv = 1 - oa
     local out_a = oa + bg_a * inv
     if x0 > 0 or x1 < w then
-      love.graphics.setColor(bg[1], bg[2], bg[3], bg_a)
+      set_col(bg, bg_a)
       if x0 > 0 then love.graphics.rectangle("fill", x, y + y0, x0, y1 - y0) end
       if x1 < w then love.graphics.rectangle("fill", x + x1, y + y0, w - x1, y1 - y0) end
     end
@@ -1407,19 +1205,20 @@ end
 local SHADOW_MESH_QUANT = 4
 local function quant(v, step) return math.floor(v / step + 0.5) * step end
 
-function Prims.panel_shell(x, y, w, h, rad, sh_dx, sh_dy, sh_a, bg, bg_a, a, bands)
+function Prims.panel_shell(x, y, w, h, rad, sh_dx, sh_dy, sh_a, bg, bg_a, a, bands, square)
   local ux = (sh_dx or 0) * 0.5
   local uy = (sh_dy or 0) * 0.5
   local meshes
   local qw, qh = w, h
-  -- quant() floors to 0 below half a step, and the draw below divides by it.
-  if a >= 0.98 and px_mesh_supported ~= false
+  -- `quant()` floors to zero below half a step, and the draw call divides by it.
+  if a >= 0.98 and RectMesh.available()
       and w >= SHADOW_MESH_QUANT and h >= SHADOW_MESH_QUANT then
     qw, qh = quant(w, SHADOW_MESH_QUANT), quant(h, SHADOW_MESH_QUANT)
-    meshes = deco_mesh_get("panel_shadow", qw, qh, rad, ux, uy)
+    local kind = square and "panel_shadow_sq" or "panel_shadow"
+    meshes = deco:get(kind, qw, qh, rad, ux, uy)
     if not meshes then
-      meshes = build_panel_shadow_meshes(qw, qh, rad, ux, uy)
-      if meshes then deco_mesh_put("panel_shadow", qw, qh, rad, ux, uy, nil, nil, nil, meshes) end
+      meshes = build_panel_shadow_meshes(qw, qh, rad, ux, uy, square)
+      if meshes then deco:put(kind, qw, qh, rad, ux, uy, nil, nil, nil, meshes) end
     end
   end
   for i = 1, #Prims.SHADOW_LAYERS do
@@ -1432,8 +1231,10 @@ function Prims.panel_shell(x, y, w, h, rad, sh_dx, sh_dy, sh_a, bg, bg_a, a, ban
       if meshes then
         if meshes[i] then love.graphics.draw(meshes[i], x, y, 0, w / qw, h / qh) end
       else
-        panel_shadow_ring(sx, sy, sw, shh, sr, sr <= 0, x, y, w, h)
+        panel_shadow_ring(sx, sy, sw, shh, sr, square or sr <= 0, x, y, w, h)
       end
+    elseif square then
+      love.graphics.rectangle("fill", sx, sy, sw, shh)
     else
       love.graphics.rectangle("fill", sx, sy, sw, shh, sr, sr)
     end
@@ -1441,39 +1242,29 @@ function Prims.panel_shell(x, y, w, h, rad, sh_dx, sh_dy, sh_a, bg, bg_a, a, ban
   return panel_body(x, y, w, h, rad, bg, bg_a, bands)
 end
 
-function Prims.panel_base(x, y, w, h, rad, sh, a, bg, frame, bands)
-  local tiled = Prims.panel_shell(x, y, w, h, rad, sh, sh, 0.55 * a, bg, 0.97 * a, a, bands)
-  love.graphics.setColor(frame[1], frame[2], frame[3], 0.90 * a)
+function Prims.panel_base(x, y, w, h, rad, sh, a, bg, frame, bands, square)
+  local tiled = Prims.panel_shell(x, y, w, h, rad, sh, sh, 0.55 * a, bg, 0.97 * a, a, bands, square)
+  set_col(frame, 0.90 * a)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", x, y, w, h, rad, rad)
   return tiled
 end
 
-function Prims.neuro_frame_deco(x, y, w, h, prad, u, th, ACC, GLOW, shr, shg, shb, a, skip_body)
+function Prims.neuro_frame_deco(x, y, w, h, u, th, GLOW, ACC, a, skip_body)
   a = a or 1
-  love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.035 * a)
-  love.graphics.rectangle("fill", x + 1, y + 1, w - 2, th, prad, prad)
+  set_col(GLOW, 0.035 * a)
+  love.graphics.rectangle("fill", x + 1, y + 1, w - 2, th)
   if not skip_body then
-    love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.018 * a)
+    set_col(GLOW, 0.018 * a)
     love.graphics.rectangle("fill", x + 1, y + th, w - 2, u * 16)
-    love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.02 * a)
-    love.graphics.rectangle("fill", x + prad, y + math.floor(h * 0.55), w - prad * 2, math.floor(h * 0.15))
-    love.graphics.setColor(ACC[1], ACC[2], ACC[3], 0.04 * a)
-    love.graphics.rectangle("fill", x + prad, y + math.floor(h * 0.70), w - prad * 2, math.floor(h * 0.30) - 2)
+    set_col(ACC, 0.02 * a)
+    love.graphics.rectangle("fill", x, y + math.floor(h * 0.55), w, math.floor(h * 0.15))
+    set_col(ACC, 0.04 * a)
+    love.graphics.rectangle("fill", x, y + math.floor(h * 0.70), w, math.floor(h * 0.30) - 2)
   end
-  love.graphics.setColor(shr, shg, shb, 0.16 * a)
-  love.graphics.setLineWidth(1)
-  love.graphics.rectangle("line", x - 1, y - 1, w + 2, h + 2, prad + 1, prad + 1)
-  love.graphics.setColor(shr, shg, shb, 0.08 * a)
-  love.graphics.rectangle("line", x - 2, y - 2, w + 4, h + 4, prad + 2, prad + 2)
-  love.graphics.setColor(shr, shg, shb, 0.20 * a)
-  local ir = math.max(2, prad - u * 3)
-  love.graphics.rectangle("line", x + u * 3, y + u * 3, w - u * 6, h - u * 6, ir, ir)
-  love.graphics.setColor(1, 1, 1, 0.07 * a)
-  love.graphics.rectangle("fill", x + prad, y + 1, w - prad * 2, 1)
 end
 
-function Prims.evil_frame_deco(x, y, w, _h, u, th, GOLD, GLOW, pulse, _now, cxf, a, flare, skip_bloom)
+function Prims.evil_frame_deco(x, y, w, _h, u, th, GOLD, GLOW, pulse, _now, cxf, a, flare)
   a = a or 1
   cxf = cxf or 0.30
   local gcx = x + math.floor(w * cxf)
@@ -1481,26 +1272,22 @@ function Prims.evil_frame_deco(x, y, w, _h, u, th, GOLD, GLOW, pulse, _now, cxf,
   local grx = math.floor(w * 0.30)
   local gry = math.floor(th * 0.85)
   local gk = (0.8 + 0.2 * pulse + 0.6 * (flare or 0)) * a
-  do
-    love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.020 * gk)
-    love.graphics.ellipse("fill", gcx, gcy, grx, gry)
-    love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.030 * gk)
-    love.graphics.ellipse("fill", gcx, gcy, math.floor(grx * 0.66), math.floor(gry * 0.7))
-    love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.045 * gk)
-    love.graphics.ellipse("fill", gcx, gcy, math.floor(grx * 0.38), math.floor(gry * 0.5))
-  end
-  if _h > th * 2 and not skip_bloom then
+  set_col(GLOW, 0.020 * gk)
+  love.graphics.ellipse("fill", gcx, gcy, grx, gry)
+  set_col(GLOW, 0.030 * gk)
+  love.graphics.ellipse("fill", gcx, gcy, math.floor(grx * 0.66), math.floor(gry * 0.7))
+  set_col(GLOW, 0.045 * gk)
+  love.graphics.ellipse("fill", gcx, gcy, math.floor(grx * 0.38), math.floor(gry * 0.5))
+  if _h > th * 2 then
     local bcx = x + math.floor(w / 2)
     local bcy = y + _h
     local brx, bry = math.floor(w * 0.5), math.floor(_h * 0.42)
-    do
-      love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.016 * gk)
-      love.graphics.ellipse("fill", bcx, bcy, brx, bry)
-      love.graphics.setColor(GLOW[1], GLOW[2], GLOW[3], 0.022 * gk)
-      love.graphics.ellipse("fill", bcx, bcy, math.floor(w * 0.30), math.floor(_h * 0.24))
-    end
+    set_col(GLOW, 0.016 * gk)
+    love.graphics.ellipse("fill", bcx, bcy, brx, bry)
+    set_col(GLOW, 0.022 * gk)
+    love.graphics.ellipse("fill", bcx, bcy, math.floor(w * 0.30), math.floor(_h * 0.24))
   end
-  love.graphics.setColor(GOLD[1], GOLD[2], GOLD[3], 0.08 * a)
+  set_col(GOLD, 0.08 * a)
   love.graphics.rectangle("fill", x + u * 4, y + 1, w - u * 8, 1)
 end
 
@@ -1512,7 +1299,7 @@ function Prims.counter_glow(x, y, w, h, col, a, pulse, rad)
   if rad ~= 0 then
     for i = 1, 3 do
       local bh = math.floor(h * (0.10 + i * 0.06))
-      love.graphics.setColor(col[1], col[2], col[3], (0.05 - i * 0.012) * gk)
+      set_col(col, (0.05 - i * 0.012) * gk)
       love.graphics.rectangle("fill", x + 1, base_y - bh, w - 2, bh, rad, rad)
     end
     return
@@ -1523,15 +1310,15 @@ function Prims.counter_glow(x, y, w, h, col, a, pulse, rad)
   local a12 = a2 + a1 * (1 - a2)
   local a123 = a3 + a12 * (1 - a3)
   if h3 > h2 then
-    love.graphics.setColor(col[1], col[2], col[3], a3)
+    set_col(col, a3)
     love.graphics.rectangle("fill", x + 1, base_y - h3, w - 2, h3 - h2)
   end
   if h2 > h1 then
-    love.graphics.setColor(col[1], col[2], col[3], a3 + a2 * (1 - a3))
+    set_col(col, a3 + a2 * (1 - a3))
     love.graphics.rectangle("fill", x + 1, base_y - h2, w - 2, h2 - h1)
   end
   if h1 > 0 then
-    love.graphics.setColor(col[1], col[2], col[3], a123)
+    set_col(col, a123)
     love.graphics.rectangle("fill", x + 1, base_y - h1, w - 2, h1)
   end
 end
@@ -1543,7 +1330,7 @@ function Prims.wax_seal(cx, cy, r, _u, gold, a, pulse, drip, now)
   if (a or 1) <= 0.01 then return end
   pulse = pulse or 0.5
   cx, cy = round(cx), round(cy)
-  local s = r * 2 / 9   -- fractional cells above 2 so animated sizes shrink smoothly
+  local s = r * 2 / 9   -- fractional cells above 2 keep animated sizes smooth
   if s < 2 then s = math.max(1, round(s)) end
   if drip then
     local swell = 0.5 + 0.5 * math.sin((now or Prims.now()) * 0.6 + cx * 0.05)
@@ -1552,15 +1339,15 @@ function Prims.wax_seal(cx, cy, r, _u, gold, a, pulse, drip, now)
     local dx = round(cx + s)
     local dy = round(cy + 4 * s)
     local dl = round(s * (1.5 + 1.5 * swell))
-    love.graphics.setColor(BLOOD_DARK[1], BLOOD_DARK[2], BLOOD_DARK[3], 0.95 * a)
+    set_col(BLOOD_DARK, 0.95 * a)
     love.graphics.rectangle("fill", dx, round(cy + 3.5 * s), bw * 2, bw)
     love.graphics.rectangle("fill", dx + math.floor((bw - nw) / 2), dy, nw, dl)
     local bh = math.max(bw, round(s * (1 + 0.5 * pulse)))
-    love.graphics.setColor(BLOOD_FRESH[1], BLOOD_FRESH[2], BLOOD_FRESH[3], 0.90 * a)
+    set_col(BLOOD_FRESH, 0.90 * a)
     love.graphics.rectangle("fill", dx, dy + dl, bw, bh)
     if s >= 2 then
       local hs = math.max(1, round(s * 0.5))
-      love.graphics.setColor(SEAL_HI[1], SEAL_HI[2], SEAL_HI[3], 0.45 * a)
+      set_col(SEAL_HI, 0.45 * a)
       love.graphics.rectangle("fill", dx, dy + dl, hs, hs)
     end
   end
@@ -1582,232 +1369,390 @@ function Prims.blood_ledge(x, y, w, u, a, t01, pulse, max_h)
   local room = max_h and math.max(0, max_h - s - tip) or nil
   if room == 0 then return end
   x, y = round(x), round(y)
-  love.graphics.setColor(BLOOD_DARK[1], BLOOD_DARK[2], BLOOD_DARK[3], 0.55 * a)
+  set_col(BLOOD_DARK, 0.55 * a)
   love.graphics.rectangle("fill", x, y, w, s)
   for i = 1, #DRIP_AT do
     love.graphics.rectangle("fill", round(x + w * DRIP_AT[i]), y + s, s, drip_len(i, u, t01, room))
   end
-  love.graphics.setColor(BLOOD_FRESH[1], BLOOD_FRESH[2], BLOOD_FRESH[3], 0.85 * a)
+  set_col(BLOOD_FRESH, 0.85 * a)
   for i = 1, #DRIP_AT do
     love.graphics.rectangle("fill", round(x + w * DRIP_AT[i]),
       y + s + drip_len(i, u, t01, room), s, tip)
   end
 end
 
-local function lift(c) return c[1] * 0.55 + 0.45, c[2] * 0.55 + 0.45, c[3] * 0.55 + 0.45 end
-local function lift_capped(c)
-  return math.min(1, c[1] * 0.55 + 0.45), math.min(1, c[2] * 0.55 + 0.45),
-    math.min(1, c[3] * 0.55 + 0.45)
+-- Column entries run top-to-bottom; k advances inward from the heart corner.
+local FALBANKA = {
+  awning = {
+    P = 12,
+    tongue = {
+      "eeeeeeeeeeee",
+      "SSSSSSSSSSSS",
+      "SSSSSSSSSSSS",
+      "SSSSSSSSSSSS",
+      "SSSSSSSSSSSS",
+      "SSSSSSSSSSSS",
+      "#SSSSSSSSSS#",
+      "#SSSSSSSSSS#",
+      ".#SSSSSSSS#.",
+      "..#eeeeee#..",
+      "...######...",
+      "...ssssss...",
+    },
+    fold = "eeeeee#s....",
+    plain = "eSSSSS#s....",
+  },
+  valance = {
+    P = 8,
+    tongue = {
+      "eeeeeeee",
+      "#SSSSSS#",
+      ".#SSSS#.",
+      "..####..",
+      "..ssss..",
+    },
+    fold = "ee#s.",
+    plain = "eS#s.",
+  },
+  folds = { [1] = true, [3] = true, [6] = true, [10] = true, [15] = true },
+}
+function Prims.falbanka_layout(spec, w, u)
+  local cells = math.floor(w / u)
+  local n = math.floor((cells - 4) / spec.P)
+  if n % 2 == 0 then n = n - 1 end
+  if n < 1 then return nil end
+  local left = cells - n * spec.P
+  local cap_l = math.floor(left / 2)
+  return { n = n, cells = cells, cap_l = cap_l, cap_r = left - cap_l,
+    off = math.floor((w - cells * u) / 2) }
 end
 
-local function awning_geom(w, u)
-  local band = math.max(4, u * 5)
-  local n = math.max(4, math.floor(w / (u * 12)))
-  local sw = w / n
-  local top_h = math.ceil(band / 2)
-  local r = sw / 2
-  local dash = math.max(2, u * 2)
-  local top, body = {}, {}
-  for parity = 0, 1 do
-    for i = parity, n - 1, 2 do
-      top[#top + 1] = { x = i * sw, y = 0, w = sw, h = top_h, parity = parity }
+local function cap_char(spec, row, k)
+  local col = FALBANKA.folds[k] and spec.fold or spec.plain
+  return col:sub(row, row)
+end
+
+local function falbanka_role(ch, stripe)
+  if ch == "S" or ch == "e" then return ch .. stripe end
+  if ch == "#" or ch == "s" then return ch end
+  return nil
+end
+
+local function falbanka_cells(spec, lay)
+  local rows = {}
+  local mid = (lay.n - 1) / 2
+  local function stripe_of(i) return ((i - mid) % 2 == 0) and 1 or 2 end
+  local cap_stripe = stripe_of(lay.n)
+  for r = 1, #spec.tongue do
+    local row = {}
+    for d = 1, lay.cap_l do
+      row[#row + 1] = falbanka_role(cap_char(spec, r, d), cap_stripe) or false
+    end
+    local line = spec.tongue[r]
+    for i = 0, lay.n - 1 do
+      local stripe = stripe_of(i)
+      for c = 1, spec.P do
+        row[#row + 1] = falbanka_role(line:sub(c, c), stripe) or false
+      end
+    end
+    for j = 1, lay.cap_r do
+      row[#row + 1] = falbanka_role(cap_char(spec, r, lay.cap_r - j + 1), cap_stripe) or false
+    end
+    rows[r] = row
+  end
+  return rows
+end
+
+local function cell_rects(rows, roles, u, ox, oy)
+  local runs = {}
+  for r = 1, #rows do
+    local row, c = rows[r], 1
+    while c <= #row do
+      local role = row[c]
+      local c0 = c
+      while c + 1 <= #row and row[c + 1] == role do c = c + 1 end
+      if role then runs[#runs + 1] = { role = role, c = c0 - 1, n = c - c0 + 1, r = r - 1, h = 1 } end
+      c = c + 1
     end
   end
-  for parity = 0, 1 do
-    for i = parity, n - 1, 2 do
-      body[#body + 1] = { x = i * sw, y = top_h, w = sw, h = band - top_h, parity = parity }
+  local open, merged = {}, {}
+  for _, run in ipairs(runs) do
+    local key = run.role .. ":" .. run.c .. ":" .. run.n
+    local above = open[key]
+    if above and above.r + above.h == run.r then
+      above.h = above.h + 1
+    else
+      open[key] = run
+      merged[#merged + 1] = run
     end
   end
-  local dashes = {}
-  local dx = u
-  while dx < w - u do
-    dashes[#dashes + 1] = { x = dx, y = band - 2, w = math.min(dash, w - u - dx), h = 1 }
-    dx = dx + dash * 2
+  local by_role = {}
+  for _, role in ipairs(roles) do by_role[role] = {} end
+  for _, run in ipairs(merged) do
+    local list = by_role[run.role]
+    list[#list + 1] = ox + run.c * u
+    list[#list + 1] = oy + run.r * u
+    list[#list + 1] = run.n * u
+    list[#list + 1] = run.h * u
   end
-  local border = { { x = 0, y = 0, w = w, h = 1 }, { x = 0, y = 1, w = w, h = 1 } }
-  return { band = band, n = n, sw = sw, top_h = top_h, r = r, dash = dash,
-    top = top, body = body, dashes = dashes, border = border }
+  return by_role
 end
 
-local function build_awning_rect_meshes(w, u, cA, cB)
-  local under_v, under_i, over_v, over_i = {}, {}, {}, {}
-  local geom = awning_geom(w, u)
-  local ar, ag, ab = lift(cA)
-  local br, bg, bb = lift(cB)
-  for _, rect in ipairs(geom.top) do
-    local r, g, b = ar, ag, ab
-    if rect.parity == 1 then r, g, b = br, bg, bb end
-    append_mesh_rect(under_v, under_i, rect.x, rect.y, rect.w, rect.h,
-      math.min(1, r * 1.10), math.min(1, g * 1.10), math.min(1, b * 1.10), 0.62)
-  end
-  for _, rect in ipairs(geom.body) do
-    local r, g, b = ar, ag, ab
-    if rect.parity == 1 then r, g, b = br, bg, bb end
-    append_mesh_rect(under_v, under_i, rect.x, rect.y, rect.w, rect.h, r, g, b, 0.62)
-  end
-  for _, d in ipairs(geom.dashes) do
-    append_mesh_rect(over_v, over_i, d.x, d.y, d.w, d.h, 1, 1, 1, 0.14)
-  end
-  append_mesh_rect(over_v, over_i, geom.border[1].x, geom.border[1].y, geom.border[1].w, geom.border[1].h,
-    1, 1, 1, 0.30)
-  append_mesh_rect(over_v, over_i, geom.border[2].x, geom.border[2].y, geom.border[2].w, geom.border[2].h,
-    1, 1, 1, 0.10)
-  local under = build_mesh(under_v, under_i)
-  if not under then return nil end
-  local over = build_mesh(over_v, over_i)
-  if not over then return nil end
-  return { under = under, over = over }
+local FALBANKA_ROLES = { "#", "s", "e1", "e2", "S1", "S2" }
+
+local function falbanka_geom(spec, w, u)
+  local lay = Prims.falbanka_layout(spec, w, u)
+  if not lay then return nil end
+  local rows = falbanka_cells(spec, lay)
+  return { by_role = cell_rects(rows, FALBANKA_ROLES, u, lay.off, 0), h = #spec.tongue * u }
 end
 
-local function awning_draw(x, y, w, u, cA, cB, a, mesh_stable)
-  local geom = awning_geom(w, u)
-  local band, n, sw, r = geom.band, geom.n, geom.sw, geom.r
-  local rect_meshes
-  if mesh_stable then
-    rect_meshes = deco_mesh_get("awning_rect", w, u,
-      cA[1], cA[2], cA[3], cB[1], cB[2], cB[3])
-    if not rect_meshes and px_mesh_supported ~= false then
-      rect_meshes = build_awning_rect_meshes(w, u, cA, cB)
-      if rect_meshes then
-        deco_mesh_put("awning_rect", w, u,
-          cA[1], cA[2], cA[3], cB[1], cB[2], cB[3], rect_meshes)
+local falbanka_geom_cache = {}
+
+local function falbanka_geom_get(kind, w, u)
+  local g = falbanka_geom_cache[kind]
+  if g and g.w == w and g.u == u then return g.geom end
+  local geom = falbanka_geom(FALBANKA[kind], w, u)
+  falbanka_geom_cache[kind] = { w = w, u = u, geom = geom }
+  return geom
+end
+
+local function falbanka_role_colour(role, pal)
+  if role == "#" then return pal.DEEP[1], pal.DEEP[2], pal.DEEP[3], 1 end
+  if role == "s" then return 0, 0, 0, 0.3 end
+  local c = (role == "S1" and pal.ACCENT) or (role == "S2" and pal.FLASH_L)
+    or (role == "e1" and pal.PRIMARY) or pal.FLASH_D
+  return c[1], c[2], c[3], 1
+end
+
+local function paint_rects(by_role, roles, colour, x, y, pal, a)
+  for _, role in ipairs(roles) do
+    local list = by_role[role]
+    if #list > 0 then
+      local r, g, b, ca = colour(role, pal)
+      love.graphics.setColor(r, g, b, ca * a)
+      for i = 1, #list, 4 do
+        love.graphics.rectangle("fill", x + list[i], y + list[i + 1], list[i + 2], list[i + 3])
       end
     end
   end
-  love.graphics.setLineWidth(1)
-  love.graphics.setColor(0, 0, 0, 0.20 * a)
-  for i = 0, n - 1 do
-    love.graphics.arc("fill", "pie", x + (i + 0.5) * sw, y + band + u, r, 0, math.pi)
-  end
-  local ar, ag, ab = lift(cA)
-  local br, bg2, bb = lift(cB)
-  if rect_meshes then
-    love.graphics.setColor(1, 1, 1, a)
-    love.graphics.draw(rect_meshes.under, x, y)
-  else
-    local cur
-    for _, rect in ipairs(geom.top) do
-      if rect.parity ~= cur then
-        cur = rect.parity
-        local cr2, cg2, cb2 = ar, ag, ab
-        if cur == 1 then cr2, cg2, cb2 = br, bg2, bb end
-        love.graphics.setColor(math.min(1, cr2 * 1.10), math.min(1, cg2 * 1.10), math.min(1, cb2 * 1.10), 0.62 * a)
-      end
-      love.graphics.rectangle("fill", x + rect.x, y + rect.y, rect.w, rect.h)
-    end
-  end
-  do
-    local cur
-    for _, rect in ipairs(geom.body) do
-      if rect.parity ~= cur then
-        cur = rect.parity
-        local cr2, cg2, cb2 = ar, ag, ab
-        if cur == 1 then cr2, cg2, cb2 = br, bg2, bb end
-        love.graphics.setColor(cr2, cg2, cb2, 0.62 * a)
-      end
-      local sx0 = x + rect.x
-      if not rect_meshes then
-        love.graphics.rectangle("fill", sx0, y + rect.y, rect.w, rect.h)
-      end
-      love.graphics.arc("fill", "pie", sx0 + r, y + band, r, 0, math.pi)
-    end
-  end
-  for parity = 0, 1 do
-    local cr2, cg2, cb2 = ar, ag, ab
-    if parity == 1 then cr2, cg2, cb2 = br, bg2, bb end
-    love.graphics.setColor(cr2 * 0.45, cg2 * 0.45, cb2 * 0.55, 0.55 * a)
-    for i = parity, n - 1, 2 do
-      love.graphics.arc("line", "open", x + i * sw + r, y + band, r - 0.5, 0.12, math.pi - 0.12)
-    end
-  end
-  love.graphics.setColor(1, 1, 1, 0.20 * a)
-  for i = 0, n - 1 do
-    love.graphics.arc("line", "open", x + i * sw + r, y + band, r - 1.5, math.pi * 0.58, math.pi * 0.86)
-  end
-  love.graphics.setColor(1, 1, 1, 0.32 * a)
-  for i = 0, n - 1 do
-    love.graphics.arc("line", "open", x + (i + 0.5) * sw, y + band, r, 0.10, math.pi - 0.10)
-  end
-  love.graphics.setColor(1, 1, 1, 0.55 * a)
-  for i = 0, n - 1 do
-    love.graphics.circle("fill", x + (i + 0.5) * sw, y + band + r - 1, math.max(1, u * 0.8))
-  end
-  if rect_meshes then
-    love.graphics.setColor(1, 1, 1, a)
-    love.graphics.draw(rect_meshes.over, x, y)
-  else
-    love.graphics.setColor(1, 1, 1, 0.14 * a)
-    for _, d in ipairs(geom.dashes) do
-      love.graphics.rectangle("fill", x + d.x, y + d.y, d.w, d.h)
-    end
-    love.graphics.setColor(1, 1, 1, 0.30 * a)
-    love.graphics.rectangle("fill", x + geom.border[1].x, y + geom.border[1].y, geom.border[1].w, geom.border[1].h)
-    love.graphics.setColor(1, 1, 1, 0.10 * a)
-    love.graphics.rectangle("fill", x + geom.border[2].x, y + geom.border[2].y, geom.border[2].w, geom.border[2].h)
-  end
 end
 
-function Prims.awning(x, y, w, u, cA, cB, a, mesh_stable)
-  if (a or 1) <= 0.01 then return end
+local function rgb24(c)
+  return math.floor(c[1] * 255 + 0.5) * 65536 + math.floor(c[2] * 255 + 0.5) * 256
+    + math.floor(c[3] * 255 + 0.5)
+end
+
+local function falbanka(kind, x, y, w, u, pal, a)
   a = a or 1
-  if w < u * 14 then return end
-  if mesh_stable and bake_supported ~= false and bake_placement_ok(x, y) then
-    local e = bake_slot("awning", w, u, a, cA[1], cA[2], cA[3], cB[1], cB[2], cB[3])
-    if e then
-      if not e.canvas then
-        local geom = awning_geom(w, u)
-        local pad = math.ceil(math.max(1, u * 0.8)) + 2
-        e.ox, e.oy = pad, 2
-        e.canvas = bake_run(math.ceil(w) + pad * 2, 2 + math.ceil(geom.band + u + geom.r) + 3, pad, 2,
-          function(ox, oy) awning_draw(ox, oy, w, u, cA, cB, a, false) end)
-      end
-      if e.canvas then
-        love.graphics.setLineWidth(1)
-        bake_draw(e.canvas, x - e.ox, y - e.oy)
-        return
-      end
+  if a <= 0.01 then return end
+  local geom = falbanka_geom_get(kind, w, u)
+  if not geom then return end
+  if bake_supported ~= false and bake_placement_ok(x, y) then
+    local e = bake_slot(kind, w, u, rgb24(pal.ACCENT), rgb24(pal.PRIMARY), rgb24(pal.FLASH_L),
+      rgb24(pal.FLASH_D), rgb24(pal.DEEP))
+    if not e.canvas then
+      e.canvas = bake_run(w, geom.h, 0, 0, function()
+        paint_rects(geom.by_role, FALBANKA_ROLES, falbanka_role_colour, 0, 0, pal, 1)
+      end)
     end
-  end
-  awning_draw(x, y, w, u, cA, cB, a, mesh_stable)
-end
-
-local function tag_string_dashes(w, u)
-  local dash = math.max(2, u * 2)
-  local out = {}
-  local dx = 0
-  while dx < w do
-    out[#out + 1] = { x = dx, w = math.min(dash, w - dx) }
-    dx = dx + dash * 2
-  end
-  return out
-end
-
-local function build_tag_string_mesh(w, u)
-  local vertices, indices = {}, {}
-  for _, d in ipairs(tag_string_dashes(w, u)) do
-    append_mesh_rect(vertices, indices, d.x, 0, d.w, 1, 1, 1, 1, 0.85)
-  end
-  return build_mesh(vertices, indices)
-end
-
-function Prims.tag_string(x, y, w, u, r, g, b, a, mesh_stable)
-  if mesh_stable and w > 0 and u > 0 then
-    local mesh = deco_mesh_get("tag_string", w, u)
-    if not mesh and px_mesh_supported ~= false then
-      mesh = build_tag_string_mesh(w, u)
-      if mesh then deco_mesh_put("tag_string", w, u, nil, nil, nil, nil, nil, nil, mesh) end
-    end
-    if mesh then
-      -- The 0.85 is already in the vertex colour; the rectangle path below applies it instead.
-      set_color_if_changed(r, g, b, a)
-      love.graphics.draw(mesh, x, y)
+    if e.canvas then
+      bake_draw(e.canvas, x, y, a)
       return
     end
   end
-  set_color_if_changed(r, g, b, 0.85 * a)
-  for _, d in ipairs(tag_string_dashes(w, u)) do
-    love.graphics.rectangle("fill", x + d.x, y, d.w, 1)
+  paint_rects(geom.by_role, FALBANKA_ROLES, falbanka_role_colour, x, y, pal, a)
+end
+
+function Prims.awning(x, y, w, u, pal, a) return falbanka("awning", x, y, w, u, pal, a) end
+
+function Prims.valance(x, y, w, u, pal, a) return falbanka("valance", x, y, w, u, pal, a) end
+
+-- Tiles extend beyond the panel; inset marks the valance’s inward start.
+local HEART_FRAME = {
+  out = 5,
+  inset = 7,
+  tl = {
+    "..##.##.....",
+    ".#HH#HH#....",
+    "#HWHHHHH#...",
+    "#HHHHHHH####",
+    ".#HHHHH#AAAA",
+    "..#HHH#FFFFF",
+    "...#H#......",
+    "...##F......",
+    "...#AF......",
+    "...#AF......",
+    "...#AF......",
+    "...#AF......",
+  },
+  bl = {
+    "...#AF......",
+    "...#AF......",
+    "...#AF......",
+    "...#AF......",
+    "...#AF......",
+    "...#AFFFFFFF",
+    "...#AAAAAAAA",
+    "....########",
+  },
+  bl_row0 = 6,
+  top = "...#AF",
+  bottom = ".....FA#",
+  left = "...#AF",
+  right = "......FA#",
+}
+Prims.HEART_FRAME = HEART_FRAME
+
+local HEART_ROLES = { "#", "A", "F", "H", "W" }
+
+local function heart_role_colour(role, pal)
+  if role == "W" then return 1, 1, 1, 1 end
+  local c = (role == "#" and pal.DEEP) or (role == "F" and pal.FRAME) or (role == "A" and pal.ACCENT) or pal.GLOW
+  return c[1], c[2], c[3], 1
+end
+
+local function heart_rows(bitmap, mirror)
+  local rows = {}
+  for r = 1, #bitmap do
+    local line = mirror and bitmap[r]:reverse() or bitmap[r]
+    local row = {}
+    for c = 1, #line do
+      local ch = line:sub(c, c)
+      row[c] = ch ~= "." and ch or false
+    end
+    rows[r] = row
   end
+  return rows
+end
+
+local heart_geom_cache = {}
+
+local function heart_geom(u)
+  local g = heart_geom_cache[u]
+  if g then return g end
+  local tw, th, bh = #HEART_FRAME.tl[1], #HEART_FRAME.tl, #HEART_FRAME.bl
+  local tiles = {
+    { rows = heart_rows(HEART_FRAME.tl, false), ax = 0, ay = 0, h = th },
+    { rows = heart_rows(HEART_FRAME.tl, true), ax = tw, ay = 0, h = th },
+    { rows = heart_rows(HEART_FRAME.bl, false), ax = 0, ay = th, h = bh },
+    { rows = heart_rows(HEART_FRAME.bl, true), ax = tw, ay = th, h = bh },
+  }
+  for _, t in ipairs(tiles) do
+    t.by_role = cell_rects(t.rows, HEART_ROLES, u, 0, 0)
+    t.ax, t.ay, t.w, t.h = t.ax * u, t.ay * u, tw * u, t.h * u
+  end
+  g = { tiles = tiles, w = 2 * tw * u, h = (th + bh) * u }
+  heart_geom_cache[u] = g
+  return g
+end
+
+local STRIP_ROLES = { "#", "A", "F" }
+
+local strip_cells_cache = {}
+local function strip_cells(line, role)
+  local by_role = strip_cells_cache[line]
+  if not by_role then
+    by_role = {}
+    for i = 1, #line do
+      local ch = line:sub(i, i)
+      local list = by_role[ch]
+      if not list then list = {}; by_role[ch] = list end
+      list[#list + 1] = i
+    end
+    strip_cells_cache[line] = by_role
+  end
+  return by_role[role]
+end
+
+local function heart_strip(line, role, horiz, at, from, len, u)
+  if len <= 0 then return end
+  local cells = strip_cells(line, role)
+  if not cells then return end
+  for k = 1, #cells do
+    local i = cells[k]
+    if horiz then
+      love.graphics.rectangle("fill", from, at + (i - 1) * u, len, u)
+    else
+      love.graphics.rectangle("fill", at + (i - 1) * u, from, u, len)
+    end
+  end
+end
+
+function Prims.heart_frame(x, y, w, h, u, pal, a)
+  a = a or 1
+  if a <= 0.01 then return end
+  local HF = HEART_FRAME
+  local out, tw = HF.out, #HF.tl[1]
+  -- Whole pixels keep the cell grid crisp and let the baked corners serve a panel mid-slide.
+  local x0, y0 = round(x - out * u), round(y - out * u)
+  local x1, y1 = round(x + w + (out - tw) * u), round(y + h - HF.bl_row0 * u)
+  local hx, hw = x0 + tw * u, x1 - x0 - tw * u
+  local vy, vh = y0 + #HF.tl * u, y1 - y0 - #HF.tl * u
+  for _, role in ipairs(STRIP_ROLES) do
+    local r, g, b, ca = heart_role_colour(role, pal)
+    love.graphics.setColor(r, g, b, ca * a)
+    heart_strip(HF.top, role, true, y0, hx, hw, u)
+    heart_strip(HF.bottom, role, true, y1, hx, hw, u)
+    heart_strip(HF.left, role, false, x0, vy, vh, u)
+    heart_strip(HF.right, role, false, x1, vy, vh, u)
+  end
+
+  local geom = heart_geom(u)
+  local tiles = geom.tiles
+  if bake_supported ~= false and bake_placement_ok(x0, y0) and bake_placement_ok(x1, y1) then
+    local e = bake_slot("heart", 0, u, rgb24(pal.DEEP), rgb24(pal.FRAME), rgb24(pal.ACCENT),
+      rgb24(pal.PRIMARY), rgb24(pal.FLASH_L), rgb24(pal.GLOW))
+    if not e.canvas then
+      e.canvas = bake_run(geom.w, geom.h, 0, 0, function()
+        for _, t in ipairs(tiles) do
+          paint_rects(t.by_role, HEART_ROLES, heart_role_colour, t.ax, t.ay, pal, 1)
+        end
+      end)
+      if e.canvas then
+        e.quads = {}
+        for i, t in ipairs(tiles) do
+          e.quads[i] = love.graphics.newQuad(t.ax, t.ay, t.w, t.h, geom.w, geom.h)
+        end
+      end
+    end
+    if e.canvas then
+      local mode, alphamode = love.graphics.getBlendMode()
+      love.graphics.setBlendMode("alpha", "premultiplied")
+      love.graphics.setColor(a, a, a, a)
+      for i = 1, 4 do
+        love.graphics.draw(e.canvas, e.quads[i], i % 2 == 1 and x0 or x1, i <= 2 and y0 or y1)
+      end
+      love.graphics.setBlendMode(mode, alphamode)
+      return
+    end
+  end
+  for i = 1, 4 do
+    paint_rects(tiles[i].by_role, HEART_ROLES, heart_role_colour, i % 2 == 1 and x0 or x1,
+      i <= 2 and y0 or y1, pal, a)
+  end
+end
+
+function Prims.heart_valance_span(x, w, u)
+  local inset = HEART_FRAME.inset * u
+  return x + inset, w - 2 * inset
+end
+
+local function tag_string_rects(w, u)
+  local list = {}
+  local dash = math.max(2, u * 2)
+  local dx = 0
+  while dx < w do
+    RectMesh.rect(list, dx, 0, math.min(dash, w - dx), 1, 1, 1, 1, 0.85)
+    dx = dx + dash * 2
+  end
+  return list
+end
+
+function Prims.tag_string(x, y, w, u, r, g, b, a, mesh_stable)
+  local mesh = mesh_stable and w > 0 and u > 0
+    and RectMesh.cached(deco, "tag_string", w, u, nil, nil, nil, nil, nil, nil, tag_string_rects, w, u)
+  RectMesh.fill(mesh, x, y, r, g, b, a, tag_string_rects, w, u)
 end
 function Prims.quatrefoil(cx, cy, r, gold, a, pulse)
   pulse = pulse or 0.5
@@ -1815,189 +1760,71 @@ function Prims.quatrefoil(cx, cy, r, gold, a, pulse)
   draw_px(QUATREFOIL_PX, cx, cy, s, gold, (0.80 + Prims.EVIL.PULSE_AMP * pulse) * a, BOW_WINE)
 end
 
-local function cornice_crenel_geom(w, u)
-  local ch = u * 4
-  local pitch = u * 12
-  local mw = u * 6
+local function cornice_rects(w, u, bg, gold)
+  local E = Prims.EVIL
+  local list = {}
+  local ch, pitch, mw = u * 4, u * 12, u * 6
   local n = math.floor(w / pitch)
-  local geom = { ch = ch, pitch = pitch, mw = mw, n = n,
-    band = { x = 0, y = -2, w = w, h = 2 },
-    hair = { x = 0, y = -1, w = w, h = 1 },
-    merlon_body = {}, merlon_top = {}, merlon_shade = {} }
+  RectMesh.rect(list, 0, -2, w, 2, bg[1], bg[2], bg[3], 0.97)
+  RectMesh.rect(list, 0, -1, w, 1, gold[1], gold[2], gold[3], E.A_HAIR)
   if n >= 2 then
     local x0 = math.floor((w - (n - 1) * pitch - mw) / 2)
-    geom.x0 = x0
+    for i = 0, n - 1 do RectMesh.rect(list, x0 + i * pitch, -ch, mw, ch, bg[1], bg[2], bg[3], 0.97) end
     for i = 0, n - 1 do
-      geom.merlon_body[#geom.merlon_body + 1] = { x = x0 + i * pitch, y = -ch, w = mw, h = ch }
+      RectMesh.rect(list, x0 + i * pitch, -ch, mw, 1, gold[1], gold[2], gold[3], E.A_ACCENT)
     end
-    for i = 0, n - 1 do
-      geom.merlon_top[#geom.merlon_top + 1] = { x = x0 + i * pitch, y = -ch, w = mw, h = 1 }
-    end
-    for i = 0, n - 1 do
-      geom.merlon_shade[#geom.merlon_shade + 1] = { x = x0 + i * pitch, y = -ch + 1, w = mw, h = 1 }
-    end
+    for i = 0, n - 1 do RectMesh.rect(list, x0 + i * pitch, -ch + 1, mw, 1, 0, 0, 0, 0.30) end
   end
-  return geom
-end
-
-local function build_cornice_crenel_mesh(w, u, bg, gold)
-  local vertices, indices = {}, {}
-  local geom = cornice_crenel_geom(w, u)
-  append_mesh_rect(vertices, indices, geom.band.x, geom.band.y, geom.band.w, geom.band.h, bg[1], bg[2], bg[3], 0.97)
-  append_mesh_rect(vertices, indices, geom.hair.x, geom.hair.y, geom.hair.w, geom.hair.h,
-    gold[1], gold[2], gold[3], Prims.EVIL.A_HAIR)
-  for _, rect in ipairs(geom.merlon_body) do
-    append_mesh_rect(vertices, indices, rect.x, rect.y, rect.w, rect.h, bg[1], bg[2], bg[3], 0.97)
-  end
-  for _, rect in ipairs(geom.merlon_top) do
-    append_mesh_rect(vertices, indices, rect.x, rect.y, rect.w, rect.h,
-      gold[1], gold[2], gold[3], Prims.EVIL.A_ACCENT)
-  end
-  for _, rect in ipairs(geom.merlon_shade) do
-    append_mesh_rect(vertices, indices, rect.x, rect.y, rect.w, rect.h, 0, 0, 0, 0.30)
-  end
-  return build_mesh(vertices, indices)
+  return list
 end
 
 function Prims.cornice_crenel(x, y, w, u, bg, gold, a, mesh_stable)
   if (a or 1) <= 0.01 then return end
-  if mesh_stable and w > 0 and u > 0 then
-    local mesh = deco_mesh_get("cornice_crenel", w, u,
-      bg[1], bg[2], bg[3], gold[1], gold[2], gold[3])
-    if not mesh and px_mesh_supported ~= false then
-      mesh = build_cornice_crenel_mesh(w, u, bg, gold)
-      if mesh then
-        deco_mesh_put("cornice_crenel", w, u,
-          bg[1], bg[2], bg[3], gold[1], gold[2], gold[3], mesh)
-      end
-    end
-    if mesh then
-      set_color_if_changed(1, 1, 1, a)
-      love.graphics.draw(mesh, x, y)
-      return
-    end
-  end
-  local geom = cornice_crenel_geom(w, u)
-  set_color_if_changed(bg[1], bg[2], bg[3], 0.97 * a)
-  love.graphics.rectangle("fill", x + geom.band.x, y + geom.band.y, geom.band.w, geom.band.h)
-  set_color_if_changed(gold[1], gold[2], gold[3], Prims.EVIL.A_HAIR * a)
-  love.graphics.rectangle("fill", x + geom.hair.x, y + geom.hair.y, geom.hair.w, geom.hair.h)
-  if geom.n < 2 then return end
-  set_color_if_changed(bg[1], bg[2], bg[3], 0.97 * a)
-  for _, rect in ipairs(geom.merlon_body) do
-    love.graphics.rectangle("fill", x + rect.x, y + rect.y, rect.w, rect.h)
-  end
-  set_color_if_changed(gold[1], gold[2], gold[3], Prims.EVIL.A_ACCENT * a)
-  for _, rect in ipairs(geom.merlon_top) do
-    love.graphics.rectangle("fill", x + rect.x, y + rect.y, rect.w, rect.h)
-  end
-  set_color_if_changed(0, 0, 0, 0.30 * a)
-  for _, rect in ipairs(geom.merlon_shade) do
-    love.graphics.rectangle("fill", x + rect.x, y + rect.y, rect.w, rect.h)
-  end
+  local mesh = mesh_stable and w > 0 and u > 0 and RectMesh.cached(deco, "cornice_crenel", w, u,
+    bg[1], bg[2], bg[3], gold[1], gold[2], gold[3], cornice_rects, w, u, bg, gold)
+  RectMesh.fill(mesh, x, y, 1, 1, 1, a, cornice_rects, w, u, bg, gold)
 end
 
 local OGIVE_STEPS = 4
-local function ogive_step_height(w, u)
-  return math.max(1, math.floor(math.min(u * 8, math.floor(w * 0.35)) / OGIVE_STEPS))
-end
 
-local function ogive_geom(w, u)
-  local sh = ogive_step_height(w, u)
+local function ogive_rects(w, u, gold)
+  local list = {}
+  local sa, gr, gg, gb = Prims.EVIL.A_STRUCT, gold[1], gold[2], gold[3]
+  local sh = math.max(1, math.floor(math.min(u * 8, math.floor(w * 0.35)) / OGIVE_STEPS))
   local half = math.floor(w / 2)
-  local steps = {}
   local wprev = half
   for i = 0, OGIVE_STEPS - 1 do
     local wi = math.floor(half * (OGIVE_STEPS - 1 - i) / OGIVE_STEPS)
     local y = i * sh
-    local step = { black = {
-      { x = 0, y = y, w = wi, h = sh },
-      { x = w - wi, y = y, w = wi, h = sh },
-    } }
+    RectMesh.rect(list, 0, y, wi, sh, 0, 0, 0, 0.35)
+    RectMesh.rect(list, w - wi, y, wi, sh, 0, 0, 0, 0.35)
     if wi > 0 then
-      step.vgold = {
-        { x = wi, y = y, w = 1, h = sh },
-        { x = w - wi - 1, y = y, w = 1, h = sh },
-      }
+      RectMesh.rect(list, wi, y, 1, sh, gr, gg, gb, sa)
+      RectMesh.rect(list, w - wi - 1, y, 1, sh, gr, gg, gb, sa)
     end
     if wprev > wi then
-      step.hgold = {
-        { x = wi, y = y, w = wprev - wi, h = 1 },
-        { x = w - wprev, y = y, w = wprev - wi, h = 1 },
-      }
+      RectMesh.rect(list, wi, y, wprev - wi, 1, gr, gg, gb, sa)
+      RectMesh.rect(list, w - wprev, y, wprev - wi, 1, gr, gg, gb, sa)
     end
-    steps[#steps + 1] = step
     wprev = wi
   end
-  return { sh = sh, half = half, steps = steps }
-end
-
-local function build_ogive_mesh(w, u, gold)
-  local vertices, indices = {}, {}
-  local sa = Prims.EVIL.A_STRUCT
-  local gr, gg, gb = gold[1], gold[2], gold[3]
-  local geom = ogive_geom(w, u)
-  for _, step in ipairs(geom.steps) do
-    for _, r in ipairs(step.black) do
-      append_mesh_rect(vertices, indices, r.x, r.y, r.w, r.h, 0, 0, 0, 0.35)
-    end
-    if step.vgold then
-      for _, r in ipairs(step.vgold) do
-        append_mesh_rect(vertices, indices, r.x, r.y, r.w, r.h, gr, gg, gb, sa)
-      end
-    end
-    if step.hgold then
-      for _, r in ipairs(step.hgold) do
-        append_mesh_rect(vertices, indices, r.x, r.y, r.w, r.h, gr, gg, gb, sa)
-      end
-    end
-  end
-  return build_mesh(vertices, indices)
+  return list
 end
 
 function Prims.ogive_top(x, y, w, u, gold, a, pulse)
   pulse = pulse or 0.5
   x, y, w = round(x), round(y), round(w)
   local E = Prims.EVIL
-  local half = math.floor(w / 2)
-  local mesh
-  if px_mesh_supported ~= false then
-    mesh = deco_mesh_get("ogive_top", w, u, gold[1], gold[2], gold[3])
-    if not mesh then
-      mesh = build_ogive_mesh(w, u, gold)
-      if mesh then deco_mesh_put("ogive_top", w, u, gold[1], gold[2], gold[3], nil, nil, nil, mesh) end
-    end
-  end
-  if mesh then
-    love.graphics.setColor(1, 1, 1, a)
-    love.graphics.draw(mesh, x, y)
-  else
-    local geom = ogive_geom(w, u)
-    for _, step in ipairs(geom.steps) do
-      love.graphics.setColor(0, 0, 0, 0.35 * a)
-      for _, r in ipairs(step.black) do
-        love.graphics.rectangle("fill", x + r.x, y + r.y, r.w, r.h)
-      end
-      love.graphics.setColor(gold[1], gold[2], gold[3], E.A_STRUCT * a)
-      if step.vgold then
-        for _, r in ipairs(step.vgold) do
-          love.graphics.rectangle("fill", x + r.x, y + r.y, r.w, r.h)
-        end
-      end
-      if step.hgold then
-        for _, r in ipairs(step.hgold) do
-          love.graphics.rectangle("fill", x + r.x, y + r.y, r.w, r.h)
-        end
-      end
-    end
-  end
-  Prims.draw_diamond(x + half, y - u * 3, u, gold, (E.A_ACCENT + E.PULSE_AMP * pulse) * a)
+  local mesh = RectMesh.cached(deco, "ogive_top", w, u, gold[1], gold[2], gold[3], nil, nil, nil,
+    ogive_rects, w, u, gold)
+  RectMesh.fill(mesh, x, y, 1, 1, 1, a, ogive_rects, w, u, gold)
+  Prims.draw_diamond(x + math.floor(w / 2), y - u * 3, u, gold, (E.A_ACCENT + E.PULSE_AMP * pulse) * a)
 end
 
 function Prims.chains(x, y0, y1, u, gold, a, sway)
   sway = sway or 0
   local s = math.max(1, round(u / 2))
-  local lh = s * 4   -- 1px less than link height so links overlap and interlock
+  local lh = s * 4   -- 1px shorter than a link so adjacent links interlock
   local n = math.max(2, math.floor((y1 - y0) / lh))
   local la = 0.60 * a
   for i = 0, n - 1 do
@@ -2006,7 +1833,7 @@ function Prims.chains(x, y0, y1, u, gold, a, sway)
     local ly = round(y0 + lh * i)
     draw_px(LINK_PX, lx, ly + s * 2, s, gold, la)
   end
-  love.graphics.setColor(gold[1], gold[2], gold[3], 0.80 * a)
+  set_col(gold, 0.80 * a)
   love.graphics.rectangle("fill", round(x) - 1, round(y0) - 1, 2, 2)
   love.graphics.rectangle("fill", round(x + sway) - 1, round(y1) - 1, 2, 2)
 end
@@ -2041,7 +1868,7 @@ end
 
 function Prims.photo_corners(x, y, w, h, col, a, arm)
   arm = arm or 3
-  love.graphics.setColor(col[1], col[2], col[3], a)
+  set_col(col, a)
   love.graphics.setLineWidth(1)
   local x1, y1 = x + w, y + h
   love.graphics.line(x, y + arm, x, y, x + arm, y)
@@ -2067,10 +1894,10 @@ function Prims.niche(x, y, w, h, u, gold, glow, pulse, a, arch)
   pulse = pulse or 0.5
   love.graphics.setColor(0, 0, 0, 0.45 * a)
   love.graphics.rectangle("fill", x, y, w, h)
-  love.graphics.setColor(glow[1], glow[2], glow[3], 0.05 * a)
+  set_col(glow, 0.05 * a)
   love.graphics.rectangle("fill", x, y + math.floor(h * 0.45), w, math.ceil(h * 0.55))
   Prims.counter_glow(x, y, w, h, gold, 0.9 * a, pulse, 0)
-  love.graphics.setColor(gold[1], gold[2], gold[3], 0.22 * a)
+  set_col(gold, 0.22 * a)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", x, y, w, h)
   if arch then Prims.ogive_top(x, y, w, u, gold, a, pulse) end
@@ -2079,9 +1906,9 @@ end
 function Prims.card_sleeve(x, y, w, h, u, acc, glow, shr, shg, shb, a)
   a = a or 1
   local rad = math.max(2, u * 3)
-  love.graphics.setColor(glow[1], glow[2], glow[3], 0.06 * a)
+  set_col(glow, 0.06 * a)
   love.graphics.rectangle("fill", x, y, w, h, rad, rad)
-  love.graphics.setColor(acc[1], acc[2], acc[3], 0.05 * a)
+  set_col(acc, 0.05 * a)
   love.graphics.rectangle("fill", x, y + math.floor(h * 0.6), w, math.ceil(h * 0.4), rad, rad)
   love.graphics.setColor(shr, shg, shb, 0.45 * a)
   love.graphics.setLineWidth(1)
@@ -2091,103 +1918,6 @@ function Prims.card_sleeve(x, y, w, h, u, acc, glow, shr, shg, shb, a)
   love.graphics.rectangle("line", x + u, y + u, w - u * 2, h - u * 2, ir, ir)
   love.graphics.setColor(1, 1, 1, 0.08 * a)
   love.graphics.rectangle("fill", x + rad, y + 1, w - rad * 2, 1)
-end
-
-local function valance_geom(w, u)
-  local n = math.max(4, math.floor(w / (u * 6)))
-  local sw = w / n
-  local r = sw / 2
-  return { n = n, sw = sw, r = r,
-    top = { { x = 0, y = 0, w = w, h = 1 }, { x = 0, y = 1, w = w, h = 1 } } }
-end
-
-local function build_valance_rect_mesh(cA, geom)
-  local vertices, indices = {}, {}
-  append_mesh_rect(vertices, indices, geom.top[1].x, geom.top[1].y, geom.top[1].w, geom.top[1].h,
-    cA[1], cA[2], cA[3], 0.50)
-  append_mesh_rect(vertices, indices, geom.top[2].x, geom.top[2].y, geom.top[2].w, geom.top[2].h, 1, 1, 1, 0.16)
-  return build_mesh(vertices, indices)
-end
-
-local function valance_draw(x, y, w, u, cA, cB, a, mesh_stable)
-  local geom = valance_geom(w, u)
-  local n, sw, r = geom.n, geom.sw, geom.r
-  local rect_mesh
-  if mesh_stable then
-    rect_mesh = deco_mesh_get("valance_rect", w, u,
-      cA[1], cA[2], cA[3], cB[1], cB[2], cB[3])
-    if not rect_mesh and px_mesh_supported ~= false then
-      rect_mesh = build_valance_rect_mesh(cA, geom)
-      if rect_mesh then
-        deco_mesh_put("valance_rect", w, u,
-          cA[1], cA[2], cA[3], cB[1], cB[2], cB[3], rect_mesh)
-      end
-    end
-  end
-  love.graphics.setLineWidth(1)
-  if rect_mesh then
-    love.graphics.setColor(1, 1, 1, a)
-    love.graphics.draw(rect_mesh, x, y)
-  else
-    love.graphics.setColor(cA[1], cA[2], cA[3], 0.50 * a)
-    love.graphics.rectangle("fill", x + geom.top[1].x, y + geom.top[1].y, geom.top[1].w, geom.top[1].h)
-    love.graphics.setColor(1, 1, 1, 0.16 * a)
-    love.graphics.rectangle("fill", x + geom.top[2].x, y + geom.top[2].y, geom.top[2].w, geom.top[2].h)
-  end
-  love.graphics.setColor(0, 0, 0, 0.16 * a)
-  for i = 0, n - 1 do
-    love.graphics.arc("fill", "pie", x + (i + 0.5) * sw, y + 1, r, 0, math.pi)
-  end
-  local ar, ag, ab = lift_capped(cA)
-  local br, bg2, bb = lift_capped(cB)
-  for parity = 0, 1 do
-    local pr, pg, pb = ar, ag, ab
-    if parity == 1 then pr, pg, pb = br, bg2, bb end
-    love.graphics.setColor(pr, pg, pb, 0.62 * a)
-    for i = parity, n - 1, 2 do
-      love.graphics.arc("fill", "pie", x + (i + 0.5) * sw, y, r, 0, math.pi)
-    end
-  end
-  for parity = 0, 1 do
-    local pr, pg, pb = ar, ag, ab
-    if parity == 1 then pr, pg, pb = br, bg2, bb end
-    love.graphics.setColor(pr * 0.5, pg * 0.5, pb * 0.55, 0.5 * a)
-    for i = parity, n - 1, 2 do
-      love.graphics.arc("line", "open", x + (i + 0.5) * sw, y, r - 0.5, 0.12, math.pi - 0.12)
-    end
-  end
-  love.graphics.setColor(1, 1, 1, 0.22 * a)
-  for i = 0, n - 1 do
-    love.graphics.arc("line", "open", x + (i + 0.5) * sw, y, r - 1.5, math.pi * 0.58, math.pi * 0.86)
-  end
-  love.graphics.setColor(1, 1, 1, 0.55 * a)
-  for i = 0, n do
-    love.graphics.circle("fill", x + i * sw, y, math.max(1, u * 0.7))
-  end
-end
-
-function Prims.valance(x, y, w, u, cA, cB, a, mesh_stable)
-  if (a or 1) <= 0.01 then return end
-  a = a or 1
-  if w < u * 10 then return end
-  if mesh_stable and bake_supported ~= false and bake_placement_ok(x, y) then
-    local e = bake_slot("valance", w, u, a, cA[1], cA[2], cA[3], cB[1], cB[2], cB[3])
-    if e then
-      if not e.canvas then
-        local r = valance_geom(w, u).r
-        local pad = math.ceil(math.max(1, u * 0.7)) + 2
-        e.ox, e.oy = pad, pad
-        e.canvas = bake_run(math.ceil(w) + pad * 2, pad + math.ceil(r) + 3, pad, pad,
-          function(ox, oy) valance_draw(ox, oy, w, u, cA, cB, a, false) end)
-      end
-      if e.canvas then
-        love.graphics.setLineWidth(1)
-        bake_draw(e.canvas, x - e.ox, y - e.oy)
-        return
-      end
-    end
-  end
-  valance_draw(x, y, w, u, cA, cB, a, mesh_stable)
 end
 
 function Prims.petals(x, y, w, h, u, now, a, n)
@@ -2227,28 +1957,15 @@ local HEART_SEAL_PX = parse_px({
   "....O....",
 })
 
-function Prims.heart_seal(cx, cy, r, pg, acc, a, pop)
-  a = a or 1; pop = pop or 1
+function Prims.heart_seal(cx, cy, r, pg, acc, a)
+  a = a or 1
   cx, cy = round(cx), round(cy)
-  local s  = math.max(1, round(r * 2 / 9 * pop))
+  local s  = math.max(1, round(r * 2 / 9))
   local hr = s * 5
-  love.graphics.setColor(pg[1], pg[2], pg[3], 0.14 * a)
+  set_col(pg, 0.14 * a)
   love.graphics.rectangle("fill", cx - hr, cy - hr, hr * 2, hr * 2, hr, hr)
   draw_px(HEART_SEAL_PX, cx, cy, s, pg, 0.95 * a, acc, WHITE_C, true)
   Prims.draw_sparkle(cx + s * 2, cy - s * 3, math.max(1, s * 1.5), WHITE_C, 0.7 * a)
-end
-
--- The chunk's mesh and canvas caches live in locals; a reload replaces its functions.
-function Prims._hot_reload_release()
-  for i = 1, #deco_mesh_cache do
-    release_deco_mesh(deco_mesh_cache[i] and deco_mesh_cache[i].mesh)
-  end
-  deco_mesh_cache = {}
-  for i = 1, #bake_cache do
-    local c = bake_cache[i] and bake_cache[i].canvas
-    if c and c.release then pcall(c.release, c) end
-  end
-  bake_cache = {}
 end
 
 return Prims
