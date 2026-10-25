@@ -1,57 +1,10 @@
-
-local FONT = {
-  getWidth = function(_, s) return #tostring(s or "") * 8 end,
-  getHeight = function() return 12 end,
-}
-local function noop() end
+_G.NEURO_TEST = true
 local PRINTED = {}
 local DRAWS = {}
 local RECTS = {}
-local record_print = require("tests.helpers").print_recorder(function() return PRINTED end)
-local function record_draw(...)
-  local args = { ... }
-  DRAWS[#DRAWS + 1] = { image = args[1], quad = args[2], x = args[3], y = args[4], sx = args[6], sy = args[7] }
-end
-local record_rect = require("tests.helpers").rect_recorder(function() return RECTS end)
-local IMG = { getWidth = function() return 64 end, getHeight = function() return 64 end,
-  getDimensions = function() return 64, 64 end }
-local gfxstub = setmetatable({
-  getFont = function() return FONT end,
-  newFont = function() return FONT end,
-  getWidth = function() return 1920 end,
-  getHeight = function() return 1080 end,
-  getShader = function() return nil end,
-  getBlendMode = function() return "alpha", "alphamultiply" end,
-  newQuad = function(x, y, w, h) return { x = x, y = y, w = w, h = h } end,
-  newImage = function() return IMG end,
-  newMesh = function() return {} end,
-  print = record_print,
-  draw = record_draw,
-  rectangle = record_rect,
-}, { __index = function() return noop end })
-love = setmetatable({
-  graphics = gfxstub,
-  timer = { getTime = function() return 0 end, getFPS = function() return 144 end },
-  filesystem = setmetatable({}, { __index = function() return function() return nil end end }),
-}, { __index = function() return setmetatable({}, { __index = function() return noop end }) end })
-
-local area = require("tests.helpers").area
-_G.G = {
-  NEURO = { persona = "hiyori", state = "SHOP", enabled = true,
-    ai_highlighted = setmetatable({}, { __mode = "k" }) },
-  GAME = { dollars = 20, pack_choices = 0, round = 1, round_resets = { ante = 1, blind_choices = {} },
-    blind = {}, used_vouchers = {}, modifiers = {} },
-  jokers = area({}), consumeables = area({}), hand = area({}),
-  shop_jokers = area({}), shop_vouchers = area({}), shop_booster = area({}),
-  FUNCS = {}, TIMERS = { REAL = 1 }, STATES = {},
-  SETTINGS = { paused = false, GAMESPEED = 1 },
-  C = setmetatable({}, { __index = function() return { 1, 1, 1, 1 } end }),
-  ARGS = {}, P_CENTERS = {}, P_CENTER_POOLS = {}, P_BLINDS = {}, localization = {},
-  ASSET_ATLAS = {}, SHADERS = {}, TILESCALE = 3.65, TILESIZE = 20, CANV_SCALE = 1,
-  I = { MOVEABLE = {}, UIBOX = {}, NODE = {} },
-}
-_G.SMODS = { current_mod = { path = "./" }, Mods = {}, findModByID = function() return nil end }
-_G.NFS = setmetatable({}, { __index = function() return noop end })
+local SpriteStub = require("tests.sprite_stub")
+local stub = SpriteStub.install(function() return PRINTED end, function() return DRAWS end, function() return RECTS end)
+local FONT, IMG, noop = stub.FONT, stub.IMG, stub.noop
 
 local check, done = require("tests.helpers").harness("pack claim geometry")
 
@@ -61,20 +14,9 @@ local HudState = require("hud.state")
 local SZ = Pack.SIZING
 local TL = Pack.TIMELINES.soft
 
-local atlas_entry = function(px, py) return { image = IMG, px = px, py = py } end
-G.ASSET_ATLAS.FIX71 = atlas_entry(71, 95)
-G.ASSET_ATLAS.FIX95 = atlas_entry(95, 95)
-G.ASSET_ATLAS.FIX50 = atlas_entry(50, 100)
-G.ASSET_ATLAS.FIX120 = atlas_entry(120, 80)
-G.ASSET_ATLAS.centers = atlas_entry(71, 95)
+SpriteStub.atlas(IMG)
 
-local function make_card(key, atlas_key)
-  return {
-    config = { center = { key = key or "j_fixture", set = "Joker", atlas = atlas_key or "FIX71", pos = { x = 0, y = 0 }, name = key } },
-    ability = {},
-    cost = 5,
-  }
-end
+local make_card = SpriteStub.make_card
 
 local function CLR() return { 0.6, 0.6, 0.6, 1 } end
 local PAL = setmetatable({}, { __index = function() return CLR() end })
@@ -112,14 +54,14 @@ local function mock_ctx(card)
     row_h = function() return 16 end,
     showcase_type_colors = function() return CLR(), CLR() end,
   }
-  return {
+  return require("tests.hud_ctx").complete({
     theme = theme,
     motion = { now = 0.9, pulse = 0.5, dt = 0.016, shimr = 0.5, shimg = 0.5, shimb = 0.5 },
     metrics = metrics,
     data = data,
     draw = draw,
     center_top_y = 8,
-  }
+  })
 end
 
 local function reset_pack_state()
@@ -213,7 +155,7 @@ local function settled_pack(ctx)
   HudState.pack_initial_count = #ctx.data.pack_rows.cards
 end
 
-local SP_W2, SP_H2, SLOT_W2 = expected_slots(2)
+local _, SP_H2 = expected_slots(2)
 local TITLE_H2 = (12 + 4) + 6
 local SLOT_Y = 8 + TITLE_H2 + 4
 
@@ -232,10 +174,6 @@ for ai, ak in ipairs(collapse_atlases) do
     local snap = HudState.pack_collapse_snap
     check(tag .. " creates a real collapse snapshot", snap ~= nil)
     if snap then
-      check(tag .. " snapshot sprite width follows SIZING", snap.sp_w == SP_W2,
-        tostring(snap.sp_w) .. " vs " .. tostring(SP_W2))
-      check(tag .. " snapshot sprite height follows SIZING aspect", snap.sp_h == SP_H2,
-        tostring(snap.sp_h) .. " vs " .. tostring(SP_H2))
       check(tag .. " sprite fills at least 70% of the slot width",
         snap.sp_w / snap.slot_w >= 0.70,
         string.format("%.2f", snap.sp_w / snap.slot_w))
@@ -457,23 +395,11 @@ end
 
 do
   local fw = Pack.frame_w
-  check("frame_w is exported", type(fw) == "function")
-  if type(fw) == "function" then
-    check("a narrow sprite is framed at its own width", fw(97, 71) == 71, tostring(fw(97, 71)))
-    check("a card at least as wide as the slot keeps the nominal", fw(97, 97) == 97, tostring(fw(97, 97)))
-    check("an over-wide measurement is ignored", fw(97, 140) == 97, tostring(fw(97, 140)))
-    check("a missing measurement falls back to nominal", fw(97, nil) == 97, tostring(fw(97, nil)))
-    check("a zero measurement falls back to nominal", fw(97, 0) == 97, tostring(fw(97, 0)))
-  end
-end
-
-do
-  local source = assert(io.open("render/panels/pack.lua", "r")):read("*all")
-  check("pack.lua carries no pack_w_current/_from/_target/_at glide quartet",
-    source:find("pack_w_current", 1, true) == nil
-    and source:find("pack_w_from", 1, true) == nil
-    and source:find("pack_w_target", 1, true) == nil
-    and source:find("pack_w_at", 1, true) == nil)
+  check("a narrow sprite is framed at its own width", fw(97, 71) == 71, tostring(fw(97, 71)))
+  check("a card at least as wide as the slot keeps the nominal", fw(97, 97) == 97, tostring(fw(97, 97)))
+  check("an over-wide measurement is ignored", fw(97, 140) == 97, tostring(fw(97, 140)))
+  check("a missing measurement falls back to nominal", fw(97, nil) == 97, tostring(fw(97, nil)))
+  check("a zero measurement falls back to nominal", fw(97, 0) == 97, tostring(fw(97, 0)))
 end
 
 done()

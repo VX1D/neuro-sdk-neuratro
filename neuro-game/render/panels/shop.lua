@@ -15,15 +15,12 @@ local Rows = require("hud.rows")
 local SHOP_OVERHANG = 8
 
 local SHIM_C = { 0, 0, 0 }
-local PRICE_WHITE = { 1, 1, 1 }
 
-local PIN_MO = { pulse = 0.5 }
-local function pin_mo(mo)
-  PIN_MO.pulse = (mo and mo.pulse) or 0.5
-  return PIN_MO
-end
+local pin_mo = H.pin_motion()
+local LP_FRAME_OPTS = { skip_body = true, glow = true, quiet = true, body_wash_a = 0.014 }
 local CardUtil = require("facts.card_util")
 local StateKinds = require("core.state_kinds")
+local Gate = require("core.gate")
 
 local _rr_cur, _rr_seen = {}, {}
 
@@ -71,63 +68,17 @@ local function measure_rows(rows)
   return total
 end
 
-local CACHE_MAX = 128
-
-local _slot_w, _slot_w_n, _slot_w_font = {}, 0, nil
-local function price_slot_w(price_txt, font)
-  if font ~= _slot_w_font then _slot_w, _slot_w_n, _slot_w_font = {}, 0, font end
-  local w = _slot_w[price_txt]
-  if w then return w end
+local price_slot_w = H.memo(128, function(price_txt, font)
   local tpl = price_txt:gsub("%d", "0")
-  if #tpl < 3 then tpl = "$00" end   -- reserve >= 2 digits so $1..$99 never pops the plate
-  w = font:getWidth(tpl)
-  if _slot_w_n >= CACHE_MAX then _slot_w, _slot_w_n = {}, 0 end
-  _slot_w[price_txt] = w
-  _slot_w_n = _slot_w_n + 1
-  return w
-end
+  if #tpl < 3 then tpl = "$00" end
+  return font:getWidth(tpl)
+end)
+local money_d = H.memo(128, function(n) return "$" .. tostring(n) end)
+local money_rr = H.memo(128, function(n) return "RR $" .. tostring(n) end)
+local hdr_key = H.memo(128, function(i) return "shop_hdr" .. i end)
+local header_label = H.memo(128, function(text) return ((text):gsub("^Shop:%s*", "")):upper() end)
 
-local _money_txt, _money_txt_n = {}, 0
-local function money_text(prefix, n)
-  local per = _money_txt[prefix]
-  if not per then per = {}; _money_txt[prefix] = per end
-  local t = per[n]
-  if t then return t end
-  t = prefix .. tostring(n)
-  if _money_txt_n >= CACHE_MAX then _money_txt, _money_txt_n = {}, 0; _money_txt[prefix] = { [n] = t } end
-  per[n] = t
-  _money_txt_n = _money_txt_n + 1
-  return t
-end
-
-local _hdr_keys = {}
-local function hdr_key(i)
-  local k = _hdr_keys[i]
-  if not k then k = "shop_hdr" .. i; _hdr_keys[i] = k end
-  return k
-end
-
-local _hdr_label, _hdr_label_n = {}, 0
-local function header_label(text)
-  local label = _hdr_label[text]
-  if label then return label end
-  label = ((text):gsub("^Shop:%s*", "")):upper()
-  if _hdr_label_n >= CACHE_MAX then _hdr_label, _hdr_label_n = {}, 0 end
-  _hdr_label[text] = label
-  _hdr_label_n = _hdr_label_n + 1
-  return label
-end
-
-local _sig_a, _sig_b, _sig_c, _sig_d, _sig_e, _sig_s
-local _sig_parts = {}
-local function layout_sig(a, b, c, d, e)
-  if a ~= _sig_a or b ~= _sig_b or c ~= _sig_c or d ~= _sig_d or e ~= _sig_e or not _sig_s then
-    _sig_a, _sig_b, _sig_c, _sig_d, _sig_e = a, b, c, d, e
-    _sig_parts[1], _sig_parts[2], _sig_parts[3], _sig_parts[4], _sig_parts[5] = a, b, c, d, e
-    _sig_s = table.concat(_sig_parts, ":")
-  end
-  return _sig_s
-end
+local layout_sig = H.sig_memo()
 
 local _hud
 local function hud_layout()
@@ -145,6 +96,12 @@ local function size_badges(metrics, content_w, rows, ln, card_line_h)
       r.badge_w = math.max(20, content_w - (r.indent or 0) - (cw or 0) - ln(8))
     end
   end
+end
+
+local function rule_rects(segw)
+  local list = {}
+  for k = 0, 2 do RectMesh.rect(list, k * segw, 0, math.ceil(segw), 1, 1, 1, 1, 0.34 - k * 0.09) end
+  return list
 end
 
 local function draw_shop_panel(ctx)
@@ -172,9 +129,9 @@ local function draw_shop_panel(ctx)
   local leave_stag = math.min(Motion.STAGGER_TIGHT, Motion.MED / math.max(1, snap_n - 1))
   local leave_span = Motion.MED + math.max(0, snap_n - 1) * leave_stag
 
-  local sn = da.sn or ""
-  local parked = (not shop_visible) and snap_n > 0
-    and StateKinds.is_shop_interlude(sn) and not StateKinds.is_pack_state(sn)
+  local sn = da.sn
+  local parked = (not shop_visible) and snap_n > 0 and sn ~= "SHOP"
+    and Gate.shop_visit_open() and not StateKinds.is_pack_state(sn)
   local on_stage = shop_visible or parked
 
   if on_stage then
@@ -236,8 +193,7 @@ local function draw_shop_panel(ctx)
   if on_stage or leaving then
     if not shop_visible then shop_rows = S.shop_leave_snap end
     local lp_w = ln(380)
-    local lp_x
-    local lp_y = p_y
+    local lp_x, lp_y
     local lp_pad_x = ln(GUT)
     local l_U = ln(U)
     local l_accw = ln(ACCENT_W)
@@ -274,21 +230,19 @@ local function draw_shop_panel(ctx)
     lp_metrics.small_font, lp_metrics.wrap = lp_small_font, wrapped_lines
     lp_metrics.badge_gap = ln(2)
     lp_metrics.badge_unit = ln(1)
-    -- measure_rows sizes row height from this, so it has to settle before that pass, not in draw.
+    -- Settle this before measure_rows; doing it in draw would leave row heights stale.
     size_badges(lp_metrics, lp_content_w, shop_rows, ln, lp_card_line_h)
     local lp_data_h = ln(8) + measure_rows(shop_rows)
     local lp_title_h = ln(44)
     local lp_total_h = lp_title_h + lp_data_h
-    local anchor = me.anchor or "auto"
-    local shop_anchor = me.shop_anchor or "auto"
+    local anchor = me.anchor
+    local shop_anchor = me.shop_anchor
     local shop_free = shop_anchor ~= "auto"
     local lp_avail_h
     if shop_free then
       lp_avail_h = hud_layout().panel_available_height(shop_anchor, me.shop_offset_y, sh, 0)
     else
-      local anchored_full_height = anchor:sub(1, 6) == "middle" or anchor:sub(1, 6) == "bottom"
-      local lp_y_stable = me.p_y_target_stable or lp_y
-      lp_avail_h = anchored_full_height and math.max(1, sh - 16) or math.max(1, sh - lp_y_stable - 10)
+      lp_avail_h = hud_layout().shop_auto_avail(anchor, sh, me.p_y_target_stable)
     end
     local lp_pref_h = math.min(lp_avail_h, math.floor(sh * 0.72))
     S.lp_compact = Rows.want_compact(S.lp_compact, lp_total_h, lp_pref_h)
@@ -301,16 +255,10 @@ local function draw_shop_panel(ctx)
       lp_hdr_line_h = lp_metrics.header_line_h
       size_badges(lp_metrics, lp_content_w, shop_rows, ln, lp_card_line_h)
       lp_data_h = ln(8) + measure_rows(shop_rows)
-      lp_total_h = lp_title_h + lp_data_h
-      if lp_total_h > lp_avail_h then
-        local avail_data = math.max(lp_card_line_h, lp_avail_h - lp_title_h - ln(8))
-        local used_h
-        lp_cols, used_h = Rows.pack_columns(shop_rows, lp_metrics, avail_data, 3, _row_hs)
-        lp_total_h = lp_title_h + ln(8) + used_h
-        if lp_total_h > lp_avail_h then lp_total_h = lp_avail_h end
-      end
+      lp_cols, lp_total_h = Rows.fit_columns(shop_rows, lp_metrics, _row_hs, lp_title_h, ln(8), 0, lp_avail_h,
+        lp_title_h + lp_data_h)
     end
-    local dt = mo.dt or 0.016
+    local dt = mo.dt
     if S.shop_h_current == nil then
       S.shop_h_current = lp_total_h
     elseif not leaving then
@@ -319,7 +267,7 @@ local function draw_shop_panel(ctx)
     local lp_total_h_target = lp_total_h
     lp_total_h = round(S.shop_h_current)
     local lp_cols_used = lp_cols
-    local lp_sig = layout_sig(sw, sh, shop_anchor, me.shop_offset_x or 0, lp_w)
+    local lp_sig = layout_sig(sw, sh, shop_anchor, me.shop_offset_x, lp_w)
     local lp_hard_cap = math.max(1, math.floor((sw - 16) / math.max(1, lp_w)))
     S.lp_cols_latch, lp_cols =
       Rows.latch_columns(S.lp_cols_latch, lp_cols, lp_sig, math.min(3, lp_hard_cap))
@@ -329,26 +277,8 @@ local function draw_shop_panel(ctx)
       lp_x_target, lp_y_target, shop_side = hud_layout().panel_layout(
         shop_anchor, me.shop_offset_x, me.shop_offset_y, sw, sh, lp_w_total, lp_total_h, 0)
     else
-      shop_side = me.main_side == "left" and "right" or "left"
-      local auto_inset = sw * (tonumber(me.shop_offset_x or me.offset_x) or 0) / 100
-      lp_x_target = shop_side == "left"
-        and (8 + auto_inset)
-        or (sw - lp_w_total - 8 - auto_inset)
-      if shop_side == "left" then
-        lp_x_target = math.min(lp_x_target, p_x - lp_w_total - 8)
-      else
-        lp_x_target = math.max(lp_x_target, p_x + pw_total + 8)
-      end
-      lp_x_target = clamp(round(lp_x_target), 8, math.max(8, sw - lp_w_total - 8))
-      local dy = sh * (tonumber(me.shop_offset_y or me.offset_y) or 0) / 100
-      if anchor:sub(1, 6) == "middle" then
-        lp_y_target = (sh - lp_total_h) / 2 + dy
-      elseif anchor:sub(1, 6) == "bottom" then
-        lp_y_target = sh - lp_total_h - 8 + dy
-      else
-        lp_y_target = p_y + (sh * (tonumber(me.shop_offset_y) or 0) / 100)
-      end
-      lp_y_target = clamp(round(lp_y_target), 8, math.max(8, sh - lp_total_h - 8))
+      lp_x_target, lp_y_target, shop_side = hud_layout().shop_auto_layout(anchor, me.main_side,
+        p_x, pw_total, p_y, me.shop_offset_x, me.shop_offset_y, sw, sh, lp_w_total, lp_total_h)
     end
     Motion.snap(S, "shop_x", lp_x_target)
     Motion.approach(S, "shop_y", lp_y_target, dt, Motion.MED / 4)
@@ -358,8 +288,6 @@ local function draw_shop_panel(ctx)
     local lp_dx = round(shop_slide_dir * (lp_w_total + 20) * S.left_panel_slide_frac)
     local lp_pushed = S.left_panel_slide_frac > 0
 
-    -- Off-screen skip (like right panel's rp_on_screen, hud_overlay.lua:834): now reachable because
-    -- the exit keeps this panel alive and translated off-frame for Motion.MED.
     local lp_span0, lp_span1 = lp_x + lp_dx, lp_x + lp_dx + lp_w_total
     local lp_on_screen = (lp_span0 - SHOP_OVERHANG) < sw and (lp_span1 + SHOP_OVERHANG) > 0
     if lp_on_screen then
@@ -368,9 +296,8 @@ local function draw_shop_panel(ctx)
       love.graphics.translate(lp_dx, 0)
     end
 
-    local lprad, lp_tiled = H.persona_frame(th, mo, lp_x, lp_y, lp_w_total, lp_total_h, ln(1),
-      { a = sa, sh = lp_sh, rad = ln(9), title_h = lp_title_h, skip_body = true,
-        glow = true, quiet = true, body_wash_a = 0.014 })
+    LP_FRAME_OPTS.a, LP_FRAME_OPTS.sh, LP_FRAME_OPTS.title_h = sa, lp_sh, lp_title_h
+    local lp_tiled = H.persona_frame(th, mo, lp_x, lp_y, lp_w_total, lp_total_h, ln(1), LP_FRAME_OPTS)
     local ev_flare = persona_evil and buy_flare01(now) or 0
     if persona_evil then
       if not lp_tiled then
@@ -384,26 +311,14 @@ local function draw_shop_panel(ctx)
       H.evil_frame(lp_x, lp_y, lp_w_total, lp_total_h, ln(1), lp_title_h, GOLD, pg, bg, pulse, now, sa, ev_flare, 0.5)
       Prims.candle_finial(lp_x + math.floor(lp_w_total / 2), lp_y + lp_title_h - ln(3), ln(1), GOLD, sa, now, ev_flare)
     elseif persona_neuro then
-      Prims.counter_glow(lp_x, lp_y, lp_w_total, lp_total_h, pg, sa, pulse, lprad)
-      Prims.awning(lp_x + lprad, lp_y + 1, lp_w_total - lprad * 2, ln(1), ACC, pg, sa, true)
+      local aw_x, aw_w = Prims.heart_valance_span(lp_x, lp_w_total, ln(1))
+      Prims.awning(aw_x, lp_y + ln(1), aw_w, ln(1), th._pal, sa)
       local bsc = 1
       local bs = S.buy_showcase
       if bs and bs.started then
-        local bage = now - bs.started
         bsc = 1 + 0.10 * H.buy_pop01(now)
-        if bage >= 0 and bage < 0.5 then
-          local pk = math.sin(math.pi * (bage / 0.5))
-          Prims.draw_sparkle(lp_x + lp_w_total - ln(26), lp_y + ln(9), ln(2) + pk * ln(3), pg, 0.8 * pk * sa)
-        end
       end
       Prims.draw_bow_mini(lp_x + math.floor(lp_w_total / 2), lp_y + ln(3), ln(1) * 0.9 * bsc, ACC, 0.9 * sa, pg)
-      for si = 1, 3 do
-        local sxr = 0.5 + 0.5 * math.sin(si * 78.233 + 0.4)
-        local tw2 = Prims.twinkle01(now, si)
-        local sx3 = lp_x + math.floor(lp_w_total * 0.5) + sxr * (lp_w_total * 0.34)
-        local sy3 = lp_y + math.floor(lp_title_h * 0.55) + (0.5 + 0.5 * math.sin(si * 39.425 + 1.7)) * ln(8)
-        Prims.draw_sparkle(sx3, sy3, ln(2) + tw2 * ln(2), (si % 2 == 0) and pg or ACC, 0.45 * tw2 * sa)
-      end
     end
 
     love.graphics.setFont(th.lfont_title)
@@ -429,12 +344,12 @@ local function draw_shop_panel(ctx)
       local pfh = pf:getHeight()
       local iy = lp_y + math.floor((lp_title_h - pfh) / 2)
       love.graphics.setFont(pf)
-      local m_txt = money_text("$", money)
+      local m_txt = money_d(money)
       local m_w = pf:getWidth(m_txt)
       local m_x = lp_x + lp_w_total - lp_pad_x - m_w
       local r_txt, r_w
       if type(rr) == "number" then
-        r_txt = money_text("RR $", rr)
+        r_txt = money_rr(rr)
         r_w = pf:getWidth(r_txt)
       end
       if persona_evil then
@@ -442,7 +357,7 @@ local function draw_shop_panel(ctx)
         love.graphics.setColor(0, 0, 0, 0.32 * sa)
         love.graphics.rectangle("fill", m_x - ln(5) - ext, iy - ln(2), m_w + ln(10) + ext, pfh + ln(4))
       end
-      local m_ox = ln(1)  -- 4-way outline keeps the number legible over ember/glow washes
+      local m_ox = ln(1)
       local m_col = GOLD
       if persona_neuro or persona_evil then
         SHIM_C[1], SHIM_C[2], SHIM_C[3] = shimr, shimg, shimb
@@ -472,7 +387,24 @@ local function draw_shop_panel(ctx)
             local rt2 = (now - S.rr_stab_at) / 0.35
             if rt2 >= 0 and rt2 < 1 then rpop = math.sin(math.pi * rt2) end
           end
-          Prims.draw_sparkle(r_x - ln(7), r_cy, ln(2) + rpop * ln(2), pg, (0.7 + 0.25 * rpop) * sa)
+          if rpop > 0 then
+            Prims.draw_sparkle(r_x - ln(7), r_cy, ln(2) + rpop * ln(2), pg, (0.7 + 0.25 * rpop) * sa)
+          end
+        end
+      end
+      if persona_neuro then
+        local gap_l = sh_tx + sh_nw + ln(16)
+        local gap_r = (r_txt and (m_x - ln(10) - r_w) or m_x) - ln(14)
+        if gap_r - gap_l > ln(10) then
+          local span = gap_r - gap_l - ln(10)
+          H.buy_sparkle(now, gap_r - ln(5), lp_y + ln(9), ln(2), ln(3), pg, sa)
+          for si = 1, 3 do
+            local sxr = 0.5 + 0.5 * math.sin(si * 78.233 + 0.4)
+            local tw2 = Prims.twinkle01(now, si)
+            local sx3 = gap_l + ln(5) + sxr * span
+            local sy3 = lp_y + math.floor(lp_title_h * 0.55) + (0.5 + 0.5 * math.sin(si * 39.425 + 1.7)) * ln(8)
+            Prims.draw_sparkle(sx3, sy3, ln(2) + tw2 * ln(2), (si % 2 == 0) and pg or ACC, 0.45 * tw2 * sa)
+          end
         end
       end
       love.graphics.setFont(lfont)
@@ -558,9 +490,11 @@ local function draw_shop_panel(ctx)
         love.graphics.rectangle("fill", lx + lp_pad_x + indent - ln(6), lcy + 1, l_accw, cur_h - 3)
         love.graphics.setFont(lp_small_font)
         local sf = lp_small_font
-        local lines = wrapped_lines(txt, math.max(20, lp_content_w - indent), sf)
-        draw_desc_lines(lines, math.min(#lines, Rows.DESC_MAX_LINES),
-          lx + lp_pad_x + indent, lcy, lp_small_line_h, 0.92 * row_sa, sf)
+        local wrap_w = math.max(20, lp_content_w - indent)
+        local lines = wrapped_lines(txt, wrap_w, sf)
+        local n_lines = math.min(#lines, Rows.DESC_MAX_LINES)
+        if persona_neuro then lines = dr.clip_lines(lines, n_lines, wrap_w, sf) end
+        draw_desc_lines(lines, n_lines, lx + lp_pad_x + indent, lcy, lp_small_line_h, 0.92 * row_sa, sf)
         love.graphics.setFont(lp_font)
         lcy = lcy + cur_h
       elseif r.kind == "shopcard" then
@@ -599,7 +533,7 @@ local function draw_shop_panel(ctx)
         end
         local name_x = sprite_x + (mini_w > 0 and mini_w or est_w) + ln(8)
 
-        local price_txt = money_text("$", cost)
+        local price_txt = money_d(cost)
         local pfont2 = lp_small_font or lp_font
         love.graphics.setFont(pfont2)
         local pw2 = pfont2:getWidth(price_txt)
@@ -607,18 +541,15 @@ local function draw_shop_panel(ctx)
         local pty = lcy + math.floor((lp_card_line_h - pfh2) / 2)
         local slot_w = price_slot_w(price_txt, pfont2)
         local ptx = row_x2 - pw2
-        local slot_x = row_x2 - slot_w                   -- plate geometry anchors to the reserved slot, not live width
+        local slot_x = row_x2 - slot_w                   -- anchor to the reserved slot, not its live width
         local price_left
         if persona_neuro then
           local tx0 = slot_x - ln(4)
           local ty0 = pty - ln(1)
           local tw3 = slot_w + ln(8)
           local th3 = pfh2 + ln(2)
-          local tmy = ty0 + math.floor(th3 / 2)
           love.graphics.setColor(shimr, shimg, shimb, (afford and 0.55 or 0.25) * row_sa)
           love.graphics.rectangle("line", tx0, ty0, tw3, th3, ln(2), ln(2))
-          love.graphics.line(tx0 - ln(4), tmy, tx0, tmy)
-          love.graphics.circle("fill", tx0 - ln(4), tmy, 1.2)
           price_left = tx0 - ln(6)
         elseif persona_evil then
           local seal_cx = slot_x - ln(8)
@@ -657,9 +588,9 @@ local function draw_shop_panel(ctx)
         price_left = price_left - lock_w
         local price_col, price_a
         if afford then
-          price_col, price_a = persona_neuro and PRICE_WHITE or GOLD, 0.96 * row_sa
+          price_col, price_a = persona_neuro and Prims.WHITE or GOLD, 0.96 * row_sa
         else
-          price_col, price_a = DIM, 0.70 * row_sa
+          price_col, price_a = DIM, (persona_neuro and 0.96 or 0.70) * row_sa
         end
         shadow_text(price_txt, ptx, pty, price_col, price_a, 0.35 * row_sa, ln(1))
         love.graphics.setFont(lp_font)
@@ -677,14 +608,15 @@ local function draw_shop_panel(ctx)
               or name_col
           end
         end
-        shadow_text(lp_txt, name_x, row_cy, name_rc, (afford and 0.98 or 0.72) * row_sa, 0.42 * row_sa, ln(1))
+        shadow_text(lp_txt, name_x, row_cy, name_rc, ((afford or persona_neuro) and 0.98 or 0.72) * row_sa,
+          0.42 * row_sa, ln(1))
         if r.badges and #r.badges > 0 then
           local badge_w = r.badge_w or math.max(1, row_x2 - name_x)
           local ok_badges, badge_layout = pcall(Rows.badge_layout,
             r.card, r.badges, lp_small_font, badge_w, ln(1), 1)
           if ok_badges and badge_layout then
             draw_modifier_badges(badge_layout, name_x, lcy + lp_card_line_h,
-              (afford and 1 or 0.6) * row_sa, th, pin_mo(mo))
+              ((afford or persona_neuro) and 1 or 0.6) * row_sa, th, pin_mo(mo))
           end
         end
         lcy = lcy + cur_h
@@ -712,37 +644,17 @@ local function draw_shop_panel(ctx)
         if rl_x2 > rl_x + ln(8) then
           local segs = 3
           local segw = (rl_x2 - rl_x) / segs
-          local rule = RectMesh.get("shop_hdr_rule", segw)
-          if not rule and RectMesh.available() then
-            local v, i = {}, {}
-            for k = 0, segs - 1 do
-              RectMesh.add(v, i, k * segw, 0, math.ceil(segw), 1, 1, 1, 1, 0.34 - k * 0.09)
-            end
-            rule = RectMesh.build(v, i)
-            if rule then RectMesh.put("shop_hdr_rule", segw, nil, nil, nil, nil, nil, rule) end
-          end
-          if rule then
-            if persona_evil then
-              set_col(ACC, row_sa)
-            elseif persona_neuro then
-              love.graphics.setColor(shimr, shimg, shimb, row_sa)
-            else
-              set_col(FRD, row_sa)
-            end
-            love.graphics.draw(rule, rl_x, hby)
+          local rule = RectMesh.cached(RectMesh.shared, "shop_hdr_rule", segw, nil, nil, nil, nil,
+            nil, nil, nil, rule_rects, segw)
+          local tr, tg, tb
+          if persona_evil then
+            tr, tg, tb = ACC[1], ACC[2], ACC[3]
+          elseif persona_neuro then
+            tr, tg, tb = shimr, shimg, shimb
           else
-            for i = 0, segs - 1 do
-              local aa = (0.34 - i * 0.09) * row_sa
-              if persona_evil then
-                set_col(ACC, aa)
-              elseif persona_neuro then
-                love.graphics.setColor(shimr, shimg, shimb, aa)
-              else
-                set_col(FRD, aa)
-              end
-              love.graphics.rectangle("fill", rl_x + i * segw, hby, math.ceil(segw), 1)
-            end
+            tr, tg, tb = FRD[1], FRD[2], FRD[3]
           end
+          RectMesh.fill(rule, rl_x, hby, tr, tg, tb, row_sa, rule_rects, segw)
         end
         love.graphics.setFont(lp_font)
         lcy = lcy + lp_hdr_line_h
@@ -764,7 +676,7 @@ local function draw_shop_panel(ctx)
     pop_clip(lc_on, lc_x, lc_y, lc_w, lc_h)
 
     if lp_pushed then love.graphics.pop() end
-    end  -- lp_on_screen; the occupancy below is published either way
+    end
 
     local pushed_out = (S.lp_slide_target or 0) > 0
     if not pushed_out and not leaving then

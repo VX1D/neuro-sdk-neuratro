@@ -1,5 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
+require("tests.stubs").setup({ love = "lazy" })
 local check, done = require("tests.helpers").harness("joker-observations")
 
 local calls = 0
@@ -31,12 +30,18 @@ check("known raw keys become positive mechanical channels", rec.score_mult and r
 a:calculate_joker({ nil_trigger = true })
 check("nil,true is retained only as an activation", rec.activated == true)
 local before = calls
+require("tests.engine_cards").install_smods({ is_getter_context = function(context)
+  if context.mod_probability or context.fix_probability then return "probability" end
+  if context.check_enhancement then return "enhancement" end
+  return false
+end })
 a:calculate_joker({ mod_probability = true, result = { Xmult = 3 } })
+_G.SMODS = nil
 check("getter contexts still call the engine", calls == before + 1)
 check("getter contexts do not manufacture an observation", rec.score_xmult == nil)
-_G.SMODS = { Scoring_Parameter = { obj_table = {
+require("tests.engine_cards").install_smods({ Scoring_Parameter = { obj_table = {
   mult = { key = "mult", calculation_keys = { "modded_mult_key" } },
-} } }
+} } })
 b:calculate_joker({ result = { modded_mult_key = 9 } })
 check("runtime SMODS scoring keys extend the headless fallback vocabulary",
   G.NEURO.joker_observations[2].score_mult == true)
@@ -57,13 +62,12 @@ line = Render.roster_line(G.jokers.cards) or ""
 check("duplicate centers remain distinct instances", line:find("1. ", 1, true)
   and line:find("2. ", 1, true) and line:find("(#", 1, true) == nil, line)
 do
-  local CardUtil = require("facts.card_util")
-  local was = CardUtil.is_face_down
-  CardUtil.is_face_down = function(card) return card == b end
+  local was = b.facing
+  b.facing = "back"
   local hidden = Render.roster_line(G.jokers.cards) or ""
   check("a face-down joker contributes no entry at all",
     hidden:find("1. ", 1, true) ~= nil and hidden:find("2. ", 1, true) == nil, hidden)
-  CardUtil.is_face_down = was
+  b.facing = was
 end
 G.jokers.cards = { b }
 Recorder.prune_owned()
@@ -74,5 +78,41 @@ G.NEURO.joker_observations = { [9] = { activated = true } }
 Lifecycle.reset_run_state()
 check("a run reset wipes the observation store through the lifecycle field list",
   G.NEURO.joker_observations == nil)
-check("and the recorder offers no second reset to drift from it", Recorder.reset_run_state == nil)
+
+-- SMODS routes probability and enhancement queries through calculate_joker without marking activations.
+do
+  local saved_smods = rawget(_G, "SMODS")
+  require("tests.engine_cards").install_smods({ is_getter_context = function(context)
+    if context.mod_probability or context.fix_probability then return "probability" end
+    if context.check_enhancement then return "enhancement" end
+    return false
+  end })
+  G.NEURO.joker_observations = {}
+  local asked = joker(91, "Asked Joker")
+  for _, ctx in ipairs({ { mod_probability = true }, { fix_probability = true },
+      { check_enhancement = true } }) do
+    Recorder._test.note_result(asked, ctx, { numerator = 1 }, true)
+  end
+  check("a probability or enhancement question does not count as the joker activating",
+    G.NEURO.joker_observations[91] == nil)
+  Recorder._test.note_result(asked, { joker_main = true }, { mult = 4 }, true)
+  check("the same joker firing for real is still recorded",
+    G.NEURO.joker_observations[91] and G.NEURO.joker_observations[91].activated == true)
+  _G.SMODS = saved_smods
+end
+
+do
+  local JokerHits = require("core.joker_hits")
+  local saved = JokerHits.condition_counts
+  JokerHits.condition_counts = function(card) if card.sort_id == 77 then return 0, 3, "held" end end
+  local crafty = setmetatable({ sort_id = 77, ability = { set = "Joker", name = "Crafty Joker", t_chips = 80,
+    type = "Flush" }, config = { center = { key = "j_crafty", name = "Crafty Joker", set = "Joker" } } },
+    { __index = Card })
+  G.NEURO.joker_observations = {}
+  local crafty_line = Render.roster_line({ crafty }) or ""
+  JokerHits.condition_counts = saved
+  check("a joker counted before it ever paid still names the kind its rule pays in",
+    crafty_line:find("1. Chips (from its text; not seen paying yet), held 0/3", 1, true) ~= nil
+      and not crafty_line:find("rule:", 1, true), crafty_line)
+end
 done()

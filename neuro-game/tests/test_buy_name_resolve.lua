@@ -1,5 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
+require("tests.stubs").setup({ love = "lazy" })
 
 local check, done = require("tests.helpers").harness("buy-name-resolve")
 
@@ -7,12 +6,20 @@ local function card(name) return { ability = { name = name } } end
 local function area(...) return { cards = { ... } } end
 
 local CardArea = require("facts.card_area_util")
-local find = CardArea.find_card_by_name
+local function find(a, name, index)
+  G = { jokers = a }
+  local _, c, i = CardArea.resolve_target({ area = "jokers", index = index or 1, name = name },
+    CardArea.TARGET_RULES.buy_from_shop)
+  if c and c.ability.name ~= name then return nil end
+  return c, i
+end
 
 do
   local a = area(card("Ice Cream"), card("Wily Joker"), card("Blueprint"))
   local c, i = find(a, "Wily Joker")
   check("unique match returns card+index", c == a.cards[2] and i == 2, tostring(i))
+  local c2, i2 = find(a, "Wily Joker", 9)
+  check("an index past the row still relocates by name", c2 == a.cards[2] and i2 == 2, tostring(i2))
 end
 
 do
@@ -26,7 +33,7 @@ end
 
 do
   local a = area(card("Pareidolia"), card("Blueprint"), card("Pareidolia"))
-  local c = find(a, "Pareidolia")
+  local c = find(a, "Pareidolia", 2)
   check("ambiguous match returns nil (no guess)", c == nil)
 end
 
@@ -36,9 +43,8 @@ do
 end
 
 do
-  check("nil name -> nil", find(area(card("X")), nil) == nil)
-  check("empty name -> nil", find(area(card("X")), "") == nil)
-  check("nil area -> nil", find(nil, "X") == nil)
+  local a = area(card("Ice Cream"), { ability = { name = "Wily Joker", wheel_flipped = true } })
+  check("a face-down card is never found by name", find(a, "Wily Joker") == nil)
   check("empty area -> nil", find(area(), "X") == nil)
 end
 

@@ -1,7 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", localize = true, G = "board" })
 
 local check, done = require("tests.helpers").harness("force-freshness")
 local FP = require("tests.force_payload")
@@ -14,20 +11,16 @@ local function joker_name(card)
   return (card and card.ability and card.ability.name) or "?"
 end
 
-local function bank_claims(text)
-  local out = {}
-  for v in text:gmatch("(%-?%$%d+) in the bank") do out[#out + 1] = v end
-  for v in text:gmatch("(%-?%$%d+) in bank") do out[#out + 1] = v end
-  return out
-end
+local bank_claims = require("tests.force_section_rows").bank_claims
+
+local function board_text(s) return (tostring(s or ""):gsub("Since your last decision:[^\n]*", "")) end
 
 local function contains(hay, needle)
   return needle ~= nil and needle ~= "" and hay:find(needle, 1, true) ~= nil
 end
 
 local ALL_IN_RUN = { SELECTING_HAND = true, SHOP = true, BLIND_SELECT = true, ROUND_EVAL = true,
-  TAROT_PACK = true, BUFFOON_PACK = true, STANDARD_PACK = true, PLANET_PACK = true,
-  SPECTRAL_PACK = true, SMODS_BOOSTER_OPENED = true }
+  SMODS_BOOSTER_OPENED = true }
 
 local MUTATIONS = {
   {
@@ -87,9 +80,7 @@ local MUTATIONS = {
   },
   {
     id = "used a consumable",
-    states = { SHOP = true, BLIND_SELECT = true, TAROT_PACK = true, BUFFOON_PACK = true,
-      STANDARD_PACK = true, PLANET_PACK = true, SPECTRAL_PACK = true,
-      SMODS_BOOSTER_OPENED = true },
+    states = { SHOP = true, BLIND_SELECT = true, SMODS_BOOSTER_OPENED = true },
     applies = function() return G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0 end,
     before = function()
       local c = G.consumeables.cards[1]
@@ -99,16 +90,15 @@ local MUTATIONS = {
   },
   {
     id = "took a card from the pack",
-    states = { TAROT_PACK = true, BUFFOON_PACK = true, STANDARD_PACK = true, PLANET_PACK = true,
-      SPECTRAL_PACK = true, SMODS_BOOSTER_OPENED = true },
+    states = { SMODS_BOOSTER_OPENED = true },
     applies = function()
       local bp = require("facts.card_util").pack_area()
       return bp and bp.cards and #bp.cards > 1
     end,
-    before = function()
-      local bp = require("facts.card_util").pack_area()
-      return { '"area":"booster_pack","index":' .. tostring(#bp.cards) }
-    end,
+  before = function()
+    local bp = require("facts.card_util").pack_area()
+    return { 'area "booster_pack", index ' .. tostring(#bp.cards) }
+  end,
     apply = function()
       local bp = require("facts.card_util").pack_area()
       table.remove(bp.cards, 1)
@@ -151,7 +141,7 @@ for _, board in ipairs(LB.BOARDS) do
               unchanged[#unchanged + 1] = tag
             end
             for _, tok in ipairs(want_gone) do
-              if contains(second.message, tok) then
+              if contains(board_text(second.message), tok) then
                 stale[#stale + 1] = tag .. ": still states " .. string.format("%q", tostring(tok))
               end
             end
@@ -216,25 +206,20 @@ do
 end
 
 do
-  local MODDED = "MYMOD_PACK"
-  local CR = require("context.context_readable")
-  local Dispatcher = require("core.dispatcher")
-  LB.load("TAROT_PACK", "Has pack cards")
-  local reachable = CR.SUPPORTED[MODDED] == nil
-    and require("core.state_kinds").is_pack_state(MODDED)
-    and Dispatcher.get_force_for_state(MODDED) ~= nil
-  check("the cached fallback branch of build_force_payload is reachable and was driven",
-    reachable, "SUPPORTED=" .. tostring(CR.SUPPORTED[MODDED]))
+  local PACK = "SMODS_BOOSTER_OPENED"
+  LB.load(PACK, "Has pack cards")
+  local reachable = require("force.force_router").get_force_for_state(PACK) ~= nil
+  check("the pack board's force payload is built and was driven", reachable, "no force for " .. PACK)
   if reachable then
     local sold = joker_name(G.jokers.cards[1])
     local sigil = LB.SIGIL[joker_key(G.jokers.cards[1])]
-    local first = FP.build(MODDED)
+    local first = FP.build(PACK)
     local had = first and contains(first.message, sold)
     table.remove(G.jokers.cards, 1)
-    local second = FP.build(MODDED)
+    local second = FP.build(PACK)
     check("and it is not served from a cache that outlived the board",
-      had and second and not contains(second.message, sold)
-        and not contains(second.message, sigil)
+      had and second and not contains(board_text(second.message), sold)
+        and not contains(board_text(second.message), sigil)
         and second.message ~= first.message,
       had and "still states " .. sold or "the joker was never in the first payload")
   end

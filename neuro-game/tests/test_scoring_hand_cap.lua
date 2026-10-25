@@ -1,23 +1,14 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
+require("tests.stubs").setup({ love = "lazy", localize = true })
 
 local check, done = require("tests.helpers").harness("scoring_hand_cap")
 local Scoring = require("util.scoring")
 
-local function jk(key, name, extra)
-  return { sort_id = key, ability = { set = "Joker", name = name, extra = extra }, sell_cost = 3,
-    config = { center = { key = key, set = "Joker", name = name,
-      loc_txt = { name = name, description = { "" } } } } }
-end
+local jk = require("tests.fake_cards").jk
 
+local VALUE = { [11] = "Jack", [12] = "Queen", [13] = "King", [14] = "Ace" }
+-- Rankless cards such as Stone use rank 2 as a scoring fallback, not get_id().
 local function card(id, suit)
-  local c = { base = { id = id, value = tostring(id), suit = suit }, ability = {},
-    config = { center = { key = "c_base" } } }
-  function c:get_id() return id end
-  function c:is_suit(s) return s == suit end
-  function c:is_face() return id > 10 and id < 14 end
-  return c
+  return require("tests.engine_cards").playing(VALUE[id] or (id >= 2 and tostring(id)) or "2", suit)
 end
 
 local function spades(n)
@@ -96,7 +87,7 @@ local function seltzer_board(opts)
   local sel = {}
   for i = 1, 4 do sel[#sel + 1] = card(3 + i, "Hearts") end
   local stone = card(-100, "Hearts")
-  stone.ability.enhancement = "m_stone"
+  require("tests.engine_cards").enhance(stone, "m_stone")
   sel[#sel + 1] = stone
   local jokers = { jk("j_selzer", "Seltzer", 1) }
   if opts.hidden_joker then
@@ -125,11 +116,11 @@ check("a Stone card scores outside the poker hand, so it counts as a retriggered
 
 local hidden_entry, hidden_summary = seltzer_board({ hidden_joker = true })
 check("with an unidentifiable joker the retrigger pass count is withheld, not guessed",
-  hidden_entry and hidden_entry.cards == nil and hidden_summary.retrigger_passes == nil,
+  hidden_entry and hidden_entry.cards == nil and hidden_entry.passes == nil and #hidden_summary.retriggers == 1,
   hidden_entry and tostring(hidden_entry.cards))
 
 do
-  _G.G = { GAME = {} }   -- no hand, no deck: nothing left to read but the play itself
+  _G.G = { GAME = {} }
   local q = Scoring.total_of({ scope = "scoring_card", kind = "chips", rate = 30, key = "j_x" },
     { selection = spades(7) })
   check("an unreadable limit still cannot price fewer cards than the play already holds",

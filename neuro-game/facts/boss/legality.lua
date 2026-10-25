@@ -1,10 +1,7 @@
 local Model = require("facts.boss.model")
 local M = {}
 
-local function DF()
-  local ok, mod = pcall(require, "facts.debuff_facts")
-  return ok and mod or nil
-end
+local DF = Model.debuff_facts
 
 local function active_boss()
   local b = G and G.GAME and G.GAME.blind
@@ -12,10 +9,9 @@ local function active_boss()
   return b, Model.resolve_key(b)
 end
 
-local function only_the_hand_remains()
+local function hand_left()
   local cr = G and G.GAME and G.GAME.current_round
-  if type(cr) ~= "table" then return false end
-  return (tonumber(cr.hands_left) or 0) > 0 and (tonumber(cr.discards_left) or 0) <= 0
+  return type(cr) == "table" and (tonumber(cr.hands_left) or 0) > 0
 end
 
 function M.play_size_bounds()
@@ -31,7 +27,7 @@ function M.play_size_bounds()
     if ge and ge > 0 then min_items = math.max(min_items, math.floor(ge)) end
     if le and le > 0 then max_items = math.min(max_items, math.floor(le)) end
   end
-  if min_items > max_items and max_items >= 1 and only_the_hand_remains() then
+  if min_items > max_items and max_items >= 1 and hand_left() then
     return 1, max_items, true
   end
   return min_items, max_items
@@ -56,51 +52,100 @@ function M.zeroed_note(handname)
     return "zeroed by The Eye (already played this round)"
   end
   if key == "bl_mouth" then
-    local df = DF()
-    local locked = b.only_hand and ((df and df.loc_hand and df.loc_hand(b.only_hand)) or tostring(b.only_hand))
-    if locked and locked ~= tostring(handname) then
-      return "zeroed by The Mouth (locked to " .. locked .. ")"
+    -- `only_hand` is the engine hand key; only the displayed name is localized.
+    if b.only_hand and b.only_hand ~= handname then
+      local df = DF()
+      return "zeroed by The Mouth (locked to " .. (df.loc_hand(b.only_hand) or tostring(b.only_hand)) .. ")"
     end
     return "zeroed by The Mouth (boss rule)"
   end
   return "zeroed by " .. tostring(name) .. " (boss rule)"
 end
 
-function M.sell_allowed_in_round()
-  local b, key = active_boss()
-  return key == "bl_final_leaf" and b ~= nil
+-- These sales take effect only during a round.
+local IN_ROUND_SELL = {
+  Luchador = {
+    note = "Luchador disables the current Boss Blind",
+    live = function(b)
+      if not b then return false end
+      if type(b.get_type) == "function" then return b:get_type() == "Boss" end
+      return b.boss == true
+    end,
+  },
+}
+
+local function in_round_sell(card)
+  if type(card) ~= "table" or require("facts.card_util").is_hidden(card) then return nil end
+  local name = type(card.ability) == "table" and card.ability.name
+  local effect = name and IN_ROUND_SELL[name]
+  return effect and effect.live((active_boss())) and effect or nil
 end
 
--- Amber Acorn shuffles the joker order at blind start (dump blind.lua:218-232), so reordering is a
--- live decision inside the round and set_joker_order has to stay on the offer.
+local function sell_allowed_in_round(card)
+  local b, key = active_boss()
+  if key == "bl_final_leaf" and b ~= nil then return true end
+  return card ~= nil and in_round_sell(card) ~= nil
+end
+
+function M.in_round_sell_note()
+  local notes = {}
+  for _, card in ipairs((G and G.jokers and G.jokers.cards) or {}) do
+    local effect = in_round_sell(card)
+    if effect then notes[#notes + 1] = effect.note end
+  end
+  return #notes > 0 and table.concat(notes, "; ") or nil
+end
+
 function M.boss_names_reorder()
   local b, key = active_boss()
   return key == "bl_final_acorn" and b ~= nil
 end
 
-function M.sell_blocked_now()
+function M.sell_blocked_now(card)
   if require("core.state").get_state_name() ~= "SELECTING_HAND" then return false end
-  return not M.sell_allowed_in_round()
+  return not sell_allowed_in_round(card)
 end
 
 M.MASK_HAND, M.MASK_FIELD = "????", "?"
-M.MASK_NOTE = "One selected card is face down, so the game will not name this hand until it flips."
 
-function M.selection_hidden(cards)
+function M.hidden_count(cards)
   local CardUtil = require("facts.card_util")
+  local n = 0
   for _, c in ipairs(cards or {}) do
-    if CardUtil.is_face_down(c) then return true end
+    if CardUtil.is_hidden(c) then n = n + 1 end
   end
-  return false
+  return n
 end
 
-local function selection_line(indices, handname, level, chips, mult)
+function M.selection_hidden(cards)
+  return M.hidden_count(cards) > 0
+end
+
+local function mask_text(n)
+  local lead = n == 1 and "One selected card is" or (n .. " selected cards are")
+  return lead .. " face down, so the game will not name this hand until " .. (n == 1 and "it flips." or "they flip.")
+end
+
+M.MASK_NOTE = mask_text(1)
+
+function M.mask_note(cards)
+  local n = M.hidden_count(cards)
+  if n == 0 then return nil end
+  return mask_text(n)
+end
+
+local function selection_line(indices, handname, level, chips, mult, score_level)
   local ix = "[" .. table.concat(indices or {}, ",") .. "]"
+  if handname == M.MASK_HAND then
+    return "Selection " .. ix .. " = hand type hidden: it includes a face-down card, and the game names the hand only once it flips."
+  end
+  local lvl = level ~= nil and ("lvl " .. tostring(level)
+    .. ((score_level ~= nil and score_level ~= level) and (", scores at lvl " .. tostring(score_level) .. " when played") or ""))
   local detail = ""
-  if level ~= nil and chips ~= nil and mult ~= nil then
-    detail = " (lvl " .. tostring(level) .. ", " .. tostring(chips) .. " chips x " .. tostring(mult) .. " mult)"
-  elseif level ~= nil then
-    detail = " (lvl " .. tostring(level) .. ")"
+  if lvl and chips ~= nil and mult ~= nil then
+    detail = " (" .. lvl .. ", " .. tostring(chips) .. " chips x " .. tostring(mult) .. " mult)"
+  elseif lvl then
+    detail = " (" .. lvl .. ")"
   end
   return "Selection " .. ix .. " = " .. tostring(handname or "?") .. detail .. "."
 end
@@ -108,8 +153,9 @@ end
 M.selection_line = selection_line
 
 function M.spend_line(hands_left, discards_left)
-  return string.format("Playing spends 1 of %d hands; discarding spends 1 of %d discards.",
-    tonumber(hands_left) or 0, tonumber(discards_left) or 0)
+  local Text = require("facts.text")
+  return "Playing spends 1 of " .. Text.plural(tonumber(hands_left) or 0, "hand")
+    .. "; discarding spends 1 of " .. Text.plural(tonumber(discards_left) or 0, "discard") .. "."
 end
 
 local function resource_line()
@@ -124,19 +170,18 @@ local function resource_line()
 end
 
 local function pillar_contrast(selected_cards)
+  local CardUtil = require("facts.card_util")
+  if M.selection_hidden(selected_cards) then return nil end
   local _, key = active_boss()
   if key ~= "bl_pillar" then return nil end
   local Utils = require("util.utils")
   local sel_pos = {}
   local hand = G and G.hand and G.hand.cards or {}
-  for pos, c in ipairs(hand) do sel_pos[c] = pos end
-  local rank_of = function(c)
-    if type(c.get_id) == "function" then
-      local ok, id = pcall(function() return c:get_id() end)
-      if ok then return id end
-    end
-    return nil
+  for _, c in ipairs(hand) do
+    if CardUtil.is_hidden(c) then return nil end
   end
+  for pos, c in ipairs(hand) do sel_pos[c] = pos end
+  local rank_of = CardUtil.rank_id
   for _, c in ipairs(selected_cards or {}) do
     if type(c) == "table" and c.debuff and type(c.ability) == "table" and c.ability.played_this_ante then
       local r = rank_of(c)
@@ -151,48 +196,59 @@ local function pillar_contrast(selected_cards)
   return nil
 end
 
+local function boss_label(b, key)
+  local rec = Model.get(key)
+  return (key and Model.display_name(key)) or b.name or (rec and rec.name) or "this boss"
+end
+
 function M.play_verdict(selected_cards, indices)
   local b, key = active_boss()
   if not b then return nil end
   local df = DF()
-  if not df then return nil end
-  local handname, level
-  pcall(function()
-    if G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
-      local text = G.FUNCS.get_poker_hand_info(selected_cards)
-      if type(text) == "string" and text ~= "" then handname = text end
-    end
-    local hd = handname and G.GAME and G.GAME.hands and G.GAME.hands[handname]
-    if type(hd) == "table" then level = hd.level end
-  end)
+
   local hidden = M.selection_hidden(selected_cards)
-  local shown_name = hidden and nil or handname
-  local shown_level = hidden and M.MASK_FIELD or level
+
+  -- A face-down card hides the hand type, so do not classify this selection.
+  local handname, values
+  if not hidden then
+    pcall(function()
+      if G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
+        local text = G.FUNCS.get_poker_hand_info(selected_cards)
+        if type(text) == "string" and text ~= "" then handname = text end
+      end
+      values = handname and require("facts.hand_facts").hand_values(handname)
+    end)
+  end
+  local shown_level = hidden and M.MASK_FIELD or (values and values.level)
+  local shown_score_level = values and values.score_level or nil
 
   local boss_fact
-  local ok_bw, blocked, certain = pcall(df.boss_would_debuff, selected_cards, handname)
+  local ok_bw, blocked, certain
+  if hidden then
+    ok_bw, blocked, certain = pcall(df.boss_would_debuff_concealed, selected_cards)
+  else
+    ok_bw, blocked, certain = pcall(df.boss_would_debuff, selected_cards, handname)
+  end
   if not ok_bw then require("util.metrics").incr("boss_verdict_probe_failed") end
   if ok_bw and blocked then
     local rec = Model.get(key)
     if rec and rec.templates and rec.templates.rejection then
       boss_fact = require("facts.boss.render").render("rejection", key,
-        { blind = b, vars = { handname = tostring(shown_name or "this hand type") } })
+        { blind = b, vars = { handname = tostring(handname or "this hand type") } })
     else
-      local name = (key and Model.boss_name(key)) or b.name or (rec and rec.name) or "this boss"
-      boss_fact = "BOSS (" .. tostring(name) .. "): the engine reports this hand scores 0 under this boss's rule."
+      boss_fact = "BOSS (" .. tostring(boss_label(b, key)) .. "): the engine reports this hand scores 0 under this boss's rule."
     end
+  elseif hidden and ok_bw and certain == false then
+    boss_fact = "BOSS (" .. tostring(boss_label(b, key)) .. "): a face-down card hides this selection's hand type,"
+      .. " so the boss rule cannot be checked -- it may score 0."
   elseif (not ok_bw) or certain == false then
-    local rec = Model.get(key)
-    local name = (key and Model.boss_name(key)) or b.name or (rec and rec.name) or "this boss"
-    boss_fact = "BOSS (" .. tostring(name) .. "): the boss rule could not be checked for this"
+    boss_fact = "BOSS (" .. tostring(boss_label(b, key)) .. "): the boss rule could not be checked for this"
       .. " selection -- it may score 0."
-  elseif df.all_debuffed and df.count and df.count(selected_cards) > 0
+  elseif not hidden and df.count(selected_cards) > 0
     and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
     local ok_i, _, _, _, scoring_hand = pcall(G.FUNCS.get_poker_hand_info, selected_cards)
     if ok_i and type(scoring_hand) == "table" and df.all_debuffed(scoring_hand) then
-      local rec = Model.get(key)
-      local name = (key and Model.boss_name(key)) or b.name or (rec and rec.name) or "this boss"
-      boss_fact = "BOSS (" .. tostring(name) .. "): every scoring card in this selection is +DB -- debuffed"
+      boss_fact = "BOSS (" .. tostring(boss_label(b, key)) .. "): every scoring card in this selection is +DB -- debuffed"
         .. " cards add 0 chips and 0 mult; the base hand value and joker effects still score."
       local contrast = pillar_contrast(selected_cards)
       if contrast then boss_fact = boss_fact .. contrast end
@@ -200,7 +256,7 @@ function M.play_verdict(selected_cards, indices)
   end
   if not boss_fact then return nil end
 
-  return selection_line(indices, hidden and M.MASK_HAND or shown_name, shown_level)
+  return selection_line(indices, hidden and M.MASK_HAND or handname, shown_level, nil, nil, shown_score_level)
     .. "\n" .. boss_fact .. "\n" .. resource_line()
 end
 

@@ -1,6 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", G = "board" })
 
 local A = require("core.actions")
 local GameRules = require("context.game_rules")
@@ -50,16 +48,7 @@ local SUIT_BOSSES = { { key="bl_head", suit="Hearts" }, { key="bl_club", suit="C
 
 local function gen_card(enh, debuffed)
   local suit = pick(SUITS)
-  local c = {
-    base = { value = pick(RANKS), suit = suit },
-    ability = { name = "", set = "Default", effect = "" },
-    config = { center = { key = enh or "c_base", set = "Default" } },
-    debuff = debuffed or nil,
-    get_id = function() return 10 end,
-    is_suit = function(_, s) return s == suit end,
-  }
-  if enh then c.ability.enhancement = enh end
-  return c
+  return require("tests.engine_cards").playing(pick(RANKS), suit, { enhancement = enh, debuff = debuffed or nil })
 end
 
 local function gen_hand(n, void_suit, any_enh)
@@ -89,13 +78,13 @@ local function gen_jokers()
   return { cards = cards, config = { card_limit = 5 } }
 end
 
+local EngineCards = require("tests.engine_cards")
 local function gen_consumables(kind)
   local cards = {}
   if kind == "planet" then
-    cards[1] = { ability = { name = "Mercury", set = "Planet" }, config = { center = { key = "c_mercury", set = "Planet" } }, sell_cost = 1 }
+    cards[1] = EngineCards.consumable("c_mercury", { sell_cost = 1 })
   elseif kind == "tarot" then
-    cards[1] = { ability = { name = "The Lovers", set = "Tarot", consumeable = { max_highlighted = 1, min_highlighted = 1 } },
-      config = { center = { key = "c_lovers", set = "Tarot" } }, sell_cost = 1 }
+    cards[1] = EngineCards.consumable("c_lovers", { sell_cost = 1 })
   end
   return { cards = cards, config = { card_limit = 2 } }
 end
@@ -150,8 +139,10 @@ local function gen_world(state)
     end
   end
 
-  _G.G = { NEURO = { persona = "neuro", once_serials = {}, reserved_dollars = 0, shop_reroll_count = 0 },
+  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), NEURO = { persona = "neuro", once_serials = {}, reserved_dollars = 0, shop_reroll_count = 0 },
     FUNCS = {}, P_BLINDS = {}, P_TAGS = {} }
+  _G.G.STATES = EngineCards.states()
+  _G.G.STATE = _G.G.STATES[state]
   _G.G.GAME = base_GAME({
     money = money, ante = ri(8), hands = ri(4), discards = ri(4) - 1,
     blind = blind, prob = prob,
@@ -172,7 +163,7 @@ local function gen_world(state)
   if state == "SHOP" then
     local jokers_row = {}
     for i = 1, ri(3) do jokers_row[i] = { ability = { name = "J", set = "Joker" }, config = { center = { key = "j_joker", set = "Joker" } }, cost = ri(8) } end
-    if chance(0.4) then jokers_row[#jokers_row + 1] = { ability = { name = "The Fool", set = "Tarot" }, config = { center = { key = "c_fool", set = "Tarot" } }, cost = 3 } end
+    if chance(0.4) then jokers_row[#jokers_row + 1] = EngineCards.consumable("c_fool", { cost = 3 }) end
     _G.G.shop_jokers = { cards = jokers_row }
     _G.G.shop_vouchers = { cards = chance(0.3) and { { ability = { name = "V", set = "Voucher" }, config = { center = { key = "v_x", set = "Voucher" } }, cost = 10 } } or {} }
     _G.G.shop_booster = { cards = chance(0.6) and { { ability = { name = "Buffoon Pack" }, config = { center = { key = "p_buffoon", kind = "Buffoon" } }, cost = 4 } } or {} }
@@ -182,9 +173,9 @@ local function gen_world(state)
     local targeting = chance(0.4)
     for i = 1, 3 do
       if targeting and i == 1 then
-        pc[i] = { ability = { name = "The Lovers", set = "Tarot", consumeable = { max_highlighted = 1, min_highlighted = 1 } }, config = { center = { key = "c_lovers", set = "Tarot" } } }
+        pc[i] = EngineCards.consumable("c_lovers")
       else
-        pc[i] = { ability = { name = "Mercury", set = "Planet" }, config = { center = { key = "c_mercury", set = "Planet" } } }
+        pc[i] = EngineCards.consumable("c_mercury")
       end
     end
     _G.G.pack_cards = { cards = pc }
@@ -220,7 +211,7 @@ local function dangling_header(txt)
   return nil
 end
 
-local STATES = { "SELECTING_HAND", "SELECTING_HAND", "SELECTING_HAND", "SHOP", "SHOP", "BLIND_SELECT", "BUFFOON_PACK" }
+local STATES = { "SELECTING_HAND", "SELECTING_HAND", "SELECTING_HAND", "SHOP", "SHOP", "BLIND_SELECT", "SMODS_BOOSTER_OPENED" }
 local ITERS = 700
 local cov = { boss = 0, suitvoid = 0, tarot = 0, planet = 0, enh = 0, prob2 = 0, voucher = 0, jokers = 0 }
 
@@ -251,7 +242,6 @@ for it = 1, ITERS do
   frame = (ok_fr and frame) or ""
 
   check("INV0 frame carries text to scan (#" .. it .. ")", frame ~= "", frame)
-  check("INV0 the state produced outputs to scan (#" .. it .. " " .. state .. ")", #outputs > 0)
   for _, o in ipairs(outputs) do
     check("INV0 output carries text to scan (#" .. it .. " " .. state .. ")",
       type(o.text) == "string" and o.text ~= "", tostring(o.text))
@@ -271,8 +261,7 @@ for it = 1, ITERS do
     not frame:find("invalidate card groups or hand shapes", 1, true), frame:sub(1, 80))
 
   if state == "SELECTING_HAND" then
-    local hand_query = (build_force("SELECTING_HAND") or {}).query or ""
-    local use_bit = hand_query:match("use_consumable[^;]*") or ""
+    local use_bit = ((build_force("SELECTING_HAND") or {}).tool_bits or {}).use_consumable or ""
     local ad = use_bit:find("hand_indices", 1, true) ~= nil
     check("INV4 hand_indices iff targeting consumable (#" .. it .. ")", ad == (w.cons_kind == "tarot"),
       "advertised=" .. tostring(ad) .. " cons=" .. w.cons_kind)

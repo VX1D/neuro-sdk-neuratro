@@ -1,15 +1,8 @@
 local function get_store(epoch)
   if not (G and G.NEURO) then return nil end
-  if epoch == "session" then
-    if type(G.NEURO.session_once_serials) ~= "table" then
-      G.NEURO.session_once_serials = {}
-    end
-    return G.NEURO.session_once_serials
-  end
-  if type(G.NEURO.once_serials) ~= "table" then
-    G.NEURO.once_serials = {}
-  end
-  return G.NEURO.once_serials
+  local field = epoch == "session" and "session_once_serials" or "once_serials"
+  if type(G.NEURO[field]) ~= "table" then G.NEURO[field] = {} end
+  return G.NEURO[field]
 end
 
 local function normalize_epoch(epoch)
@@ -18,10 +11,11 @@ local function normalize_epoch(epoch)
 end
 
 local journal = nil
+-- A stale receipt callback must not resolve the next turn’s journal.
+local journal_token = 0
+local next_token = 0
 
-local function rollback_journal()
-  local entries = journal
-  journal = nil
+local function unwind(entries)
   if not entries then return 0 end
   for i = #entries, 1, -1 do
     local e = entries[i]
@@ -31,12 +25,27 @@ local function rollback_journal()
   return #entries
 end
 
-local function begin_journal()
-  rollback_journal()
-  journal = {}
+local function owns(token)
+  return token == nil or token == journal_token
 end
 
-local function commit_journal()
+local function rollback_journal(token)
+  if not owns(token) then return 0 end
+  local entries = journal
+  journal = nil
+  return unwind(entries)
+end
+
+local function begin_journal()
+  if journal then unwind(journal) end
+  journal = {}
+  next_token = next_token + 1
+  journal_token = next_token
+  return journal_token
+end
+
+local function commit_journal(token)
+  if not owns(token) then return false end
   journal = nil
   return true
 end

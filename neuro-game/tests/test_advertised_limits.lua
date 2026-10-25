@@ -1,5 +1,4 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
+require("tests.stubs").setup({ love = "timers" })
 
 local Helpers = require("tests.helpers")
 local check, done = Helpers.harness("advertised-limits")
@@ -24,28 +23,33 @@ local function run_state(opts)
       config = { center = { key = "c_base", set = "Default" } } }
   end
   _G.G = {
+    P_CENTERS = require("tests.engine_centers").centers(),
     hand = { cards = cards, config = { highlighted_limit = opts.highlighted_limit or 5 }, highlighted = {} },
     GAME = {
       blind = { debuff = {}, hands = {} }, round = 1, hands = {}, probabilities = { normal = 1 },
       starting_params = opts.starting_params or {},
       current_round = { hands_left = opts.hands_left or 3, discards_left = opts.discards_left or 2 },
     },
-    FUNCS = { get_poker_hand_info = function(cs) return "High Card", {}, {}, { cs[1] } end },
+    FUNCS = { get_poker_hand_info = require("tests.engine_hand_info").stub("High Card", function(cs) return { cs[1] } end, {}) },
     NEURO = {}, jokers = { cards = {} }, consumeables = { cards = {} },
     playing_cards = cards, deck = { cards = {} }, TIMERS = { REAL = 100 },
   }
 end
 
--- The path the orchestrator takes before every force goes out (core/orchestrator.lua:215-222).
 local function advertised(state_name)
   Actions.get_valid_actions_for_state(state_name)
   local out = {}
-  for _, def in ipairs(Orchestrator.build_valid_action_definitions(state_name)) do out[def.name] = def end
+  for _, def in ipairs(Registry.definitions()) do out[def.name] = def end
   return out
 end
 
-local function prose_max(def, verb)
-  return def and def.description and def.description:match(verb .. " 1%-(%d+) hand cards")
+local function live_schema(def, key)
+  return def and def.schema and def.schema.properties and def.schema.properties[key]
+end
+
+local function schema_detail(spec)
+  if not spec then return "missing" end
+  return tostring(spec.minItems) .. "/" .. tostring(spec.maxItems)
 end
 
 local function handler_accepts(fn, n)
@@ -66,7 +70,7 @@ local function accepted_sizes(fn, upto)
 end
 
 local function schema_sizes(def, key)
-  local spec = def and def.schema and def.schema.properties and def.schema.properties[key]
+  local spec = live_schema(def, key)
   if not spec then return "" end
   local out = {}
   for n = spec.minItems or 1, spec.maxItems or 0 do out[#out + 1] = tostring(n) end
@@ -81,36 +85,38 @@ local function scenario(label, opts, play_max, discard_max)
     Limits.discard_select_max() == discard_max, Limits.discard_select_max())
 
   local defs = advertised("SELECTING_HAND")
+  local play_base = live_schema(defs.play_hand, "indices")
+  local discard_base = live_schema(defs.discard_hand, "indices")
+  local play_live = Registry.display("play_hand")
+  local discard_live = Registry.get("discard_hand")
   local play_wanted = accepted_sizes(HandHandlers.handle_play_hand, opts.hand)
   local discard_wanted = accepted_sizes(HandHandlers.handle_discard_hand, opts.hand)
-  check(label .. ": the advertised play range is exactly the sizes the handler accepts",
-    schema_sizes(defs.play_hand, "indices") == play_wanted,
-    schema_sizes(defs.play_hand, "indices") .. " vs handler " .. play_wanted)
-  check(label .. ": the advertised discard range is exactly the sizes the handler accepts",
-    schema_sizes(defs.discard_hand, "indices") == discard_wanted,
-    schema_sizes(defs.discard_hand, "indices") .. " vs handler " .. discard_wanted)
-  check(label .. ": the play prose quotes the same maximum as the play schema",
-    prose_max(defs.play_hand, "Play") == tostring(play_max), tostring(prose_max(defs.play_hand, "Play")))
-  check(label .. ": the discard prose quotes the discard maximum, not the play maximum",
-    prose_max(defs.discard_hand, "Discard") == tostring(discard_max),
-    tostring(prose_max(defs.discard_hand, "Discard")))
+  check(label .. ": the registered play catalogue advertises the run's cap",
+    play_base and play_base.minItems == 1 and play_base.maxItems == play_max,
+    schema_detail(play_base))
+  check(label .. ": the registered discard catalogue advertises the run's cap",
+    discard_base and discard_base.minItems == 1 and discard_base.maxItems == math.max(1, discard_max),
+    schema_detail(discard_base))
+  check(label .. ": the live play range is exactly the sizes the handler accepts",
+    schema_sizes(play_live, "indices") == play_wanted,
+    schema_sizes(play_live, "indices") .. " vs handler " .. play_wanted)
+  check(label .. ": the live discard range is exactly the sizes the handler accepts",
+    schema_sizes(discard_live, "indices") == discard_wanted,
+    schema_sizes(discard_live, "indices") .. " vs handler " .. discard_wanted)
 
-  local registry = {}
-  for _, def in ipairs(Registry.definitions()) do registry[def.name] = def end
-  local hi = registry.use_consumable and registry.use_consumable.schema.properties.hand_indices
-  check(label .. ": use_consumable targets as many hand cards as the run lets the player select",
-    hi and hi.maxItems == Limits.hand_select_max(), hi and tostring(hi.maxItems))
+  local base_hi = live_schema(defs.use_consumable, "hand_indices")
+  local live_hi = live_schema(Registry.get("use_consumable"), "hand_indices")
+  check(label .. ": the registered consumable catalogue advertises the hand target bound",
+    base_hi and base_hi.minItems == 1 and base_hi.maxItems == Limits.hand_select_max(),
+    schema_detail(base_hi))
+  check(label .. ": live consumable targeting reaches the hand selection cap",
+    live_hi and live_hi.maxItems == Limits.hand_select_max(), live_hi and tostring(live_hi.maxItems))
 
   local lo, up = Legality.play_size_bounds()
   check(label .. ": the boss legality bounds run off the play accessor",
     lo == 1 and up == math.min(play_max, opts.hand), lo .. "-" .. up)
-
-  local query = ForceSelectingHand.build().query
-  check(label .. ": the force quotes the live play range",
-    query:find('play_hand|{"indices":[<pick 1 to ' .. play_max .. ' different hand positions>]', 1, true) ~= nil, query)
-  check(label .. ": the force quotes the live discard range",
-    query:find('discard_hand|{"indices":[<pick 1 to ' .. discard_max .. ' different hand positions>]', 1, true) ~= nil, query)
 end
+
 
 scenario("play raised past vanilla", { hand = 8, highlighted_limit = 8,
   starting_params = { play_limit = 8, discard_limit = 3 } }, 8, 3)
@@ -123,30 +129,43 @@ do
   wire.sent = {}
   wire.send = function(self, message) self.sent[#self.sent + 1] = message return true end
   G.NEURO = wire
-  Orchestrator.register_valid_actions("SELECTING_HAND")
+  require("core.window").register_catalogue()
 
   G.GAME.starting_params.play_limit = 2
   G.hand.config.highlighted_limit = 5
   wire.sent = {}
   G.NEURO = wire
-  Orchestrator.register_valid_actions("SELECTING_HAND")
+  require("core.window").register_catalogue()
 
-  local withdrawn, fresh = {}, nil
+  local withdrawn, registrations = {}, 0
   for _, m in ipairs(wire.sent) do
     if m.command == "actions/unregister" then
-      for _, n in ipairs(m.data.action_names or {}) do withdrawn[n] = true end
+      for _, n in ipairs((m.data or {}).action_names or {}) do withdrawn[n] = true end
     elseif m.command == "actions/register" then
-      for _, a in ipairs(m.data.actions or {}) do
-        if a.name == "play_hand" then fresh = a end
-      end
+      registrations = registrations + 1
     end
   end
-  check("a mid-round cap change withdraws the stale play_hand from the wire", withdrawn["play_hand"] == true)
-  check("a mid-round cap change puts the new play_hand schema on the wire",
-    fresh ~= nil and fresh.schema.properties.indices.maxItems == 2,
-    fresh and tostring(fresh.schema.properties.indices.maxItems))
-  check("the re-registered prose moves with the schema",
-    fresh ~= nil and prose_max(fresh, "Play") == "2", fresh and tostring(prose_max(fresh, "Play")))
+  local tightened = Registry.display("play_hand")
+  local tightened_indices = live_schema(tightened, "indices")
+  local tightened_wanted = accepted_sizes(HandHandlers.handle_play_hand, 8)
+  check("a mid-round cap change re-registers in place, with no withdrawal gap",
+    withdrawn["play_hand"] ~= true and registrations >= 1,
+    tostring(registrations) .. "/" .. tostring(withdrawn["play_hand"]))
+  check("a mid-round cap change narrows the live Registry definition",
+    tightened_indices and tightened_indices.minItems == 1 and tightened_indices.maxItems == 2,
+    schema_detail(tightened_indices))
+  local sent_cap
+  for _, m in ipairs(wire.sent) do
+    for _, def in ipairs(m.command == "actions/register" and (m.data or {}).actions or {}) do
+      if def.name == "play_hand" then sent_cap = live_schema(def, "indices") end
+    end
+  end
+  check("and the tightened cap reaches her in the re-registered schema, so the prompt need not restate it",
+    sent_cap and sent_cap.maxItems == 2,
+    schema_detail(sent_cap))
+  check("the tightened live schema still matches handler acceptance bounds",
+    schema_sizes(tightened, "indices") == tightened_wanted and tightened_wanted == "1,2",
+    schema_sizes(tightened, "indices") .. " vs handler " .. tightened_wanted)
 end
 
 local P_BLINDS = {
@@ -161,28 +180,6 @@ local P_BLINDS = {
   bl_modded_exact = { name = "The Pin", boss = { min = 1, max = 10 }, debuff = { h_size_ge = 4, h_size_le = 4 } },
 }
 
-local function prompt_count(text)
-  local lo, hi = text:match("pick (%d+) to (%d+) different hand positions")
-  if lo then return tonumber(lo), tonumber(hi) end
-  local n = text:match("pick exactly (%d+) different hand positions")
-  if n then return tonumber(n), tonumber(n) end
-  if text:match("pick 1 hand position") then return 1, 1 end
-  return nil
-end
-
-local function description_count(text)
-  local lo, hi = text:match("Play (%d+)%-(%d+) hand cards")
-  if lo then return tonumber(lo), tonumber(hi) end
-  local n = text:match("Play exactly (%d+) hand cards")
-  if n then return tonumber(n), tonumber(n) end
-  if text:match("Play 1 hand card%f[%A]") then return 1, 1 end
-  return nil
-end
-
-local function pair(lo, hi)
-  if lo == nil then return "unparsed" end
-  return tostring(lo) .. "-" .. tostring(hi)
-end
 
 for _, key in ipairs({ "bl_psychic", "bl_modded_le", "bl_modded_band", "bl_modded_exact",
                        "bl_goad", "bl_plant", "bl_club", "bl_eye", "bl_small" }) do
@@ -192,44 +189,49 @@ for _, key in ipairs({ "bl_psychic", "bl_modded_le", "bl_modded_band", "bl_modde
   _G.G.GAME.blind = { key = key, name = blind_def.name, debuff = blind_def.debuff, hands = {} }
 
   local defs = advertised("SELECTING_HAND")
-  local spec = defs.play_hand and defs.play_hand.schema.properties.indices
+  local base_spec = live_schema(defs.play_hand, "indices")
+  local live_spec = live_schema(Registry.display("play_hand"), "indices")
   local label = blind_def.name
 
-  if spec then
-    local lo, hi = spec.minItems, spec.maxItems
-    local p_lo, p_hi = prompt_count(Registry.prompt("play_hand"))
-    check(label .. ": the play prompt quotes the wire schema's range",
-      p_lo == lo and p_hi == hi, pair(p_lo, p_hi) .. " vs schema " .. pair(lo, hi))
+  if base_spec and live_spec then
+    local lo, hi = live_spec.minItems, live_spec.maxItems
+    check(label .. ": the stable play catalogue advertises its bounds",
+      base_spec.minItems == 1 and base_spec.maxItems ~= nil, schema_detail(base_spec))
 
-    local d_lo, d_hi = description_count(defs.play_hand.description)
-    check(label .. ": the play description quotes the wire schema's range",
-      d_lo == lo and d_hi == hi, pair(d_lo, d_hi) .. " vs schema " .. pair(lo, hi))
-
-    local query = ForceSelectingHand.build().query
-    local move = query:match("(play_hand|%b{})")
-    local q_lo, q_hi
-    if move then q_lo, q_hi = prompt_count(move) end
-    check(label .. ": the rendered move quotes the wire schema's range",
-      q_lo == lo and q_hi == hi, pair(q_lo, q_hi) .. " vs schema " .. pair(lo, hi))
-
-    check(label .. ": the boss floor reaches the wire schema at all",
+    check(label .. ": the boss floor reaches the described schema",
       lo == math.max(1, tonumber(blind_def.debuff.h_size_ge) or 1), tostring(lo))
+    check(label .. ": the described schema retains a finite current cap",
+      type(hi) == "number" and hi >= lo, schema_detail(live_spec))
+
+    local floor = math.max(1, tonumber(blind_def.debuff.h_size_ge) or 1)
+    local ceiling = math.min(tonumber(blind_def.debuff.h_size_le) or 8, Limits.play_select_max())
+    local accepted = accepted_sizes(HandHandlers.handle_play_hand, 8)
+    local wanted = {}
+    for n = floor, ceiling do wanted[#wanted + 1] = tostring(n) end
+    check(label .. ": the handler accepts exactly the sizes the boss rule permits",
+      accepted == table.concat(wanted, ","),
+      "handler " .. accepted .. " vs rule " .. table.concat(wanted, ","))
   end
 end
 
 do
-  run_state({ hand = 8, starting_params = { play_limit = 5, discard_limit = 0 } })
+  run_state({ hand = 8, starting_params = { play_limit = 5, discard_limit = 0 }, discards_left = 0 })
   local defs = advertised("SELECTING_HAND")
-  check("a zero discard limit withdraws discard_hand instead of advertising a refused range",
-    defs.discard_hand == nil,
+  local force = ForceSelectingHand.build()
+  local offered_discard = false
+  for _, name in ipairs((force or {}).actions or {}) do
+    if name == "discard_hand" then offered_discard = true end
+  end
+  check("a zero discard limit keeps the canonical discard contract but withdraws the move",
+    defs.discard_hand ~= nil and not offered_discard,
     defs.discard_hand and schema_sizes(defs.discard_hand, "indices"))
-  check("a zero discard limit is what the handler enforces",
-    accepted_sizes(HandHandlers.handle_discard_hand, 8) == "",
-    accepted_sizes(HandHandlers.handle_discard_hand, 8))
-  local spec = defs.discard_hand and defs.discard_hand.schema.properties.indices
-  check("no advertised item range is ever empty",
-    spec == nil or (spec.minItems <= spec.maxItems), spec and (spec.minItems .. "-" .. spec.maxItems))
-  check("play_hand is untouched by a zero discard limit", defs.play_hand ~= nil)
+  check("a zero discard limit is what the action validator enforces",
+    Actions.is_action_valid("discard_hand") == false,
+    tostring(Actions.is_action_valid("discard_hand")))
+  local spec = live_schema(defs.discard_hand, "indices")
+  check("the stable discard catalogue keeps a non-empty base range",
+    spec and spec.minItems == 1 and (spec.maxItems == nil or spec.maxItems >= spec.minItems),
+    schema_detail(spec))
 end
 
 done()

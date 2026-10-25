@@ -1,13 +1,11 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
 
 local check, done = require("tests.helpers").harness("correction-channel")
 
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
+local Enforce = require("tests.helpers").enforce()
 local Actions = require("core.actions")
-local TxCache = require("core.tx_cache")
+local TxCache = require("core.bridge").tx
 local ForceHelpers = require("force.force_helpers")
 local Orchestrator = require("core.orchestrator")
 local ContextDelivery = require("core.context_delivery")
@@ -37,32 +35,24 @@ local function settle(b)
 end
 
 local function bridge()
-  local b = { emitted = {}, results = {}, registered = 0 }
-  function b:send_context(msg) self.emitted[#self.emitted + 1] = tostring(msg) return true end
-  function b:send_action_result(id, ok, message, reason)
-    self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason = reason }
-  end
-  b.register_actions = function() b.registered = b.registered + 1 end
-  b.unregister_actions = function() end
-  b.is_transition_cooldown = function() return false end
-  return b
+  return require("tests.helpers").fake_bridge({ reason = "reason", context = "emitted", register = "count", cooldown = true })
 end
 
 local play_card = require("tests.helpers").play_card
 
 local function selecting_hand_env(t)
   require("tests.helpers").selecting_hand_env({
-    time = t, states = { SELECTING_HAND = 4, SHOP = 5 }, reset_tx_cache = true,
+    time = t, reset_tx_cache = true,
   })
   retained = {}
 end
 
 local function neuro(b)
-  G.NEURO = { enabled = true, decision_serial = 1, run_generation = 1, persona = "neuro",
-    dispatcher = Dispatcher, actions = Actions, update = function() end,
-    send_context = function(_, msg) retained[#retained + 1] = tostring(msg) return true end }
+  G.NEURO = require("tests.helpers").started_bridge({ enabled = true, decision_serial = 1, run_generation = 1,
+    persona = "neuro", dispatcher = Dispatcher, actions = Actions, update = function() end,
+    register_actions = function() end, force_actions = function() return true end,
+    send_context = function(_, msg) retained[#retained + 1] = tostring(msg) return true end })
   require("tests.helpers").stage_registered("SELECTING_HAND", { "buy_from_shop", "leave_shop" })
-  G.NEURO.force_inflight = false
   return b
 end
 
@@ -78,16 +68,8 @@ do
     last ~= nil and last.id == "cc-1" and last.ok == false, last and tostring(last.reason) or "none")
   check("and nothing at all is spent on the retained context channel",
     channel_sig(b) == before, channel_sig(b))
-  check("the correction is stored for the ephemeral force record and names where it works",
-    type(G.NEURO.last_failed_correction) == "string"
-      and G.NEURO.last_failed_correction:find("works in SHOP", 1, true) ~= nil
-      and G.NEURO.last_failed_correction:find("this is SELECTING_HAND", 1, true) ~= nil,
-    tostring(G.NEURO.last_failed_correction))
-  check("and the next force query carries it",
-    ForceHelpers.failed_action_warning():find("works in SHOP", 1, true) ~= nil,
-    ForceHelpers.failed_action_warning())
-  check("the enforce staging area is drained, so it cannot ride a later refusal",
-    Enforce.take_correction() == nil, tostring(Enforce.take_correction()))
+  check("no failure prose is kept back for a later force",
+    ForceHelpers.failed_action_warning == nil and G.NEURO.last_failed_correction == nil)
   check("and no later frame flushes it either -- the retained view is unchanged after "
     .. TICKS .. " orchestrator ticks", settle(b) == before, settle(b))
 end
@@ -124,21 +106,20 @@ do
     retained = {}
     G.NEURO = { enabled = true, decision_serial = 1, run_generation = 1, persona = "neuro",
       dispatcher = Dispatcher, actions = Actions, reserved_dollars = 0, shop_reroll_count = 0,
-      _decision_windows = {}, _reservation_epoch = 0, update = function() end,
+      _reservation_epoch = 0, update = function() end,
+      register_actions = function() end, force_actions = function() return true end,
       send_context = function(_, msg) retained[#retained + 1] = tostring(msg) return true end }
     TD.apply_mock(scenario.mock())
-    G.STATES = { SHOP = 2 }
-    G.STATE = 2
+    require("tests.helpers").in_engine_state("SHOP")
     G.STATE_COMPLETE = true
     G.OVERLAY_MENU = nil
     G.GAME.dollars = 0
     G.NEURO.shop_entry_dollars = 12
     G.NEURO.shop_visit_epoch = 1
-    require("core.transition_guard").reset()
+    require("core.validate").reset_run_state()
     Enforce.reset_run_state()
     TxCache.reset()
     require("tests.helpers").stage_registered("SHOP", { "leave_shop" })
-    G.NEURO.force_inflight = false
 
     local b = bridge()
     Dispatcher.route_message({ command = "action",
@@ -151,68 +132,26 @@ do
       table.concat(b.emitted, " | ") .. " || " .. table.concat(retained, " | "))
     check("a confirmation is not a failure, so no failure record is invented for it",
       G.NEURO.last_failed_action == nil, tostring(G.NEURO.last_failed_action))
-    check("and its staged correction was drained with the refusal it described",
-      Enforce.take_correction() == nil, tostring(Enforce.take_correction()))
     local before = channel_sig(b)
     check("and no later frame writes it -- the retained view is unchanged after "
       .. TICKS .. " orchestrator ticks", settle(b) == before, settle(b))
   end
 end
 
--- C4: SPECIFICATION.md:184 -- success=false retries the whole action force, so a client that keeps
--- rendering the same unusable id would loop forever. The streak must terminate in the spec's
--- success=true form (:188), and every answer must still be addressed to the id Neuro sent.
 do
   selecting_hand_env(600)
   local b = neuro(bridge())
   local before = settle(b)
-  local echoed_wrong = 0
-  for i = 1, 8 do
+  for _ = 1, 8 do
     Dispatcher.route_message({ command = "action",
       data = { id = 42, name = "play_hand", data = '{"indices":[1,2]}' } }, b)
-    local r = b.results[i]
-    if not (r and r.id == 42) then echoed_wrong = echoed_wrong + 1 end
   end
-  check("every invalid-id send is answered", #b.results == 8, tostring(#b.results))
-  check("and the answer is addressed to the id she sent", echoed_wrong == 0, tostring(echoed_wrong))
-  check("the first answers are refusals the SDK may retry",
-    b.results[1].ok == false and b.results[1].reason == "SCHEMA_INVALID",
-    tostring(b.results[1].ok) .. "/" .. tostring(b.results[1].reason))
-  local terminal
-  for _, r in ipairs(b.results) do if r.ok == true then terminal = r break end end
-  check("the retry loop is bounded by a terminal success=true", terminal ~= nil,
-    "no acknowledged answer in " .. tostring(#b.results) .. " sends")
-  check("which says outright that nothing ran",
-    terminal ~= nil and tostring(terminal.message):find("Nothing was executed", 1, true) ~= nil,
-    terminal and tostring(terminal.message) or "none")
-  check("and still names the id as unusable",
-    terminal ~= nil and tostring(terminal.message):find("non-empty string", 1, true) ~= nil,
-    terminal and tostring(terminal.message) or "none")
-  check("a bounded refusal never spends the retained channel",
+  check("invalid non-string ids are dropped without fabricated results",
+    #b.results == 0, tostring(#b.results))
+  check("a dropped invalid id never spends the retained channel",
     channel_sig(b) == before, channel_sig(b))
-  check("and none of the eight corrections surfaces on a later frame",
+  check("and none of the rejected frames surfaces a correction later",
     settle(b) == before, settle(b))
-end
-
-do
-  selecting_hand_env(700)
-  neuro(bridge())
-  G.shop_vouchers = { cards = { { config = { center = { key = "v_grabber" } },
-    ability = { set = "Voucher", name = "Grabber" } } }, config = { card_limit = 1 } }
-  local FactHints = require("facts.fact_hints")
-  FactHints.reset_pending()
-  FactHints.voucher_basics_hint()
-  local text = require("tests.helpers").drain_hints()
-  check("the rule is still stated", type(text) == "string"
-    and text:find("permanent, run%-wide upgrade") ~= nil, tostring(text))
-  check("it asserts no per-shop voucher count",
-    text:find("one is offered per shop", 1, true) == nil
-      and text:find("per shop", 1, true) == nil,
-    tostring(text))
-  check("the clause that is true in every run survives",
-    text:find("Rerolling the shop never replaces a voucher", 1, true) ~= nil, tostring(text))
-  check("and the live count is left to the shop state that lists the offer",
-    text:find("listed with that shop", 1, true) ~= nil, tostring(text))
 end
 
 done()

@@ -1,4 +1,4 @@
-require("tests.raster_capture")
+require("tests.stubs").setup({ love = "lazy", G = "board" })
 local check, done = require("tests.helpers").harness("hand type order")
 
 local DynamicJokers = require("facts.dynamic_jokers")
@@ -25,7 +25,6 @@ G.GAME = G.GAME or {}
 G.GAME.hands = HANDS
 
 local r = DynamicJokers.per_hand_type("j_supernova")
-check("per_hand_type publishes an explicit order", type(r) == "table" and type(r.order) == "table")
 check("the order is the engine's hand order, strongest first",
   table.concat(r.order or {}, "|") == table.concat(EXPECTED, "|"),
   table.concat(r.order or {}, "|"))

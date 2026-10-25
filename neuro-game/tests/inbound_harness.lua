@@ -2,10 +2,9 @@ local M = {}
 
 local Bridge = require("core.bridge")
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
 local Actions = require("core.actions")
 local Staging = require("core.staging")
-local TxCache = require("core.tx_cache")
+local TxCache = require("core.bridge").tx
 local json = require("util.neuro_json")
 
 function M.id_slot(id)
@@ -23,8 +22,10 @@ function M.new(opts)
     outbox = dir .. "/neuro_outbox.jsonl" }
 
   local function env()
-    G.STATES = { SELECTING_HAND = 4 }
-    G.STATE = 4
+    G.TIMERS = G.TIMERS or {}
+    G.TIMERS.REAL = clock.t
+    G.TIMERS.TOTAL = clock.t
+    require("tests.helpers").in_engine_state("SELECTING_HAND")
     G.STATE_COMPLETE = true
     G.OVERLAY_MENU = nil
     G.CONTROLLER = nil
@@ -34,18 +35,17 @@ function M.new(opts)
         blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_hook" } },
       blind_on_deck = "Small",
       hands = { Pair = { level = 1, chips = 20, mult = 2, visible = true } }, modifiers = {} }
-    G.hand = { cards = { play_card(1), play_card(2), play_card(3), play_card(4), play_card(5) },
-      highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
+    G.hand = require("tests.helpers").card_area({ cards = { play_card(1), play_card(2), play_card(3), play_card(4),
+      play_card(5) }, highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } })
     G.jokers = { cards = {}, config = { card_limit = 5 } }
     G.consumeables = { cards = {}, config = { card_limit = 2 } }
     G.deck = { cards = {} }
-    G.FUNCS = { get_poker_hand_info = function(cards) return "Pair", {}, { Pair = { cards } }, cards end }
-    require("core.transition_guard").reset()
-    Enforce.reset_run_state()
+    G.FUNCS = { get_poker_hand_info = require("tests.engine_hand_info").stub("Pair") }
+    require("core.validate").reset_run_state()
     TxCache.reset()
-    Dispatcher.reset_tx()
     G.NEURO = H.bridge
     H.bridge.enabled = true
+    H.bridge.transport_session = H.bridge.transport_session or "test-session"
     H.bridge.decision_serial = 1
     H.bridge.run_generation = 7
     H.bridge.dispatcher = Dispatcher
@@ -71,8 +71,12 @@ function M.new(opts)
   function H.frames(n)
     for _ = 1, n do
       clock.t = clock.t + 0.2
+      -- Production gates read G.TIMERS, so keep it aligned with the harness clock.
+      G.TIMERS = G.TIMERS or {}
+      G.TIMERS.REAL = clock.t
+      G.TIMERS.TOTAL = clock.t
       pcall(Staging.update)
-      pcall(Dispatcher.update_receipts, clock.t)
+      pcall(require("core.execute").step, clock.t)
     end
   end
 
@@ -93,8 +97,10 @@ function M.new(opts)
   end
 
   function H.action_line(id, name, payload)
+    if type(payload) == "table" then payload = json.encode(payload) end
+    payload = payload or '{"indices":[1,2]}'
     return string.format('{"command":"action","data":{"id":%s,"name":%q,"data":%q}}',
-      json.encode(id), name or "play_hand", payload or '{"indices":[1,2]}')
+      json.encode(id), name or "play_hand", payload)
   end
 
   function H.run(scenario, settle_frames)
@@ -104,6 +110,9 @@ function M.new(opts)
     local by_dispatcher, dispatcher_total = H.results()
     local still_owed = #TxCache.outstanding(0)
     clock.t = clock.t + Bridge.RESULT_DEADLINE_SECS + 1
+    G.TIMERS = G.TIMERS or {}
+    G.TIMERS.REAL = clock.t
+    G.TIMERS.TOTAL = clock.t
     pcall(function() H.bridge:update(0) end)
     local _, after_sweep = H.results()
     return {

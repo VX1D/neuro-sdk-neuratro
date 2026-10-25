@@ -17,14 +17,23 @@ end
 
 local function one() return 1 end
 
-local function is_face(card)
-  local ok, face = pcall(function() return card:is_face() end)
-  return (ok and face) and true or false
+function M.card_id(card)
+  local ok, v = pcall(function() return card:get_id() end)
+  if ok and type(v) == "number" then return v end
+  return nil
 end
 
+function M.card_is_face(card)
+  local ok, v = pcall(function() return card:is_face() end)
+  if not ok then return nil end
+  return v and true or false
+end
+
+local is_face = M.card_is_face
+
 local function low_rank(card)
-  local ok, id = pcall(function() return card:get_id() end)
-  return ok and (id == 2 or id == 3 or id == 4 or id == 5) or false
+  local id = M.card_id(card)
+  return id == 2 or id == 3 or id == 4 or id == 5
 end
 
 local function last_hand()
@@ -33,13 +42,13 @@ local function last_hand()
 end
 
 M.RETRIGGER = {
-  j_sock_and_buskin = { scope = "played", subject = "face",       reps = extra_reps, match = is_face },   -- 3727
-  j_hanging_chad    = { scope = "played", subject = "first",      reps = extra_reps, first_only = true }, -- 3735
+  j_sock_and_buskin = { scope = "played", subject = "face",       reps = extra_reps, match = is_face },
+  j_hanging_chad    = { scope = "played", subject = "first",      reps = extra_reps, first_only = true },
   j_dusk            = { scope = "played", subject = "every",      reps = extra_reps,
-    gate = { active = last_hand, text = "only on the last hand of the round" } },                         -- 3743
-  j_selzer          = { scope = "played", subject = "every",      reps = one },                           -- 3749
-  j_hack            = { scope = "played", subject = "low_rank",   reps = extra_reps, match = low_rank },  -- 3756
-  j_mime            = { scope = "held",   subject = "held_score", reps = extra_reps },                    -- 3769
+    gate = { active = last_hand, text = "only on the last hand of the round" } },
+  j_selzer          = { scope = "played", subject = "every",      reps = one },
+  j_hack            = { scope = "played", subject = "low_rank",   reps = extra_reps, match = low_rank },
+  j_mime            = { scope = "held",   subject = "held_score", reps = extra_reps },
 }
 
 function M.read(ability, spec)

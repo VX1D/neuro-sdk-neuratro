@@ -1,6 +1,7 @@
 local CardUtil = require("facts.card_util")
 local Utils = require("util.utils")
 local gfx = require("render.gfx")
+local set_col = gfx.set_col
 local shadow_text, round = gfx.shadow_text, gfx.round
 local Prims = require("hud.prims")
 local RectMesh = require("render.rect_mesh")
@@ -14,8 +15,6 @@ local EDITION_LABELS = {
   Foil = "Foil",
 }
 
--- Badge collection is not signature-guarded, so this TTL is the only thing that picks up a sticker
--- or edition changed underneath. Keep it short.
 local COLLECT_REVALIDATE_S = 0.75
 local _collect_cache = setmetatable({}, { __mode = "k" })
 local _badge_version = 0
@@ -40,9 +39,9 @@ local function custom_enhancement_name(card)
   local center = card and card.config and card.config.center or {}
   local ability = card and card.ability or {}
   if center.set ~= "Enhanced" and ability.set ~= "Enhanced" and not ability.enhancement then return nil end
-  return text_value(center.loc_txt and center.loc_txt.name)
-    or text_value(center.name)
-    or ((center.key or ability.enhancement) and Utils.humanize_identifier(center.key or ability.enhancement) or nil)
+  local key = center.key or ability.enhancement
+  if type(key) == "string" then return require("facts.display_names").of("Enhanced", key, center) end
+  return text_value(center.loc_txt and center.loc_txt.name) or text_value(center.name)
 end
 
 local function add(out, kind, text, key, fx)
@@ -56,8 +55,6 @@ local function add(out, kind, text, key, fx)
   end
 end
 
--- Filled into a reusable list: the revalidate pass rebuilds every card on a timer and throws the
--- result away whenever nothing moved.
 local function build_badges(card, enhancement, out)
   out.n = 0
   local ability = card.ability or {}
@@ -112,6 +109,9 @@ local function same_badges(a, b)
   return true
 end
 
+local FP_N = 24
+local _fp = {}
+
 function M.collect(card)
   if type(card) ~= "table" then return EMPTY_BADGES end
 
@@ -137,31 +137,21 @@ function M.collect(card)
   local now = Utils.now()
   local cached = _collect_cache[card]
 
-  local inputs_match = cached
-    and cached.center == center
-    and cached.ability == ability
-    and cached.edition == edition
-    and cached.ed_negative == (edition_data and edition_data.negative)
-    and cached.ed_key == (edition_data and edition_data.key)
-    and cached.ed_polychrome == (edition_data and edition_data.polychrome)
-    and cached.ed_holo == (edition_data and edition_data.holo)
-    and cached.ed_foil == (edition_data and edition_data.foil)
-    and cached.ed_filtered == (edition_data and edition_data.filtered)
-    and cached.ed_name == (edition_data and edition_data.name)
-    and cached.ed_type == (edition_data and edition_data.type)
-    and cached.enhancement == enhancement
-    and cached.custom == custom
-    and cached.loc_txt == loc_txt
-    and cached.loc_name == loc_name
-    and cached.custom_name == custom_name
-    and cached.custom_key == custom_key
-    and cached.seal == seal
-    and cached.seal_value == seal_value
-    and cached.eternal == (ability and ability.eternal)
-    and cached.perishable == (ability and ability.perishable)
-    and cached.perish_tally == perish_tally
-    and cached.rental == (ability and ability.rental)
-    and cached.rental_rate == rental_rate
+  local fp, ed = _fp, edition_data
+  fp[1], fp[2], fp[3], fp[4], fp[5] = center, ability, edition, ed and ed.negative, ed and ed.key
+  fp[6], fp[7], fp[8], fp[9] = ed and ed.polychrome, ed and ed.holo, ed and ed.foil, ed and ed.filtered
+  fp[10], fp[11], fp[12], fp[13] = ed and ed.name, ed and ed.type, enhancement, custom
+  fp[14], fp[15], fp[16], fp[17] = loc_txt, loc_name, custom_name, custom_key
+  fp[18], fp[19], fp[20] = seal, seal_value, ability and ability.eternal
+  fp[21], fp[22], fp[23], fp[24] = ability and ability.perishable, perish_tally,
+    ability and ability.rental, rental_rate
+  local inputs_match = cached ~= nil
+  if cached then
+    local old = cached.fp
+    for i = 1, FP_N do
+      if old[i] ~= fp[i] then inputs_match = false; break end
+    end
+  end
   local due = not cached or now < cached.checked_at
     or now - cached.checked_at >= COLLECT_REVALIDATE_S
   if inputs_match and not due then return cached.badges end
@@ -173,38 +163,15 @@ function M.collect(card)
   end
 
   local badges = versioned(copy_badges(probe))
-  cached = cached or {}
-  cached.center = center
-  cached.ability = ability
-  cached.edition = edition
-  cached.ed_negative = edition_data and edition_data.negative
-  cached.ed_key = edition_data and edition_data.key
-  cached.ed_polychrome = edition_data and edition_data.polychrome
-  cached.ed_holo = edition_data and edition_data.holo
-  cached.ed_foil = edition_data and edition_data.foil
-  cached.ed_filtered = edition_data and edition_data.filtered
-  cached.ed_name = edition_data and edition_data.name
-  cached.ed_type = edition_data and edition_data.type
-  cached.enhancement = enhancement
-  cached.custom = custom
-  cached.loc_txt = loc_txt
-  cached.loc_name = loc_name
-  cached.custom_name = custom_name
-  cached.custom_key = custom_key
-  cached.seal = seal
-  cached.seal_value = seal_value
-  cached.eternal = ability and ability.eternal
-  cached.perishable = ability and ability.perishable
-  cached.perish_tally = perish_tally
-  cached.rental = ability and ability.rental
-  cached.rental_rate = rental_rate
+  cached = cached or { fp = {} }
+  for i = 1, FP_N do cached.fp[i] = fp[i] end
   cached.checked_at = now
   cached.badges = badges
   _collect_cache[card] = cached
   return badges
 end
 
-local TILE_U = 12          -- tile side; identical on every surface and every persona
+local TILE_U = 12
 local GLYPH_U = 8
 local TPAD_U = 3
 local SEP_U = 2
@@ -351,14 +318,14 @@ local STICKER_GC = { eternal = "ETERNAL", perishable = "PERISHABLE", rental = "R
 local STICKER_ORDER = { "eternal", "perishable", "rental" }
 
 local ENHANCEMENT_COLORS = {
-  m_bonus = { 0.24, 0.52, 0.90 },   -- chips: the blue the engine prints a chip total in
-  m_mult  = { 0.98, 0.38, 0.22 },   -- mult, pushed off the Red seal's crimson
-  m_wild  = { 0.72, 0.42, 0.92 },   -- every suit at once, so none of the four suit colours
-  m_glass = { 0.58, 0.94, 0.92 },   -- pane: pale, but turned cyan off Foil's silver
-  m_steel = { 0.60, 0.66, 0.74 },   -- cold rolled
-  m_gold  = { 0.98, 0.88, 0.52 },   -- leaf, not coin -- the seal owns the coin gold
-  m_lucky = { 0.34, 0.80, 0.42 },   -- clover
-  m_stone = { 0.55, 0.50, 0.46 },   -- quarried grey, warm where steel is cold
+  m_bonus = { 0.24, 0.52, 0.90 },
+  m_mult  = { 0.98, 0.38, 0.22 },
+  m_wild  = { 0.72, 0.42, 0.92 },
+  m_glass = { 0.58, 0.94, 0.92 },
+  m_steel = { 0.60, 0.66, 0.74 },
+  m_gold  = { 0.98, 0.88, 0.52 },
+  m_lucky = { 0.34, 0.80, 0.42 },
+  m_stone = { 0.55, 0.50, 0.46 },
 }
 
 local SEAL_GC = { Gold = "GOLD", Red = "RED", Blue = "BLUE", Purple = "PURPLE" }
@@ -369,7 +336,6 @@ local SEAL_COLORS = {
   Purple = { 0.55, 0.37, 0.66 },
 }
 
-local _lift = { 0, 0, 0 }
 local SEP_CHROMA = 0.12
 local SEP_LUMA = 0.10
 local CAP_LUMA = 0.36
@@ -383,10 +349,6 @@ local function separable(a, b)
   if d >= SEP_CHROMA then return true end
   return math.abs(luma_of(a) - luma_of(b)) >= SEP_LUMA
 end
-if _G.NEURO_TEST then
-  M.separable = separable
-end
-
 local function lift_into(dst, c)
   local luma = luma_of(c)
   local k = (luma >= CAP_LUMA) and 1 or (CAP_LUMA / (luma > 0.02 and luma or 0.02))
@@ -457,7 +419,7 @@ end
 
 local function seal_color(key, theme)
   if not key then return theme.GOLD end
-  if not SEAL_COLORS[key] then return theme.GOLD end   -- a modded seal keeps the old behaviour
+  if not SEAL_COLORS[key] then return theme.GOLD end
   return seal_palette()[key] or SEAL_COLORS[key]
 end
 
@@ -478,8 +440,6 @@ M.badge_color = badge_color
 
 local PLATE_INK = 0.22
 local KIND_HUE = { sticker = 0.28, edition = 0.28, seal = 0.20, enhancement = 0.20 }
-M.PLATE = { ink = PLATE_INK, hue = KIND_HUE }
-
 local CAP_A = 0.94
 local LABEL_LIFT = 0.62
 local GLYPH_INK = { 0.05, 0.045, 0.07 }
@@ -507,7 +467,7 @@ local function draw_cap(lg, item, ix, iy, cw, c, a, rad)
   local key = item.key
   local neg = edition and key == "Neg"
   local base = neg and NEG_INK or cap_color(c)
-  lg.setColor(base[1], base[2], base[3], CAP_A * a)
+  set_col(base, CAP_A * a)
   lg.rectangle("fill", ix, iy, cw, h, rad, rad)
   if rad > 0 then lg.rectangle("fill", ix + cw - rad, iy, rad, h) end
 
@@ -516,7 +476,7 @@ local function draw_cap(lg, item, ix, iy, cw, c, a, rad)
     local band = math.max(1, math.floor(h / 3))
     for i = 1, 3 do
       local b = POLY_BANDS[i]
-      lg.setColor(b[1], b[2], b[3], CAP_A * a)
+      set_col(b, CAP_A * a)
       lg.rectangle("fill", ix, iy + (i - 1) * band, cw, (i == 3) and (h - 2 * band) or band)
     end
   elseif key == "Holo" then
@@ -529,10 +489,18 @@ local function draw_cap(lg, item, ix, iy, cw, c, a, rad)
     lg.rectangle("fill", ix + math.floor(cw * 0.55), iy, math.max(1, math.floor(cw * 0.20)), h)
   elseif neg then
     local f = cap_color(c)
-    lg.setColor(f[1], f[2], f[3], 0.95 * a)
+    set_col(f, 0.95 * a)
     lg.setLineWidth(1)
     lg.rectangle("line", ix + 0.5, iy + 0.5, cw - 1, h - 1, rad, rad)
   end
+end
+
+local function seam_rects(cw, w, h)
+  local list = {}
+  RectMesh.rect(list, cw, 0, 1, h, 0, 0, 0, 0.34)
+  RectMesh.rect(list, 0, 0, w, 1, 1, 1, 1, 0.10)
+  RectMesh.rect(list, 0, h - 1, w, 1, 0, 0, 0, 0.26)
+  return list
 end
 
 local function draw_finish(lg, theme, item, ix, iy, cw, c, a, rad, mo)
@@ -542,12 +510,12 @@ local function draw_finish(lg, theme, item, ix, iy, cw, c, a, rad, mo)
     local gold = theme.GOLD
     lg.setColor(0, 0, 0, 0.34 * a)
     lg.rectangle("fill", ix, iy + h - 1, w, 1)
-    lg.setColor(gold[1], gold[2], gold[3], E.A_HAIR * 2.3 * a)
+    set_col(gold, E.A_HAIR * 2.3 * a)
     lg.setLineWidth(1)
     lg.rectangle("line", ix + 0.5, iy + 0.5, w - 1, h - 1)
-    lg.setColor(gold[1], gold[2], gold[3], (E.A_ACCENT + E.PULSE_AMP * (mo.pulse or 0.5)) * a)
+    set_col(gold, (E.A_ACCENT + E.PULSE_AMP * (mo.pulse or 0.5)) * a)
     lg.rectangle("fill", ix + cw, iy, 1, h)
-    lg.setColor(gold[1], gold[2], gold[3], E.A_STRUCT * a)
+    set_col(gold, E.A_STRUCT * a)
     lg.rectangle("fill", ix + 1, iy + 1, 2, 1)
     lg.rectangle("fill", ix + w - 3, iy + h - 2, 2, 1)
   elseif theme.persona_neuro then
@@ -567,34 +535,17 @@ local function draw_finish(lg, theme, item, ix, iy, cw, c, a, rad, mo)
     lg.setLineWidth(1)
     lg.rectangle("line", ix + 0.5, iy + 0.5, w - 1, h - 1, rad, rad)
   else
-    local seam = RectMesh.get("badge_seam_plain", cw, w, h)
-    if not seam and RectMesh.available() then
-      local v, i = {}, {}
-      RectMesh.add(v, i, cw, 0, 1, h, 0, 0, 0, 0.34)
-      RectMesh.add(v, i, 0, 0, w, 1, 1, 1, 1, 0.10)
-      RectMesh.add(v, i, 0, h - 1, w, 1, 0, 0, 0, 0.26)
-      seam = RectMesh.build(v, i)
-      if seam then RectMesh.put("badge_seam_plain", cw, w, h, nil, nil, nil, seam) end
-    end
-    if seam then
-      lg.setColor(1, 1, 1, a)
-      lg.draw(seam, ix, iy)
-    else
-      lg.setColor(0, 0, 0, 0.34 * a)
-      lg.rectangle("fill", ix + cw, iy, 1, h)
-      lg.setColor(1, 1, 1, 0.10 * a)
-      lg.rectangle("fill", ix, iy, w, 1)
-      lg.setColor(0, 0, 0, 0.26 * a)
-      lg.rectangle("fill", ix, iy + h - 1, w, 1)
-    end
+    local seam = RectMesh.cached(RectMesh.shared, "badge_seam_plain", cw, w, h, nil, nil, nil, nil,
+      nil, seam_rects, cw, w, h)
+    RectMesh.fill(seam, ix, iy, 1, 1, 1, a, seam_rects, cw, w, h)
   end
 end
 
 local NO_MO = { pulse = 0.5 }
 
-local W_NEURO = { ink = 0.16, rad = 3,          -- sticker sheet: bright, die-cut
+local W_NEURO = { ink = 0.16, rad = 3,
   hue = { sticker = 0.34, edition = 0.34, seal = 0.26, enhancement = 0.26 } }
-local W_EVIL  = { ink = 0.34, rad = 0,          -- brass plate under lacquer
+local W_EVIL  = { ink = 0.34, rad = 0,
   hue = { sticker = 0.22, edition = 0.22, seal = 0.16, enhancement = 0.16 } }
 local W_PLAIN = { ink = PLATE_INK, rad = 0, hue = KIND_HUE }
 
@@ -686,17 +637,10 @@ local TIPS = {
   },
 }
 
-local ENHANCEMENT_CONFIG_FALLBACK = {
-  m_glass = { Xmult = 2, extra = 4 },
-  m_lucky = { mult = 20, p_dollars = 20 },
-}
-
 local function enhancement_cfg_num(key, field)
   local center = G and G.P_CENTERS and G.P_CENTERS[key]
   local cfg = (type(center) == "table") and center.config or nil
-  local v = type(cfg) == "table" and tonumber(cfg[field]) or nil
-  if v == nil then v = tonumber((ENHANCEMENT_CONFIG_FALLBACK[key] or {})[field]) end
-  return v or 0
+  return type(cfg) == "table" and tonumber(cfg[field]) or 0
 end
 
 local function dynamic_tip(kind, key, text)
@@ -777,7 +721,7 @@ end
 
 local _legend_memo = { deck = nil, idx = -1 }
 function M.legend(i, deck)
-  deck = (type(deck) == "table" and #deck > 0) and deck or M.legend_deck()
+  deck = type(deck) == "table" and deck or M.legend_deck()
   local n = #deck
   if n == 0 then return nil, nil end
   local idx = (math.floor(i or 0) % n) + 1

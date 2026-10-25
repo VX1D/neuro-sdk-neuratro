@@ -27,7 +27,7 @@ function Rows.badge_layout(key, badges, font, w, gap, max_rows)
   end
   local layout = ModifierBadges.layout(badges, font, w, gap, max_rows)
   if not e then
-    -- Nothing enforces whole widths here, so bound the set against an eased one.
+    -- Fractional animated widths can create many distinct cache entries.
     if per.n >= BADGE_WIDTHS_MAX then
       per = { n = 0 }
       _badge_cache[key] = per
@@ -43,7 +43,6 @@ end
 
 function Rows.header(color, text)       return { kind = "header", color = color, text = text } end
 function Rows.line(color, text, indent) return { kind = "line",   color = color, text = text, indent = indent or 8 } end
-function Rows.sub(color, text, indent)  return { kind = "sub",    color = color, text = text, indent = indent or 14 } end
 function Rows.sep()                     return { kind = "sep" } end
 function Rows.carousel(cards, which)    return { kind = "carousel", cards = cards, which = which } end
 function Rows.emptyslots(limit, which)  return { kind = "emptyslots", limit = limit, which = which } end
@@ -82,11 +81,6 @@ function Rows.height(r, m)
     local count = #lines > 0 and #lines or 1
     if count > Rows.DESC_MAX_LINES then count = Rows.DESC_MAX_LINES end
     return (m.small_line_h * count) + 2
-  elseif k == "sub" and m.font and m.wrap then
-    local indent = r.indent or 0
-    local lines = m.wrap(r.text or "", math.max(20, m.content_w - indent), m.font)
-    local count = #lines > 0 and #lines or 1
-    return m.line_h * count
   elseif k == "header" then
     return m.header_line_h or m.line_h
   elseif k == "emptyslots" then
@@ -140,6 +134,18 @@ function Rows.pack_columns(rows, m, avail_data, max_cols, heights)
   end
   if cols > max_cols then cols = max_cols end
   return cols, math.min(max_col, avail_data)
+end
+
+function Rows.fit_columns(rows, m, heights, title_h, pad, tail_h, avail_h, total_h)
+  local cols = 1
+  if total_h > avail_h then
+    local avail_data = math.max(m.card_line_h, avail_h - title_h - tail_h - pad)
+    local used_h
+    cols, used_h = Rows.pack_columns(rows, m, avail_data, 3, heights)
+    total_h = title_h + pad + used_h + tail_h
+    if total_h > avail_h then total_h = avail_h end
+  end
+  return cols, total_h
 end
 
 Rows.COLS_UNLATCH_STREAK = 180

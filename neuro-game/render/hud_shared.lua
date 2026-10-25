@@ -34,10 +34,6 @@ local function carousel_reset()
   _carousel.anchor, _carousel.epoch = nil, 0
 end
 
-local function footer_slot(now)
-  return carousel_clock(now)
-end
-
 local NOT_AN_ACQUISITION = { refused = true, lost = true }
 
 local function acquisition_started()
@@ -74,7 +70,7 @@ local function corridor(ctx, sw, main_side, eff_px, pw_total, _now, _dt, cn)
   if ctx.occ_right then hi = math.min(hi, ctx.occ_right - PANEL_MARGIN) end
   lo = clamp(lo, E, sw - E)
   hi = clamp(hi, E, sw - E)
-  local min_w = cn(240)
+  local min_w = math.min(cn(240), math.max(0, sw - 2 * E))
   if hi - lo < min_w then
     local c = (lo + hi) / 2
     lo = clamp(c - min_w / 2, E, math.max(E, sw - E - min_w))
@@ -87,18 +83,14 @@ local function corridor(ctx, sw, main_side, eff_px, pw_total, _now, _dt, cn)
   return ctx.center_cx, ctx.center_max_w
 end
 
--- Returns the previous scissor as plain values; this runs every frame and a table here is garbage.
 local function push_clip(x, y, w, h)
-  if not (lg.setScissor and lg.getScissor) then return false end
   local px, py, pw, ph = lg.getScissor()
-  local cw, ch = math.max(0, w), math.max(0, h)
-  if lg.intersectScissor then lg.intersectScissor(x, y, cw, ch)
-  else lg.setScissor(x, y, cw, ch) end
+  lg.intersectScissor(x, y, math.max(0, w), math.max(0, h))
   return true, px, py, pw, ph
 end
 
 local function pop_clip(pushed, px, py, pw, ph)
-  if not (lg.setScissor and pushed) then return end
+  if not pushed then return end
   if px then lg.setScissor(px, py, pw, ph) else lg.setScissor() end
 end
 
@@ -115,6 +107,11 @@ end
 local gfx = require("render.gfx")
 local set_col = gfx.set_col
 local shadow_text = gfx.shadow_text
+
+local function shimmer(pal, persona_key, now)
+  if persona_key == "neuro" then return gfx.mix(pal.ACCENT, pal.GLOW, Motion.pulse(now, 1.25)) end
+  if persona_key == "evil" then return gfx.mix(pal.D_GOLD, pal.ACCENT, Motion.pulse(now, 1.1)) end
+end
 
 local _evil_panel_bands = {
   { 0, 0, false, 0 }, { 0, 0, false, 0 }, { 0, 0, false, 0 },
@@ -139,20 +136,16 @@ end
 local function persona_frame(th, mo, x, y, w, h, u, opts)
   opts = opts or {}
   local a = opts.a or 1
-  local prad = th.persona_neuro and (opts.rad or u * 9) or 0
   local approx_evil = th.persona_evil and opts.title_h
   local title_a = Prims.EVIL.A_WASH * a
   local body_a = (opts.body_wash_a or 0) * a
   local bands = approx_evil and evil_panel_bands(th, w, h, opts.title_h, title_a, body_a) or nil
-  local tiled = Prims.panel_base(x, y, w, h, prad, opts.sh or 2, a, th.bg, th.FR, bands)
+  local tiled = Prims.panel_base(x, y, w, h, 0, opts.sh or 2, a, th.bg, th.FR, bands,
+    th.persona_neuro)
   if th.persona_evil then
     local gold = th.GOLD
     if bands then
-      local inv = 1 - title_a
-      gold = _evil_washed_gold
-      gold[1] = th.GOLD[1] * inv + th.pg[1] * title_a
-      gold[2] = th.GOLD[2] * inv + th.pg[2] * title_a
-      gold[3] = th.GOLD[3] * inv + th.pg[3] * title_a
+      gold = gfx.premix(_evil_washed_gold, th.GOLD, th.pg, title_a)
     end
     Prims.gothic_frame(x, y, w, h, u, gold, th.FRD, a, 0, mo.pulse, opts.quiet)
     if opts.title_h and not bands then
@@ -161,10 +154,11 @@ local function persona_frame(th, mo, x, y, w, h, u, opts)
     end
     if opts.glow then Prims.counter_glow(x, y, w, h, th.GOLD, a, mo.pulse, 0) end
   elseif th.persona_neuro then
-    Prims.neuro_frame_deco(x, y, w, h, prad, u, opts.title_h or u * 44, th.FR, th.pg,
-      mo.shimr, mo.shimg, mo.shimb, a, opts.skip_body)
+    Prims.neuro_frame_deco(x, y, w, h, u, opts.title_h or u * 44, th.pg, th.FR, a, opts.skip_body)
+    if opts.glow then Prims.counter_glow(x, y, w, h, th.pg, a, mo.pulse, 0) end
+    Prims.heart_frame(x, y, w, h, u, th._pal, a)
   end
-  return prad, tiled
+  return tiled
 end
 
 local function evil_frame(x, y, w, h, u, title_h, GOLD, GLOW, bg, pulse, now, a, flare, cxf)
@@ -209,20 +203,81 @@ local function caps_label(s, x, y, col, a, track, f, sh_a, off, outline, owner, 
   return print_tracked(s, x, y, track, f)
 end
 
-return {
+local function pin_motion()
+  local pinned = { pulse = 0.5 }
+  return function(mo)
+    pinned.pulse = mo.pulse
+    return pinned
+  end
+end
+
+local function memo(max, fn)
+  local cache, n, rk = {}, 0, nil
+  return function(k, reset)
+    if reset ~= rk then cache, n, rk = {}, 0, reset end
+    local v = cache[k]
+    if v == nil then
+      v = fn(k, reset)
+      if n >= max then cache, n = {}, 0 end
+      cache[k] = v
+      n = n + 1
+    end
+    return v
+  end
+end
+
+local DECORATED_PERSONAS = { neuro = true, evil = true }
+local decorators = {}
+local function persona_decorator(panel, pk)
+  pk = tostring(pk)
+  if not DECORATED_PERSONAS[pk] then return nil end
+  local key = panel .. "_" .. pk
+  local d = decorators[key]
+  if d == nil then
+    local ok, mod = pcall(require, "render.panels." .. key)
+    if not ok then Utils.diag_once("persona_decorator:" .. key, "could not load " .. key .. ": " .. tostring(mod)) end
+    d = (ok and type(mod) == "table") and mod or false
+    decorators[key] = d
+  end
+  return d or nil
+end
+
+local function buy_sparkle(now, x, y, r0, r_pop, col, a)
+  local bs = S.buy_showcase
+  local bage = bs and bs.started and (now - bs.started)
+  if bage and bage >= 0 and bage < 0.5 then
+    local pk = math.sin(math.pi * (bage / 0.5))
+    Prims.draw_sparkle(x, y, r0 + pk * r_pop, col, 0.8 * pk * a)
+  end
+end
+
+local function sig_memo()
+  local t = {}
+  return function(a, b, c, d, e)
+    if t[1] ~= a or t[2] ~= b or t[3] ~= c or t[4] ~= d or t[5] ~= e then
+      t[1], t[2], t[3], t[4], t[5] = a, b, c, d, e
+      t.s = table.concat(t, ":", 1, 5)
+    end
+    return t.s
+  end
+end
+
+local M = {
+  pin_motion = pin_motion,
+  sig_memo = sig_memo,
+  memo = memo,
+  persona_decorator = persona_decorator,
   set_col = set_col,
   shadow_text = shadow_text,
-  print_tracked = print_tracked,
   tracked_width = tracked_width,
-  draw_cached_tracked_text = draw_cached_tracked_text,
   caps_label = caps_label,
   persona_frame = persona_frame,
   carousel_clock = carousel_clock,
   carousel_restart = carousel_restart,
   carousel_reset = carousel_reset,
-  footer_slot = footer_slot,
   CAROUSEL_PERIOD = CAROUSEL_PERIOD,
   buy_pop01 = buy_pop01,
+  buy_sparkle = buy_sparkle,
   buy_flare01 = buy_flare01,
   corridor = corridor,
   PANEL_MARGIN = PANEL_MARGIN,
@@ -232,6 +287,8 @@ return {
   bind = bind,
   motion = motion,
   persona = persona,
+  shimmer = shimmer,
+  mix = gfx.mix,
 
   Prims = Prims,
   Utils = Utils,
@@ -259,3 +316,23 @@ return {
   DESC_FADE_D = Motion.MED,
   DESC_SHOW_D = Motion.SLOW * 5,
 }
+
+function M.card_text(card)
+  local d = M.card_description(card)
+  if (not d or d == "") and card.config and card.config.center then
+    local ok, sd = pcall(Utils.safe_description, card.config.center.loc_txt, card)
+    if ok and type(sd) == "string" then d = sd end
+  end
+  return d or ""
+end
+
+function M.panel_card_desc(card, badges)
+  if not card then return "" end
+  if Utils.is_playing_card(card) or CardUtil.enhancement_key(card) then
+    if #(badges or M.modifier_badges(card)) > 0 then return "" end
+    return CardUtil.card_modifier_desc(card) or ""
+  end
+  return M.card_text(card)
+end
+
+return M

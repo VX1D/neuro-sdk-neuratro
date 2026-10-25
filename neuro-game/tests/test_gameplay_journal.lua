@@ -68,7 +68,7 @@ check("outside shop only undelivered events render",
     and outside:find("sold Egg", 1, true) ~= nil
     and not outside:find("rerolled for $5", 1, true), outside)
 G.NEURO.shop_pack_interrupt = true
-local interlude = Journal.render("STANDARD_PACK", 4, {}) or ""
+local interlude = Journal.render("SMODS_BOOSTER_OPENED", 4, {}) or ""
 check("shop pack interlude retains visit history", interlude:find("This shop visit", 1, true) ~= nil, interlude)
 
 local stale = seal({ kind = "shop_reroll", paid = 6, used_free_reroll = false }, "old")

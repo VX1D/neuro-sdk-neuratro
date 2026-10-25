@@ -1,21 +1,11 @@
+local DisplayNames = require("facts.display_names")
+
 local function get_back_display_name(b)
   if not b then return "Unknown Deck" end
-  if b.key and localize then
-    local ok, loc = pcall(localize, {type = 'name_text', set = 'Back', key = b.key})
-    if ok and type(loc) == "string" and loc ~= "" and loc ~= "ERROR" then
-      return loc
-    end
-  end
-  if b.loc_txt and type(b.loc_txt) == "table" and b.loc_txt.name and b.loc_txt.name ~= "" then
-    return tostring(b.loc_txt.name)
-  end
-  if b.name and b.name ~= "" and b.name ~= b.key then
-    return tostring(b.name)
-  end
-  if b.key then
-    local humanized = b.key:gsub("^b_", ""):gsub("_", " ")
-    return humanized:sub(1,1):upper() .. humanized:sub(2)
-  end
+  if type(b.key) == "string" then return DisplayNames.of("Back", b.key, b) end
+  local lt = type(b.loc_txt) == "table" and b.loc_txt.name
+  if type(lt) == "string" and lt ~= "" then return lt end
+  if type(b.name) == "string" and b.name ~= "" then return b.name end
   return "Unknown Deck"
 end
 
@@ -33,8 +23,7 @@ end
 local function deck_name_of(back)
   local center = deck_center_of(back)
   if center then return get_back_display_name(center) end
-  if back then return back.loc_name or back.name or "Red Deck" end
-  return "Red Deck"
+  return back and (back.loc_name or back.name) or nil
 end
 
 return {

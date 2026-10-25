@@ -1,26 +1,21 @@
 
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", G = "board" })
 
 local A = require("core.actions")
 local D = require("core.dispatcher")
 local Config = require("core.config")
 local ContextCompact = require("context.context_compact")
-local Orchestrator = require("core.orchestrator") -- exposes _maybe_emit_stable_context under NEURO_TEST
+local Window = require("core.window")
 local Bridge = require("core.bridge")
 
-if type(Orchestrator._maybe_emit_stable_context) ~= "function" then
-  print("FATAL: Orchestrator._maybe_emit_stable_context test seam missing (NEURO_TEST hooks)")
+if type(Window.emit_rules) ~= "function" then
+  print("FATAL: Window.emit_rules missing")
   os.exit(2)
 end
 
-local SEED  = tonumber(arg and arg[1]) or 20260722
-local ITERS = tonumber(arg and arg[2]) or 4000
-math.randomseed(SEED)
-local function ri(a, b) return math.random(a, b) end
-local function pick(t) return t[ri(1, #t)] end
-local function chance(p) return math.random() < p end
+local Corpus = require("tests.dump_corpus")
+local SEED, ITERS = Corpus.seed(20260722, 4000)
+local ri, pick, chance = Corpus.ri, Corpus.pick, Corpus.chance
 
 local SUITS = { "Hearts", "Clubs", "Diamonds", "Spades" }
 local RANKS = { "2","3","4","5","6","7","8","9","10","Jack","Queen","King","Ace" }
@@ -105,9 +100,8 @@ end
 local function emit_retained(state)
   local b = make_bridge(); G.NEURO = b
   require("core.context_delivery").reset_transport()
-  ContextCompact.invalidate_cache()
   b.stable_refresh_due = true
-  Orchestrator._maybe_emit_stable_context(state)
+  require("core.window").emit_rules(state)
   return b, table.concat(b.emitted, "\n")
 end
 
@@ -140,7 +134,7 @@ for it = 1, ITERS do
     b:send_context("~volatile interleave marker " .. it .. "-" .. r, true)
     b.stable_refresh_due = true
     local before = #b.emitted
-    Orchestrator._maybe_emit_stable_context(state)
+    require("core.window").emit_rules(state)
     if #b.emitted > before then resent = resent + 1 end
   end
   if resent > 0 then
@@ -149,10 +143,9 @@ for it = 1, ITERS do
   end
 
   live_mutation(it)
-  ContextCompact.invalidate_cache()
   b.stable_refresh_due = true
   local before = #b.emitted
-  local ok_emit, emit_err = pcall(Orchestrator._maybe_emit_stable_context, state)
+  local ok_emit, emit_err = pcall(Window.emit_rules, state)
   if not ok_emit then
     mutable_leaks[#mutable_leaks + 1] = { it = it, state = state,
       why = "retained key rewritten: " .. tostring(emit_err) }
@@ -192,7 +185,7 @@ for it = 1, ITERS do
   end
 end
 
-local function banner(s) print(("="):rep(90)); print(s); print(("="):rep(90)) end
+local banner = Corpus.banner
 banner(string.format("EMIT-SCAN FUZZ  seed=%d iters=%d rendered=%d double_sends=%d alternation_drops=%d mutable_leaks=%d dead_channels=%d",
   SEED, ITERS, ran, #double_sends, #alt_dropped, #mutable_leaks, #dead_channels))
 print("double_send     = the same UNCHANGED stable context re-emitted across a re-entry (bug)")

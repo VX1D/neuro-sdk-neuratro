@@ -18,6 +18,26 @@ function gfx.set_col(c, a)
   love.graphics.setColor(c[1], c[2], c[3], a)
 end
 
+local drop_last_codepoint = require("util.utils").drop_last_codepoint
+
+function gfx.fit_text(s, f, max_w, suffix, keep)
+  if f:getWidth(s) <= max_w then return s end
+  while #s > keep and f:getWidth(s .. suffix) > max_w do s = drop_last_codepoint(s) end
+  return s .. suffix
+end
+
+function gfx.premix(dst, base, over, t)
+  local inv = 1 - t
+  dst[1] = base[1] * inv + over[1] * t
+  dst[2] = base[2] * inv + over[2] * t
+  dst[3] = base[3] * inv + over[3] * t
+  return dst
+end
+
+function gfx.mix(a, b, t)
+  return a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t
+end
+
 local function print_shadow_text(txt, x, y, col, a, sh_a, off, outline)
   love.graphics.setColor(0, 0, 0, sh_a)
   love.graphics.print(txt, x + off, y + off)
@@ -26,7 +46,7 @@ local function print_shadow_text(txt, x, y, col, a, sh_a, off, outline)
     love.graphics.print(txt, x + off, y - off)
     love.graphics.print(txt, x - off, y + off)
   end
-  love.graphics.setColor(col[1], col[2], col[3], a)
+  gfx.set_col(col, a)
   love.graphics.print(txt, x, y)
 end
 
@@ -34,14 +54,14 @@ local ST_MAX = 256
 local st_map, st_n = {}, 0
 local st_clock = 0
 
-local st_font_ids = setmetatable({}, { __mode = "k" })
-local st_font_next = 0
-local function st_font_id(f)
-  local id = st_font_ids[f]
+local font_ids = setmetatable({}, { __mode = "k" })
+local font_id_n = 0
+function gfx.font_id(f)
+  local id = font_ids[f]
   if not id then
-    st_font_next = st_font_next + 1
-    id = st_font_next
-    st_font_ids[f] = id
+    font_id_n = font_id_n + 1
+    id = "f" .. font_id_n .. ":"
+    font_ids[f] = id
   end
   return id
 end
@@ -62,15 +82,7 @@ local function st_fill_body(t, s, col, a, sh_a, off, outline, sc, seg_sh, mc, se
 end
 
 local function st_fill(e, s, col, a, sh_a, off, outline)
-  local sc = e._sc
-  if not sc then sc = { 0, 0, 0, 0 }; e._sc = sc end
-  local seg_sh = e._seg_sh
-  if not seg_sh then seg_sh = { sc, s }; e._seg_sh = seg_sh end
-  local mc = e._mc
-  if not mc then mc = { 0, 0, 0, 0 }; e._mc = mc end
-  local seg_main = e._seg_main
-  if not seg_main then seg_main = { mc, s }; e._seg_main = seg_main end
-  local ok = pcall(st_fill_body, e.text, s, col, a, sh_a, off, outline, sc, seg_sh, mc, seg_main)
+  local ok = pcall(st_fill_body, e.text, s, col, a, sh_a, off, outline, e._sc, e._seg_sh, e._mc, e._seg_main)
   if not ok then return false end
   e.off, e.outline = off, outline
   e.r, e.g, e.b, e.a, e.sh = col[1], col[2], col[3], a, sh_a
@@ -106,8 +118,6 @@ local function st_evict_lru()
     local victim = by_text[v_s]
     if victim and victim.text and victim.text.release then pcall(victim.text.release, victim.text) end
     by_text[v_s] = nil
-    -- Clear the empty shells too, or st_map and by_variant grow unbounded while the leaf entries
-    -- stay capped at ST_MAX.
     if next(by_text) == nil then
       by_variant[v_vkey] = nil
       if next(by_variant) == nil then st_map[v_fid] = nil end
@@ -118,10 +128,9 @@ end
 
 local function st_entry(s, col, a, sh_a, off, outline, variant)
   local lg = love.graphics
-  if type(lg.newText) ~= "function" then return nil end
-  local f = lg.getFont and lg.getFont()
+  local f = lg.getFont()
   if not f then return nil end
-  local fid = st_font_id(f)
+  local fid = gfx.font_id(f)
   local vkey = variant or ""
   local e = st_lookup(fid, vkey, s)
   st_clock = st_clock + 1
@@ -132,8 +141,6 @@ local function st_entry(s, col, a, sh_a, off, outline, variant)
       return e
     end
     if st_fill(e, s, col, a, sh_a, off, outline) then return e end
-    -- The refill cleared the Text before it threw; poison the descriptor or the fast path draws
-    -- an empty buffer.
     e.r, e.g, e.b, e.a, e.sh = nil, nil, nil, nil, nil
     return nil
   end
@@ -141,7 +148,8 @@ local function st_entry(s, col, a, sh_a, off, outline, variant)
   if not ok or not text or type(text.add) ~= "function" or type(text.clear) ~= "function" then
     return nil
   end
-  e = { text = text, used = st_clock }
+  local sc, mc = { 0, 0, 0, 0 }, { 0, 0, 0, 0 }
+  e = { text = text, used = st_clock, _sc = sc, _seg_sh = { sc, s }, _mc = mc, _seg_main = { mc, s } }
   if not st_fill(e, s, col, a, sh_a, off, outline) then
     if text.release then pcall(text.release, text) end
     return nil
@@ -164,7 +172,6 @@ function gfx.shadow_text(txt, x, y, col, a, sh_a, off, outline, tint, variant)
       local lg = love.graphics
       lg.setColor(1, 1, 1, tint)
       lg.draw(e.text, x, y)
-      -- Match the fallback's residual colour, which is tinted too.
       lg.setColor(col[1], col[2], col[3], (a or 1) * tint)
       return
     end
@@ -182,7 +189,5 @@ function gfx.release_text_cache()
   end
   st_map, st_n = {}, 0
 end
-
-gfx._hot_reload_release = gfx.release_text_cache
 
 return gfx

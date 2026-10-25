@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 local check, done = require("tests.helpers").harness("action-registration-contract")
 
 local Bridge = require("core.bridge")
@@ -15,12 +16,7 @@ local function def(name, description)
   return { name = name, description = description or "d", schema = { type = "object" } }
 end
 
-local function has(list, command)
-  for i = 1, #list do
-    if list[i] == command then return true end
-  end
-  return false
-end
+local has = require("tests.helpers").has
 
 Registry.reset()
 do
@@ -29,6 +25,81 @@ do
   check("register_actions sends a frame and records registration",
     has(sent, "actions/register") and Registry.is_registered("play_hand") == true)
 end
+
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local ok = b:register_actions({ def("empty_description", "") })
+  check("contract-valid empty descriptions register",
+    ok == true and has(sent, "actions/register") and Registry.is_registered("empty_description") == true)
+end
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local ok = b:register_actions({ def("whitespace_description", " \t\n ") })
+  check("contract-valid whitespace descriptions register like Rust wire sanitization",
+    ok == true and has(sent, "actions/register")
+      and Registry.is_registered("whitespace_description") == true)
+end
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local ok_call, refused = pcall(Registry.register, 17)
+  local accepted = b:register_actions({ def("valid_sibling") })
+  check("a scalar malformed definition is skipped without crashing or costing valid siblings",
+    ok_call and refused == false and accepted == true and has(sent, "actions/register")
+      and Registry.is_registered("valid_sibling") == true)
+end
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local long_name = string.rep("a", 1025)
+  local ok = b:register_actions({ def(long_name) })
+  check("frame-valid long action names remain registrable",
+    ok == true and has(sent, "actions/register")
+      and Registry.is_registered(long_name) == true)
+end
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local long_description = string.rep("d", 64 * 1024 + 1)
+  local ok = b:register_actions({ def("description_bomb", long_description) })
+  check("frame-valid long action descriptions remain registrable",
+    ok == true and has(sent, "actions/register")
+      and Registry.is_registered("description_bomb") == true)
+  local catalogue_bomb = {}
+  for i = 1, 70 do catalogue_bomb[i] = def("catalogue_bomb_" .. i, string.rep("c", 60 * 1024)) end
+  local catalogue_ok = b:register_actions(catalogue_bomb)
+  check("frame-valid action catalogues remain registrable",
+    catalogue_ok == true and has(sent, "actions/register")
+      and Registry.is_registered("catalogue_bomb_70") == true)
+end
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local deep = { type = "object" }
+  local cursor = deep
+  for _ = 1, 65 do
+    cursor.properties = { child = { type = "object" } }
+    cursor = cursor.properties.child
+  end
+  local ok = b:register_actions({
+    { name = "deep_schema", description = "d", schema = deep },
+  })
+  check("schema depth within the parser bound remains registrable",
+    ok == true and has(sent, "actions/register")
+      and Registry.is_registered("deep_schema") == true)
+end
+do
+  Registry.reset()
+  local b, sent = new_bridge()
+  local actions = {}
+  for i = 1, 4097 do actions[i] = def("bounded_" .. i) end
+  local ok = b:register_actions(actions)
+  check("frame-valid action batches remain registrable",
+    ok == true and #sent > 0 and Registry.is_registered("bounded_4097") == true)
+end
+
 
 do
   local b, sent = new_bridge()
@@ -43,16 +114,6 @@ end
 do
   Registry.reset()
   local b = new_bridge()
-  b:register_actions({ def("play_hand"), def("discard_hand") })
-  b:register_actions({ def("play_hand") })
-  check("removing an action preserves the remaining registration only",
-    Registry.is_registered("play_hand") == true
-      and Registry.is_registered("discard_hand") == false)
-end
-
-do
-  Registry.reset()
-  local b = new_bridge()
   b:register_actions({ def("play_hand") })
   Dispatcher.reset_tx()
   check("reset_tx clears the registry", Registry.is_registered("play_hand") == false)
@@ -60,16 +121,26 @@ do
   check("after registry reset, register_actions restores registration even when the frame is deduplicated",
     Registry.is_registered("play_hand") == true)
 end
+do
+  Registry.reset()
+  local b = new_bridge()
+  b:register_actions({ def("first_incremental") })
+  b:register_actions({ def("second_incremental") })
+  Dispatcher.reset_tx()
+  b:register_actions({ def("first_incremental") })
+  check("an unchanged incremental registration restores dispatch visibility after a reset",
+    Registry.is_registered("first_incremental") == true)
+end
 
 do
   Registry.reset()
   local b = new_bridge()
   b:register_actions({ def("play_hand") })
-  b:unregister_actions({ "play_hand" })
-  check("unregister_actions removes the registration",
+  b:withdraw_actions({ "play_hand" })
+  check("a completed withdrawal removes the registration",
     Registry.is_registered("play_hand") == false)
   b:register_actions({ def("play_hand") })
-  check("re-registration after unregister succeeds",
+  check("re-registration after a withdrawal succeeds",
     Registry.is_registered("play_hand") == true)
 end
 
@@ -94,7 +165,7 @@ do
   _G.G = {
     NEURO = { dispatcher = Dispatcher, actions = require("core.actions"), run_generation = 1 },
     FUNCS = {}, GAME = { current_round = { hands_left = 4, discards_left = 3 } },
-    STATES = { SELECTING_HAND = 4 }, STATE = 4, TIMERS = { REAL = 0 },
+    STATES = ES, STATE = ES.SELECTING_HAND, TIMERS = { REAL = 0 },
     hand = { cards = {}, highlighted = {}, config = { card_limit = 5 } },
     jokers = { cards = {}, config = { card_limit = 5 } },
   }
@@ -119,67 +190,21 @@ end
 
 do
   Registry.reset()
-  local ForceState = require("core.force_state")
-  G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
-  ForceState.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 100)
-  ForceState.mark_sent(100)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   local results = {}
   local b = {
-    send_action_result = function(_, id, ok, msg, reason)
-      results[#results + 1] = { ok = ok, reason = reason }
-    end,
-    send_context = function() return true end,
-    unregister_actions = function() end,
+    send_action_result = require("tests.helpers").result_log(results, { "_", "ok", "msg", "reason" }),
+    send_context = require("tests.helpers").yes,
   }
   Dispatcher.route_message({ command = "action", run_generation = 1,
     data = { id = "why-it-matters", name = "play_hand", data = '{"indices":[1]}' } }, b)
   check("an empty registry rejects a forced action while its window is open",
-    results[1] and results[1].ok == false and results[1].reason == "ACTION_UNKNOWN",
-    results[1] and tostring(results[1].reason))
+    results[1] and results[1].ok == false and results[1].reason == "ACTION_UNKNOWN"
+      and results[1].msg == "Action failed. Unknown action 'play_hand'.",
+    results[1] and (tostring(results[1].reason) .. " " .. tostring(results[1].msg)))
   check("the force window survives the rejection for a valid retry",
-    G.NEURO.force_inflight == true, tostring(G.NEURO.force_inflight))
-end
-
-do
-  local ActionResult = require("core.action_result")
-  local ok, errors = Registry.validate()
-  check("validate passes cleanly", ok == true, table.concat(errors or {}, ", "))
-
-  local code_set = {}
-  for _, code in ipairs(Registry.DEFAULT_FAILURE_CODES or {}) do
-    code_set[code] = true
-  end
-
-  for code, _ in pairs(ActionResult.CODES) do
-    check("CODES[" .. code .. "] is in action_registry DEFAULT_FAILURE_CODES",
-      code_set[code] == true, code)
-  end
-
-  for _, code in ipairs(Registry.DEFAULT_FAILURE_CODES or {}) do
-    check("DEFAULT_FAILURE_CODES[" .. code .. "] is in action_result CODES",
-      ActionResult.CODES[code] ~= nil, code)
-  end
-end
-
-do
-  local ActionResult = require("core.action_result")
-  ActionResult.CODES.N206_PROBE_CODE = { safe_to_retry = false, transient = false }
-
-  local saved_module = package.loaded["core.action_registry"]
-  package.loaded["core.action_registry"] = nil
-  local ok_req, FreshRegistry = pcall(require, "core.action_registry")
-  package.loaded["core.action_registry"] = saved_module -- restore the shared singleton
-  ActionResult.CODES.N206_PROBE_CODE = nil
-
-  local found = false
-  if ok_req and FreshRegistry and FreshRegistry.DEFAULT_FAILURE_CODES then
-    for _, code in ipairs(FreshRegistry.DEFAULT_FAILURE_CODES) do
-      if code == "N206_PROBE_CODE" then found = true end
-    end
-  end
-  check("DEFAULT_FAILURE_CODES is derived from action_result.CODES, not a duplicate literal",
-    ok_req and found == true)
+    require("core.window").current() ~= nil)
 end
 
 Registry.reset()

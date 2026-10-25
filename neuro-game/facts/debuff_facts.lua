@@ -1,56 +1,20 @@
 local M = {}
 local BossModel = require("facts.boss.model")
+local count = require("facts.text").count
 
 function M.count(cards)
-  if type(cards) ~= "table" then return 0 end
-  local n = 0
-  for _, c in ipairs(cards) do
-    if type(c) == "table" and c.debuff then n = n + 1 end
-  end
-  return n
+  return count(cards, function(c) return type(c) == "table" and c.debuff end)
 end
 
 local function blind_is(b, key)
-  if type(b) ~= "table" then return false end
-  if b.key == key then return true end
-  local center = b.config and b.config.blind
-  if type(center) == "table" and center.key == key then return true end
-  return b.name == BossModel.boss_name(key)
+  return BossModel.resolve_key(b) == key
 end
 if _G.NEURO_TEST then
   M.blind_is = blind_is
 end
 
 function M.pillar_active()
-  local b = G and G.GAME and G.GAME.blind
-  return not not (type(b) == "table" and not b.disabled and blind_is(b, "bl_pillar"))
-end
-
-function M.pillar_used_indices(cards)
-  local out, n = {}, 0
-  if type(cards) == "table" and M.pillar_active() then
-    for i, c in ipairs(cards) do
-      if type(c) == "table" and c.debuff and type(c.ability) == "table" and c.ability.played_this_ante then
-        out[i] = true; n = n + 1
-      end
-    end
-  end
-  return out, n
-end
-
-local function pillar_used_count(cards)
-  local _, n = M.pillar_used_indices(cards)
-  return n
-end
-
-function M.played_this_ante_count()
-  local n = 0
-  local cards = G and G.playing_cards
-  if type(cards) ~= "table" then return 0 end
-  for _, c in ipairs(cards) do
-    if type(c) == "table" and type(c.ability) == "table" and c.ability.played_this_ante then n = n + 1 end
-  end
-  return n
+  return BossModel.active_key() == "bl_pillar"
 end
 
 local function loc_hand(name)
@@ -92,6 +56,16 @@ function M.boss_debuff_text(blind, vars)
   return ""
 end
 
+local function apply_loc_vars(def, vars, key, set, ...)
+  if def and type(def.loc_vars) == "function" then
+    local ok, res = pcall(def.loc_vars, def, {}, ...)
+    if ok and type(res) == "table" then
+      return res.vars or vars, res.key or key, res.set or set
+    end
+  end
+  return vars, key, set
+end
+
 local function raw_desc(set, key, vars)
   local loc = rawget(_G, "localize")
   if type(loc) ~= "function" or not key then return nil end
@@ -109,6 +83,22 @@ function M.most_played_hand()
   return nil
 end
 
+-- Live play counts are used because `most_played_poker_hand` updates only after a boss.
+function M.most_played_by_count()
+  local hands = G and G.GAME and G.GAME.hands
+  if type(hands) ~= "table" then return nil end
+  local best, best_n, best_order
+  for name, h in pairs(hands) do
+    local n = type(h) == "table" and tonumber(h.played) or 0
+    local order = type(h) == "table" and tonumber(h.order) or math.huge
+    if n > 0 and (not best or n > best_n or (n == best_n and (order < best_order
+        or (order == best_order and tostring(name) < tostring(best))))) then
+      best, best_n, best_order = name, n, order
+    end
+  end
+  return best and tostring(best) or nil
+end
+
 function M.blind_effect_text(key, blind_def)
   blind_def = blind_def or (G and G.P_BLINDS and key and G.P_BLINDS[key])
   if type(blind_def) ~= "table" then return "" end
@@ -118,14 +108,7 @@ function M.blind_effect_text(key, blind_def)
     if mp then vars = { loc_hand(mp) } end
   end
   local set = blind_def.set or "Blind"
-  if type(blind_def.loc_vars) == "function" then
-    local ok, res = pcall(blind_def.loc_vars, blind_def, {})
-    if ok and type(res) == "table" then
-      vars = res.vars or vars
-      key = res.key or key
-      set = res.set or set
-    end
-  end
+  vars, key, set = apply_loc_vars(blind_def, vars, key, set)
   local txt = raw_desc(set, key or blind_def.key, vars)
   if not txt then txt = M.boss_debuff_text(blind_def, vars) end
   if txt and txt ~= "" and (key == "bl_wheel" or blind_is(blind_def, "bl_wheel")) and not txt:find("^%s*%d") then
@@ -164,14 +147,7 @@ function M.tag_effect_text(key, tag)
   local def = G and G.P_TAGS and key and G.P_TAGS[key]
   local vars = tag_vars(def, tag)
   local set = "Tag"
-  if def and type(def.loc_vars) == "function" then
-    local ok, res = pcall(def.loc_vars, def, {}, tag)
-    if ok and type(res) == "table" then
-      vars = res.vars or vars
-      key = res.key or key
-      set = res.set or set
-    end
-  end
+  vars, key, set = apply_loc_vars(def, vars, key, set, tag)
   local txt = raw_desc(set, key, vars)
   if txt then return txt end
   if def then
@@ -187,10 +163,7 @@ function M.tag_effect_text(key, tag)
       d = fallback_text(def.config.ref_table.loc_txt)
     end
     if d then
-      local ok_u, Utils = pcall(require, "util.utils")
-      if ok_u and Utils and Utils.safe_description then
-        d = Utils.safe_description(d)
-      end
+      d = require("util.utils").safe_description(d)
       if d and d ~= "" then return d end
     end
   end
@@ -206,26 +179,14 @@ function M.voucher_effect_text(key)
   local center = G and G.P_CENTERS and key and G.P_CENTERS[key]
   if type(center) ~= "table" then return "" end
   local cfg = center.config or {}
-  local vars
-  local ckey = center.key or key
-  local set = "Voucher"
-  if type(center.loc_vars) == "function" then
-    local ok, res = pcall(center.loc_vars, center, {})
-    if ok and type(res) == "table" then
-      vars = res.vars
-      ckey = res.key or ckey
-      set = res.set or set
-    end
-  end
+  local vars, ckey, set = apply_loc_vars(center, nil, center.key or key, "Voucher")
   if not vars then
     if VOUCHER_DISP_VARS[ckey] then vars = { cfg.extra_disp }
     elseif VOUCHER_FIFTH[ckey] then
       vars = { tonumber(cfg.extra) and cfg.extra / 5 or cfg.extra }
     else vars = { cfg.extra } end
   end
-  local txt = raw_desc(set, ckey, vars)
-  if txt then return txt end
-  return ""
+  return raw_desc(set, ckey, vars) or ""
 end
 
 local function visit_leaf(c, fn)
@@ -277,9 +238,6 @@ function M.boss_would_debuff(played_cards, handname)
   end)
   if not ok_info then require("util.metrics").incr("boss_debuff_probe_failed") end
   if type(handname) ~= "string" or handname == "" then return false, ok_info end
-  -- The engine's own static branches (dump blind.lua:571-590: debuff.hand, The Eye's hands[],
-  -- The Mouth's only_hand) decide this without running debuff_hand. Demanding a live method here
-  -- left the Ready list silent on a hand that scores 0 while the Close list warned about it.
   if M.boss_blocks_handname(handname) then return true, true end
   if type(b.debuff_hand) ~= "function" or type(ph) ~= "table" then return false, ok_info end
   local blocked = false
@@ -291,6 +249,28 @@ function M.boss_would_debuff(played_cards, handname)
     return false, false
   end
   return blocked, ok_info
+end
+
+local function hand_type_rule_live(b)
+  local d = b.debuff
+  if type(d) == "table" and d.hand then return true end
+  if blind_is(b, "bl_eye") and type(b.hands) == "table" then
+    for _, used in pairs(b.hands) do if used then return true end end
+  end
+  if blind_is(b, "bl_mouth") and b.only_hand then return true end
+  return false
+end
+
+function M.boss_would_debuff_concealed(played_cards)
+  local b = G and G.GAME and G.GAME.blind
+  if not (type(b) == "table" and not b.disabled) then return false, true end
+  local obj = b.config and b.config.blind
+  if type(obj) == "table" and type(obj.debuff_hand) == "function" then return false, false end
+  local n = type(played_cards) == "table" and #played_cards or 0
+  local d = type(b.debuff) == "table" and b.debuff or {}
+  local ge, le = tonumber(d.h_size_ge), tonumber(d.h_size_le)
+  if (ge and n < ge) or (le and n > le) then return true, true end
+  return false, not hand_type_rule_live(b)
 end
 
 function M.boss_blocks_handname(handname)
@@ -311,25 +291,6 @@ function M.forced_selection_index()
   return nil
 end
 
-function M.boss_draws_facedown()
-  local b = G and G.GAME and G.GAME.blind
-  if not (type(b) == "table" and not b.disabled) then return false end
-  local obj = b.config and b.config.blind
-  if type(obj) == "table" and type(obj.stay_flipped) == "function" then return true end
-  if blind_is(b, "bl_wheel") or blind_is(b, "bl_mark") then return true end
-  if blind_is(b, "bl_fish") then
-    local round = G and G.GAME and G.GAME.current_round
-    return (tonumber(round and round.hands_left) or 0) > 0
-  end
-  if blind_is(b, "bl_house") then return false end
-  return false
-end
-
-function M.fish_discards_faceup()
-  local b = G and G.GAME and G.GAME.blind
-  return not not (type(b) == "table" and not b.disabled and blind_is(b, "bl_fish"))
-end
-
 function M.owns_joker(name)
   local fj = rawget(_G, "find_joker")
   if type(fj) ~= "function" then return false end
@@ -338,8 +299,7 @@ function M.owns_joker(name)
 end
 
 local function active_boss_is(key)
-  local b = G and G.GAME and G.GAME.blind
-  return not not (b and not b.disabled and b.in_blind and blind_is(b, key))
+  return BossModel.active_key(true) == key
 end
 
 function M.flint_active() return active_boss_is("bl_flint") end
@@ -349,7 +309,5 @@ function M.ox_active() return active_boss_is("bl_ox") end
 function M.flint_halve(chips, mult)
   return math.max(math.floor((chips or 0) * 0.5 + 0.5), 0), math.max(math.floor((mult or 0) * 0.5 + 0.5), 1)
 end
-
-if rawget(_G, "NEURO_TEST") then M._test = { pillar_used_count = pillar_used_count } end
 
 return M

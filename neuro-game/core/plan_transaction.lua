@@ -2,77 +2,115 @@ local M = {}
 
 local ActionResult = require("core.action_result")
 local Metrics = require("util.metrics")
-local PlanGate = require("core.plan_gate")
+local Gate = require("core.gate")
 local PlanHandlers = require("handlers.plan_handlers")
-local ActionReceipt = require("core.action_receipt")
 local Utils = require("util.utils")
 
-local COVERED = {
-  buy_from_shop = true,
-  sell_card = true,
-  use_consumable = true,
-  use_directional_consumable = true,
-  choose_pack_card = true,
-  choose_directional_pack_card = true,
-  reroll_shop = true,
-  leave_shop = true,
-  select_blind = true,
-  play_hand = true,
-  discard_hand = true,
-  resolve_play = true,
-}
-
 local SHOP_MUTATIONS = {
-  buy_from_shop = true,
-  sell_card = true,
-  use_consumable = true,
-  use_directional_consumable = true,
-  choose_pack_card = true,
-  choose_directional_pack_card = true,
-  reroll_shop = true,
+  buy_from_shop = true, sell_card = true, use_consumable = true, use_directional_consumable = true,
+  choose_pack_card = true, choose_directional_pack_card = true, reroll_shop = true,
 }
+local COVERED = { leave_shop = true, select_blind = true, play_hand = true, discard_hand = true, resolve_play = true }
+for name in pairs(SHOP_MUTATIONS) do COVERED[name] = true end
+
+local function advertised_plan_keys(action_name)
+  local contract = require("core.action_registry").get(action_name)
+  local properties = contract and type(contract.schema) == "table" and contract.schema.properties or nil
+  local plan = type(properties) == "table" and properties.plan or nil
+  local plan_properties = type(plan) == "table" and plan.properties or nil
+  if type(plan_properties) ~= "table" then return nil end
+  local keys = {}
+  for key in pairs(plan_properties) do keys[key] = true end
+  return keys
+end
 
 local PLAN_KEYS = {
   hand = "hand_plan", build = "build_plan", money = "money_plan", boss = "boss_plan",
   focus = "hand_focus",
 }
+local PLAN_FIELDS = { "hand", "build", "money", "boss", "focus" }
+local FIELD_GATES = {
+  hand = { "current_blind_scope", "hand_plan_is_current", "hand" },
+  build = { "current_build_scope", "build_plan_is_current", "build" },
+  money = { "current_economy_scope", "money_plan_is_current", "money" },
+  boss = { "current_boss_scope", "boss_plan_is_current", "boss" },
+  focus = { "current_blind_scope", "hand_focus_is_current", "hand_focus" },
+}
 
-local pending_message
 
-local _stale_drops = 0
-local _stale_log_next = 1
+local CHOICE_FIELDS = { "blind", "area", "index", "name", "use", "indices", "hand_indices", "left_index", "right_index" }
 
-local function neuro()
-  return G and G.NEURO
+local function choice_of(action_name, data)
+  local parts = { action_name }
+  for _, field in ipairs(CHOICE_FIELDS) do
+    local value = type(data) == "table" and data[field] or nil
+    if type(value) == "table" then
+      local items = {}
+      for i, item in ipairs(value) do items[i] = tostring(item) end
+      value = "[" .. table.concat(items, ",") .. "]"
+    elseif type(value) == "string" then
+      value = Utils.normalize_ws(value):lower()
+    end
+    parts[#parts + 1] = field .. "=" .. tostring(value)
+  end
+  return table.concat(parts, "|")
 end
 
-function M.take_message()
-  local message = pending_message
-  pending_message = nil
-  return message
+local function is_plan_key(key)
+  for _, known in pairs(PLAN_KEYS) do
+    if known == key then return true end
+  end
+  return false
 end
+
+local function takes(advertised, key)
+  return is_plan_key(key) and (advertised == nil or advertised[key] == true)
+end
+
+local function describe_key(key, advertised)
+  key = tostring(key)
+  if key:match("^[%a_][%w_]*$") then return "plan." .. key end
+  local ok, quoted = pcall(require("util.neuro_json").encode, key)
+  local text = "plan key " .. (ok and quoted or ("'" .. key .. "'"))
+  local near = key:lower():gsub("[^%w_]", "")
+  if near ~= key and takes(advertised, near) then text = text .. " (did you mean plan." .. near .. "?)" end
+  return text
+end
+
+local function ignored_plan_note(action_name, explicit, advertised)
+  local ignored = {}
+  for key in pairs(explicit) do
+    if not takes(advertised, key) then ignored[#ignored + 1] = describe_key(key, advertised) end
+  end
+  if #ignored == 0 then return nil end
+  table.sort(ignored)
+  local note = "Not saved: " .. table.concat(ignored, ", ")
+    .. (#ignored == 1 and " is not a plan field of " or " are not plan fields of ") .. action_name
+  if (explicit.primary ~= nil or explicit.fallback ~= nil) and (advertised == nil or advertised.hand_focus) then
+    note = note .. "; a hand focus goes inside plan.hand_focus as {\"primary\": ..., \"fallback\": ...}"
+  end
+  return note .. "."
+end
+
+local function with_note(message, note)
+  if not note then return message end
+  return (message and message ~= "") and (message .. " " .. note) or note
+end
+
+local function neuro() return G and G.NEURO end
 
 local function field_scopes()
-  return {
-    hand = PlanGate.current_blind_scope(),
-    build = PlanGate.current_build_scope(),
-    money = PlanGate.current_economy_scope(),
-    boss = PlanGate.current_boss_scope(),
-    focus = PlanGate.current_blind_scope(),
-  }
+  local out = {}
+  for _, field in ipairs(PLAN_FIELDS) do out[field] = Gate[FIELD_GATES[field][1]]() end
+  return out
 end
 
 local function current_plan_value(field)
   local n = neuro()
   local plan = n and n.plan
-  if field == "hand" and PlanGate.hand_plan_is_current(plan) then return plan.hand, plan.hand_scope end
-  if field == "build" and PlanGate.build_plan_is_current(plan) then return plan.build, plan.build_scope end
-  if field == "money" and PlanGate.money_plan_is_current(plan) then return plan.money, plan.money_scope end
-  if field == "boss" and PlanGate.boss_plan_is_current(plan) then return plan.boss, plan.boss_scope end
-  if field == "focus" and PlanGate.hand_focus_is_current(plan) then
-    return plan.hand_focus, plan.hand_focus_scope
-  end
-  return nil
+  local gate = FIELD_GATES[field]
+  if not Gate[gate[2]](plan) then return nil end
+  return plan[gate[3]], plan[gate[3] .. "_scope"]
 end
 
 local function has_fields(fields)
@@ -88,10 +126,10 @@ local function reject(message)
   return nil, ActionResult.error("PRECONDITION_FAILED", message)
 end
 
+
 function M.release()
   local n = neuro()
   if n then n.held_plan_write = nil end
-  pending_message = nil
 end
 
 function M.release_fields(written)
@@ -110,31 +148,30 @@ function M.release_fields(written)
   return true
 end
 
-function M.hold(tx, hand_transaction_id)
+function M.hold(tx, proposal_ref)
   local n = neuro()
   if not n or type(tx) ~= "table" or not has_fields(tx.plan_values) then return false end
   n.held_plan_write = {
     run_generation = n.run_generation,
     values = tx.plan_values,
     scopes = tx.plan_scopes or field_scopes(),
-    hand_transaction_id = tonumber(hand_transaction_id or tx.hand_transaction_id),
+    proposal_ref = proposal_ref,
+    choice = tx.choice,
   }
   Metrics.incr("plan_tx_held")
   return true
 end
 
--- Release only the plan owned by this transaction.
-function M.release_hand_proposal(hand_transaction_id)
+function M.release_hand_proposal(proposal_ref)
   local n = neuro()
   local held = n and n.held_plan_write
-  if not (held and hand_transaction_id ~= nil) then return false end
-  if tonumber(held.hand_transaction_id) ~= tonumber(hand_transaction_id) then return false end
+  if not (held and proposal_ref ~= nil) then return false end
+  if held.proposal_ref ~= proposal_ref then return false end
   n.held_plan_write = nil
-  pending_message = nil
   return true
 end
 
-local function held_values(scopes, hand_transaction_id)
+local function held_values(scopes, proposal_ref, choice)
   local n = neuro()
   local held = n and n.held_plan_write
   if not held then return nil end
@@ -142,8 +179,12 @@ local function held_values(scopes, hand_transaction_id)
     n.held_plan_write = nil
     return nil
   end
-  if hand_transaction_id ~= nil
-      and tonumber(held.hand_transaction_id) ~= tonumber(hand_transaction_id) then
+  if held.proposal_ref ~= proposal_ref then
+    return nil
+  end
+  -- Do not carry a plan for a choice that did not execute into a different choice.
+  if proposal_ref == nil and held.choice ~= nil and held.choice ~= choice then
+    n.held_plan_write = nil
     return nil
   end
   local out
@@ -156,30 +197,44 @@ local function held_values(scopes, hand_transaction_id)
   return out
 end
 
+local function plan_fields_note(action_name, explicit, advertised)
+  local note = ignored_plan_note(action_name, explicit, advertised)
+  if explicit.boss_plan ~= nil and takes(advertised, "boss_plan") and not PlanHandlers.boss_plan_writable()
+      and not blank_text(explicit.boss_plan) then
+    note = with_note(note, "Not saved: plan.boss_plan is kept for the boss this ante shows, and none is shown yet.")
+  end
+  return note
+end
+
+function M.ignored_note(action_name, data)
+  if not COVERED[action_name] or type(data) ~= "table" or type(data.plan) ~= "table" then return nil end
+  return plan_fields_note(action_name, data.plan, advertised_plan_keys(action_name))
+end
+
 function M.prepare(action_name, data)
+  if action_name == "record_plan" then
+    local note = PlanHandlers.record_plan_note(data)
+    return note and { note_only = true, ignored_note = note } or nil
+  end
   if not COVERED[action_name] then return nil end
   data = type(data) == "table" and data or {}
-  if action_name == "resolve_play" then
-    local id = data.transaction_id
-    if type(id) ~= "number" or id ~= math.floor(id) or id < 1 then
-      return reject("resolve_play requires its proposal's integer transaction_id.")
-    end
-  end
   if action_name == "resolve_play" and data.plan ~= nil then
-    return reject("resolve_play cannot create or replace plan fields; it only resolves the proposal-owned plan.")
+    return reject("Answering a play review cannot create or replace plan fields; it only settles the reviewed play.")
   end
   local state = require("core.state").get_state_name()
-  local requirements = PlanGate.action_requirements(state, action_name)
+  local requirements = Gate.action_requirements(state, action_name)
   local explicit = type(data.plan) == "table" and data.plan or nil
   local plan_data = {}
   local explicitly_written = {}
   local blanked = {}
   local inherited, resumed = false, false
 
+  local advertised = advertised_plan_keys(action_name)
+  local ignored_note = explicit and plan_fields_note(action_name, explicit, advertised) or nil
+  local boss_writable = PlanHandlers.boss_plan_writable()
   if explicit then
     for field, key in pairs(PLAN_KEYS) do
-      local per_hand = action_name == "play_hand" or action_name == "discard_hand"
-      local in_scope = (not per_hand) or key == "boss_plan"
+      local in_scope = (advertised == nil or advertised[key] == true) and (field ~= "boss" or boss_writable)
       if explicit[key] ~= nil and in_scope then
         if blank_text(explicit[key]) then
           blanked[field] = true
@@ -191,16 +246,10 @@ function M.prepare(action_name, data)
     end
   end
 
-  for field, required in pairs(requirements.plan or {}) do
-    if required and blanked[field] then
-      return reject("Provide plan." .. PLAN_KEYS[field]
-        .. " with this action: an empty value is not a plan.")
-    end
-  end
-
   local scopes = field_scopes()
-  local held = held_values(scopes,
-    action_name == "resolve_play" and tonumber(data.transaction_id) or nil)
+  local proposal_ref = action_name == "resolve_play" and Gate.proposal_ref() or nil
+  local choice = choice_of(action_name, data)
+  local held = held_values(scopes, proposal_ref, choice)
   if held then
     for _, key in pairs(PLAN_KEYS) do
       if plan_data[key] == nil and held[key] ~= nil then
@@ -211,24 +260,36 @@ function M.prepare(action_name, data)
   end
 
   local scope_pins = nil
-  for field, required in pairs(requirements.plan or {}) do
-    if required and plan_data[PLAN_KEYS[field]] == nil then
+  local missing, any_blank = {}, false
+  for _, field in ipairs(PLAN_FIELDS) do
+    local required = (requirements.plan or {})[field]
+    if required and blanked[field] then
+      missing[#missing + 1], any_blank = "plan." .. PLAN_KEYS[field], true
+    elseif required and plan_data[PLAN_KEYS[field]] == nil then
       local value, pinned = current_plan_value(field)
       if value == nil then
-        return reject("Provide plan." .. PLAN_KEYS[field] .. " with this action.")
+        missing[#missing + 1] = "plan." .. PLAN_KEYS[field]
+      else
+        plan_data[PLAN_KEYS[field]] = value
+        if pinned ~= nil then
+          scope_pins = scope_pins or {}
+          scope_pins[field] = pinned
+        end
+        inherited = true
       end
-      plan_data[PLAN_KEYS[field]] = value
-      if pinned ~= nil then
-        scope_pins = scope_pins or {}
-        scope_pins[field] = pinned
-      end
-      inherited = true
     end
   end
+  if #missing > 0 then
+    return reject(with_note("Provide " .. require("context.ctx_helpers").join(missing) .. " with this action"
+      .. (any_blank and ": an empty value is not a plan." or "."), ignored_note))
+  end
 
-  if requirements.joker_order then
-    if data.joker_order_confirmed ~= true then return reject(PlanGate.joker_order_prose()) end
-    PlanGate.ack_joker_order()
+  local review = Gate.check("plan", action_name, data)
+  if review then
+    review.message = with_note(review.message, ignored_note)
+    if review.brief then review.brief = with_note(review.brief, ignored_note) end
+    Metrics.incr("plan_tx_rejected")
+    return nil, review
   end
 
   local plan_commit, plan_err
@@ -250,7 +311,9 @@ function M.prepare(action_name, data)
     end
   end
 
-  if not plan_commit then return nil end
+  if not plan_commit and action_name ~= "resolve_play" then
+    return ignored_note and { note_only = true, ignored_note = ignored_note } or nil
+  end
   if inherited then Metrics.incr("plan_tx_inherited") end
   if resumed then Metrics.incr("plan_tx_resumed") end
 
@@ -260,122 +323,26 @@ function M.prepare(action_name, data)
     plan_values = plan_data,
     plan_scopes = scopes,
     requirements = requirements,
-    token = {
-      run_generation = n.run_generation,
-      shop_visit_epoch = state == "SHOP" and n.shop_visit_epoch or nil,
-      plan_revision = tonumber(n.plan_revision) or 0,
-    },
+    shop_visit_epoch = state == "SHOP" and n.shop_visit_epoch or nil,
     shop_origin = state == "SHOP",
-    hand_transaction_id = action_name == "resolve_play" and tonumber(data.transaction_id) or nil,
+    proposal_ref = proposal_ref,
+    choice = choice,
+    ignored_note = ignored_note,
   }
 end
 
-local function apply_commits(tx)
-  local messages = {}
-  if tx.plan_commit then messages[#messages + 1] = tx.plan_commit() end
-  return table.concat(messages, " ")
-end
-
-local function finish_commit(tx)
-  PlanGate.complete_requirements(tx.requirements, tx.token.shop_visit_epoch)
-  Metrics.incr("plan_tx_committed")
-end
-
-local function commit(tx)
-  local message = apply_commits(tx)
-  finish_commit(tx)
-  return message
-end
-
-local function token_is_current(tx)
-  local n = neuro()
-  local token = tx and tx.token or {}
-  return n ~= nil
-    and token.run_generation == n.run_generation
-    and (token.shop_visit_epoch == nil or token.shop_visit_epoch == n.shop_visit_epoch)
-    and (tonumber(token.plan_revision) or 0) == (tonumber(n.plan_revision) or 0)
-end
-
-local function stale_reason(tx)
-  local n = neuro()
-  if not n then return "no_bridge" end
-  local token = tx and tx.token or {}
-  if token.run_generation ~= n.run_generation then return "run_generation" end
-  if token.shop_visit_epoch ~= nil and token.shop_visit_epoch ~= n.shop_visit_epoch then
-    return "shop_visit_epoch"
+function M.settle(action_name, data, tx)
+  if not tx then return end
+  if action_name == "resolve_play" and data and data.answer == "no" then
+    return M.release_hand_proposal(tx.proposal_ref)
   end
-  if (tonumber(token.plan_revision) or 0) ~= (tonumber(n.plan_revision) or 0) then
-    return "plan_revision"
-  end
-  return "unknown"
-end
-
-local function dropped_fields(tx)
-  local names = {}
-  for _, key in pairs(PLAN_KEYS) do
-    if tx and tx.plan_values and tx.plan_values[key] ~= nil then names[#names + 1] = key end
-  end
-  table.sort(names)
-  return #names > 0 and table.concat(names, ",") or "-"
-end
-
-local function note_stale_drop(action_name, tx)
-  _stale_drops = _stale_drops + 1
-  Metrics.incr("plan_tx_stale")
-  if _stale_drops < _stale_log_next then return end
-  _stale_log_next = _stale_drops * 10
-  print(string.format("[neuro-game] plan_tx: dropped plan write on %s, token stale (%s), fields %s (x%d)",
-    tostring(action_name), stale_reason(tx), dropped_fields(tx), _stale_drops))
-end
-
-local function commit_receipt_transaction(action_name, tx)
-  if action_name == "resolve_play" and tx.hand_transaction_id == nil then
-    return
-  end
-  if not token_is_current(tx) then
-    note_stale_drop(action_name, tx)
-    local dropped = dropped_fields(tx)
-    if dropped ~= "-" then
-      pending_message = "Plan not saved (" .. dropped
-        .. "): the state it described changed before it landed."
-    end
-    return
-  end
-  if tx.shop_origin and SHOP_MUTATIONS[action_name] then PlanGate.mark_shop_changed(action_name) end
+  if tx.note_only then return end
+  if action_name == "resolve_play" and tx.proposal_ref == nil then return end
+  if tx.shop_origin and SHOP_MUTATIONS[action_name] then Gate.mark_shop_changed(action_name) end
   M.release()
-  local message = commit(tx)
-  pending_message = message ~= "" and message or nil
-end
-
-function M.wrap(action_name, data, exec, tx)
-  if type(exec) ~= "function" or not tx then return exec end
-  return function()
-    local result = exec()
-    if ActionReceipt.is_receipt(result) then
-      ActionReceipt.chain_callbacks(result, function()
-        if action_name == "resolve_play" and data and data.answer == "no" then
-          M.release_hand_proposal(data.transaction_id)
-        else
-          commit_receipt_transaction(action_name, tx)
-        end
-      end)
-      return result
-    end
-    if ActionReceipt.is_outcome(result) and result.status == "applied" then
-      if action_name == "resolve_play" and data and data.answer == "no" then
-        M.release_hand_proposal(data.transaction_id)
-      else
-        commit_receipt_transaction(action_name, tx)
-      end
-    end
-    return result
-  end
-end
-
-if rawget(_G, "NEURO_TEST") then
-  M._test = {
-    stale_drops = function() return _stale_drops end,
-  }
+  if tx.plan_commit then tx.plan_commit() end
+  Gate.complete_requirements(tx.requirements, tx.shop_visit_epoch)
+  Metrics.incr("plan_tx_committed")
 end
 
 return M

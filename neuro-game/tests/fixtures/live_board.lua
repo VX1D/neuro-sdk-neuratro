@@ -32,24 +32,18 @@ function M.joker(key, sort_id)
   return card
 end
 
-local RANKS = { A = 14, K = 13, Q = 12, J = 11, ["10"] = 10, ["9"] = 9, ["8"] = 8, ["7"] = 7,
-  ["6"] = 6, ["5"] = 5, ["4"] = 4, ["3"] = 3, ["2"] = 2 }
 local LONG = { A = "Ace", K = "King", Q = "Queen", J = "Jack" }
 
 function M.pcard(rank, suit, sort_id)
-  local id = RANKS[rank] or 10
   local c = {
     sort_id = sort_id,
     sell_cost = 1,
-    base = { value = LONG[rank] or rank, suit = suit, id = id, nominal = math.min(id, 10),
-      nominal_chips = math.min(id, 10) },
+    base = { value = LONG[rank] or rank, suit = suit },
     ability = { effect = "Base", name = "Default Base", set = "Default", bonus = 0 },
     config = { center = { key = "c_base", set = "Default" } },
   }
-  function c:get_id() return self.base.id end
-  function c:is_suit(s) return self.base.suit == s end
-  function c:is_face() return self.base.id >= 11 and self.base.id <= 13 end
-  return c
+  require("tests.engine_hand_info").set_base(c)
+  return require("tests.engine_cards").card(c)
 end
 
 function M.hand8()
@@ -71,66 +65,17 @@ function M.deck(n)
   return out
 end
 
-M.CENTERS = {
-  c_hanged_man = { name = "The Hanged Man", set = "Tarot",
-    config = { remove_card = true, max_highlighted = 2 },
-    text = { "Destroy up to 2 selected cards" } },
-  c_pluto = { name = "Pluto", set = "Planet", config = { hand_type = "High Card" },
-    text = { "(lvl.1) Level up High Card", "+1 Mult and +10 chips" } },
-  c_fool = { name = "The Fool", set = "Tarot", config = {},
-    text = { "Creates the last Tarot or Planet card used during this run", "The Fool excluded" } },
+M.CONSUMABLE_TEXT = {
+  c_hanged_man = { "Destroy up to 2 selected cards" },
+  c_pluto = { "(lvl.1) Level up High Card", "+1 Mult and +10 chips" },
+  c_fool = { "Creates the last Tarot or Planet card used during this run", "The Fool excluded" },
 }
 
--- Engine port: game-dump/card.lua:1841 (Card:can_use_consumeable), restricted to the branches a
--- corpus board can reach. facts/card_util.lua:162 falls back to a slot check without it, so a
--- Planet card that is always usable was rendered "Usable now: no".
-local function can_use_consumeable(self, any_state)
-  local G = _G.G
-  local ab = self.ability or {}
-  local cons = ab.consumeable or {}
-  local S = G.STATES or {}
-  if not any_state then
-    for _, blocked in ipairs({ "HAND_PLAYED", "DRAW_TO_HAND", "PLAY_TAROT" }) do
-      if S[blocked] ~= nil and G.STATE == S[blocked] then return false end
-    end
-  end
-  if ab.name == "The Hermit" or cons.hand_type or ab.name == "Temperance"
-      or ab.name == "Black Hole" then
-    return true
-  end
-  local cons_area = G.consumeables or { cards = {}, config = {} }
-  local room = #cons_area.cards < (cons_area.config and cons_area.config.card_limit or 0)
-  if ab.name == "The Emperor" or ab.name == "The High Priestess" then
-    return room or self.area == cons_area
-  end
-  if ab.name == "The Fool" then
-    return (room or self.area == cons_area)
-      and G.GAME.last_tarot_planet ~= nil and G.GAME.last_tarot_planet ~= "c_fool"
-  end
-  if ab.name == "Judgement" or ab.name == "The Soul" or ab.name == "Wraith" then
-    local jk = G.jokers or { cards = {}, config = {} }
-    return #jk.cards < (jk.config and jk.config.card_limit or 0) or self.area == jk
-  end
-  for _, name in ipairs({ "SELECTING_HAND", "TAROT_PACK", "SPECTRAL_PACK", "PLANET_PACK" }) do
-    if S[name] ~= nil and G.STATE == S[name] and cons.max_highlighted then
-      local hl = #((G.hand and G.hand.highlighted) or {})
-      return (cons.mod_num or math.min(5, cons.max_highlighted)) >= hl
-        and hl >= (cons.min_highlighted or 1)
-    end
-  end
-  return false
-end
-
 function M.consumable(key, sort_id)
-  local centre = M.CENTERS[key]
-  local cons = {}
-  for k, v in pairs(centre.config) do cons[k] = v end
-  if cons.max_highlighted then cons.mod_num = math.min(5, cons.max_highlighted) end
-  return { sort_id = sort_id, sell_cost = 1, cost = 3,
-    ability = { name = centre.name, set = centre.set, consumeable = cons },
-    can_use_consumeable = can_use_consumeable,
-    config = { center = { key = key, set = centre.set, name = centre.name,
-      loc_txt = { name = centre.name, text = centre.text } } } }
+  local EngineCards = require("tests.engine_cards")
+  local name = EngineCards.consumable_centers()[key].name
+  return EngineCards.consumable(key, { sort_id = sort_id, sell_cost = 1, cost = 3,
+    center = { loc_txt = { name = name, text = M.CONSUMABLE_TEXT[key] } } })
 end
 
 local TD = require("tests.test_deadlock")
@@ -147,9 +92,10 @@ function M.enrich(opts)
   end
   local limit = (G.jokers and G.jokers.config and G.jokers.config.card_limit) or 5
   G.jokers = { cards = roster, config = { card_limit = math.max(limit, #roster) } }
+  for _, c in ipairs(roster) do c.area = G.jokers end
 
   G.FUNCS = G.FUNCS or {}
-  G.FUNCS.get_poker_hand_info = TD.get_poker_hand_info
+  G.FUNCS.get_poker_hand_info = require("tests.engine_hand_info").engine()
 
   if G.hand then
     G.hand.cards = M.hand8()
@@ -157,8 +103,10 @@ function M.enrich(opts)
     G.hand.config = G.hand.config or {}
     G.hand.config.card_limit = 8
     G.hand.config.highlighted_limit = 5
+    for _, c in ipairs(G.hand.cards) do c.area = G.hand end
   end
   G.deck = { cards = M.deck(44) }
+  for _, c in ipairs(G.deck.cards) do c.area = G.deck end
   G.playing_cards = {}
   for _, c in ipairs(G.deck.cards) do G.playing_cards[#G.playing_cards + 1] = c end
   for _, c in ipairs(G.hand and G.hand.cards or {}) do G.playing_cards[#G.playing_cards + 1] = c end
@@ -183,7 +131,7 @@ function M.enrich(opts)
   if bp and bp.cards and #bp.cards > 0 and #bp.cards < 3 then
     local proto = bp.cards[1]
     while #bp.cards < 3 do
-      local clone = {}
+      local clone = setmetatable({}, getmetatable(proto))
       for k, v in pairs(proto) do clone[k] = v end
       clone.base = proto.base and { value = proto.base.value, suit = proto.base.suit,
         id = proto.base.id, nominal = proto.base.nominal } or nil
@@ -208,21 +156,18 @@ end
 
 local RESET = { "hand", "jokers", "consumeables", "deck", "playing_cards", "shop_jokers",
   "shop_vouchers", "shop_booster", "pack_cards", "booster_pack", "shop", "blind_select_opts",
-  "blind_select", "OVERLAY_MENU", "STATES", "STATE", "TIMERS", "P_CENTER_POOLS", "playbook_extra" }
-
-local STATE_ID, next_state_id = {}, 0
-local function enter_state(name)
-  if not STATE_ID[name] then next_state_id = next_state_id + 1; STATE_ID[name] = next_state_id end
-  _G.G.STATES = _G.G.STATES or {}
-  _G.G.STATES[name] = STATE_ID[name]
-  _G.G.STATE = STATE_ID[name]
-end
+  "blind_select", "OVERLAY_MENU", "STATES", "STATE", "TIMERS", "P_CENTER_POOLS" }
 
 M.VARIANTS = {}
 
 function M.VARIANTS.flipped(G)
   for _, card in ipairs(G.jokers.cards) do card.facing = "back" end
-  if G.hand and G.hand.cards and G.hand.cards[1] then G.hand.cards[1].facing = "back" end
+  local card = G.hand and G.hand.cards and G.hand.cards[1]
+  if card then card.facing, card.ability.wheel_flipped = "back", true end
+end
+
+function M.VARIANTS.joker_room(G)
+  table.remove(G.jokers.cards)
 end
 
 M.INTENTS = {
@@ -252,11 +197,11 @@ M.BOARDS = {
   { state = "BLIND_SELECT", desc = "Small blind selectable" },
   { state = "BLIND_SELECT", desc = "Boss blind only (no skip, no reroll voucher)", boss = true },
   { state = "ROUND_EVAL", desc = "Normal: cash_out available" },
-  { state = "TAROT_PACK", desc = "Has pack cards" },
-  { state = "BUFFOON_PACK", desc = "BUFFOON_PACK variant with pack cards" },
-  { state = "STANDARD_PACK", desc = "STANDARD_PACK with cards" },
-  { state = "PLANET_PACK", desc = "PLANET_PACK with cards" },
-  { state = "SPECTRAL_PACK", desc = "SPECTRAL_PACK with cards" },
+  { state = "SMODS_BOOSTER_OPENED", desc = "Has pack cards" },
+  { state = "SMODS_BOOSTER_OPENED", desc = "Buffoon pack with a joker", variant = "joker_room" },
+  { state = "SMODS_BOOSTER_OPENED", desc = "Standard pack with playing cards" },
+  { state = "SMODS_BOOSTER_OPENED", desc = "Celestial pack with planets" },
+  { state = "SMODS_BOOSTER_OPENED", desc = "Spectral pack with a card" },
   { state = "SMODS_BOOSTER_OPENED", desc = "SMODS_BOOSTER_OPENED with cards" },
   { state = "SELECTING_HAND", boss = true,
     base = "Amber Acorn: the boss that names reordering", variant = "flipped",
@@ -272,7 +217,6 @@ M.BLOCKED = {
 
 M.OUT_OF_RUN = {
   { state = "MENU", desc = "Normal: has G.GAME" },
-  { state = "SPLASH", desc = "Normal: minimal state" },
   { state = "RUN_SETUP", desc = "Run setup overlay active" },
   { state = "GAME_OVER", desc = "No overlay (open_run_setup must work)" },
 }
@@ -306,8 +250,7 @@ function M.load(state, desc, opts)
   TD.apply_mock(sc.mock())
   M.enrich(opts)
   if rec and rec.variant then M.VARIANTS[rec.variant](_G.G) end
-  enter_state(state)
-  require("context.context_compact").invalidate_cache()
+  require("tests.helpers").in_scenario_state(sc)
   require("facts.fact_hints").reset_pending()
   return sc
 end

@@ -1,7 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
-require("tests.raster_capture")
+require("tests.stubs").setup({ love = "lazy", localize = true })
 
 local check, done = require("tests.helpers").harness("derivable-parameters")
 
@@ -38,7 +35,7 @@ end
 local ContextReadable = require("context.context_readable")
 
 local function advertised_focus_values(text)
-  local list = text:match("plan%.hand_focus accepts exactly these hand names: (.-); no other hand type")
+  local list = text:match("Unlocked hand types: (.-); no other hand type")
   if not list then return nil end
   local out = {}
   for name in list:gmatch("[^,]+") do
@@ -62,8 +59,19 @@ do
     #missing == 0, table.concat(missing, ", "))
   check("H1b no hidden hand type is offered as a legal focus",
     #leaked == 0, table.concat(leaked, ", "))
-  check("H1c the list names the field it feeds",
-    text:find("plan.hand_focus", 1, true) ~= nil, text)
+  local Actions = require("core.actions")
+  local real_valid = Actions.is_action_valid
+  Actions.is_action_valid = function(n) return n == "select_blind" or n == "skip_blind" or n == "record_plan" end
+  G.GAME.round_resets.blind_states = { Small = "Select", Big = "Upcoming", Boss = "Upcoming" }
+  G.GAME.round_resets.blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_hook" }
+  G.P_BLINDS = G.P_BLINDS or { bl_small = { key = "bl_small", name = "Small Blind" },
+    bl_big = { key = "bl_big", name = "Big Blind" }, bl_hook = { key = "bl_hook", name = "The Hook", boss = {} } }
+  local ok, built = pcall(require("force.force_blind_select").build)
+  Actions.is_action_valid = real_valid
+  local query = (ok and type(built) == "table" and built.query) or tostring(built)
+  check("H1c the query ties the field to the state's list (SPECIFICATION.md:157-158)",
+    query:find("plan.hand_focus={primary=one of the Unlocked hand types", 1, true) ~= nil
+      and text:find("Unlocked hand types: ", 1, true) ~= nil, query)
 
   local advertised = advertised_focus_values(text)
   check("H1d the accepted set is stated as an enumerable sentence, not scattered prose",

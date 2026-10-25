@@ -53,18 +53,6 @@ function Emotes.get(name)
     neuro_log("Loaded animated emote:", name, "(" .. n .. " frames, " .. fps .. " fps)")
     return emote
   end
-
-  local exts = { "png", "gif", "jpg", "jpeg", "webp" }
-  for _, ext in ipairs(exts) do
-    local p = panel_emote_path(name, ext)
-    local ok, img = pcall(love.graphics.newImage, p)
-    if ok and img then
-      local emote = { img = img, quads = nil, fps = 0, n_frames = 1, fw = img:getWidth(), fh = img:getHeight() }
-      S.panel_emote_cache[name] = emote
-      return emote
-    end
-  end
-
   return nil
 end
 
@@ -79,6 +67,13 @@ function Emotes.pick_footer(persona_key, state_name)
 
   if state_name == "ROUND_EVAL" then return "neuroexplode" end
   return "neurocube"
+end
+
+function Emotes.forget_failures()
+  if type(S.panel_emote_cache) ~= "table" then return end
+  for name, emote in pairs(S.panel_emote_cache) do
+    if emote == false then S.panel_emote_cache[name] = nil end
+  end
 end
 
 return Emotes

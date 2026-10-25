@@ -3,9 +3,11 @@ G = {}
 local Config = require("core.config")
 Config.set("NEURO_OUTBOX_TRUNCATE_ON_STARTUP", "off")
 local Bridge = require("core.bridge")
-local Protocol = require("core.bridge_protocol")
+local Protocol = require("core.bridge").wire
 local Metrics = require("util.metrics")
 local json = require("util.neuro_json")
+local TxCache = require("core.bridge").tx
+
 
 local check, done = require("tests.helpers").harness("wire_guard_surface")
 local TmpWork = require("tests.tmp_workdir")
@@ -23,16 +25,7 @@ local function fresh_bridge()
 end
 
 local function frames(b, dir)
-  local f = io.open(dir .. "/" .. b.outbox_file, "rb")
-  if not f then return {} end
-  local raw = f:read("*a")
-  f:close()
-  local out = {}
-  for line in raw:gmatch("[^\n]+") do
-    local ok, frame = pcall(json.decode, line)
-    out[#out + 1] = (ok and type(frame) == "table") and frame or { command = "UNPARSEABLE" }
-  end
-  return out
+  return require("tests.helpers").outbox_frames(dir .. "/" .. b.outbox_file, { placeholder = true })
 end
 
 local function count(b, dir, command)
@@ -55,11 +48,13 @@ for _, case in ipairs({
     schema = { type = "array", items = {} } } },
   { label = "schema that is not a table", def = { name = "cash_out", description = "cash",
     schema = "object" } },
+  { label = "explicit root array schema", def = { name = "cash_out", description = "cash",
+    schema = json.array({}) } },
 }) do
   local b, dir = fresh_bridge()
   b:register_actions({ case.def })
   local registers = count(b, dir, "actions/register")
-  local before = metric("force_send_unwireable_definition")
+  local before_invalid = metric("force_send_invalid_actions")
   local ok = b:force_actions("ROUND_EVAL", "Choose", { "cash_out" })
   check("A/" .. case.label .. ": the force is refused",
     ok == false, tostring(ok))
@@ -68,22 +63,18 @@ for _, case in ipairs({
   check("A/" .. case.label .. ": no force-alias registration was written either",
     count(b, dir, "actions/register") == registers, count(b, dir, "actions/register"))
   check("A/" .. case.label .. ": the refusal is counted",
-    metric("force_send_unwireable_definition") == before + 1)
+    metric("force_send_invalid_actions") == before_invalid + 1)
   check("A/" .. case.label .. ": the force window stayed closed", b._force_open == nil)
   os.execute("rm -rf " .. dir)
 end
 
--- A2: the same shapes the SDK does permit still force. SPECIFICATION.md:55 -- an omitted schema and
--- an empty schema are both legal, so the guard must not read them as malformed.
 for _, case in ipairs({
   { label = "omitted schema", def = { name = "cash_out", description = "cash" } },
   { label = "empty schema", def = { name = "cash_out", description = "cash", schema = {} } },
   { label = "object schema", def = { name = "cash_out", description = "cash",
     schema = { type = "object", properties = {} } } },
-  -- Every key here is on the "probably not supported" list (SPECIFICATION.md:58); the wire copy
-  -- strips them, so what Neuro receives is the legal empty schema.
-  { label = "schema of stripped keywords only", def = { name = "cash_out", description = "cash",
-    schema = { title = "x", description = "y" } } },
+  { label = "object schema with unsupported keywords", def = { name = "cash_out", description = "cash",
+    schema = { type = "object", title = "x", description = "y" } } },
 }) do
   local b, dir = fresh_bridge()
   b:register_actions({ case.def })
@@ -106,7 +97,6 @@ do
   check("send() opened the window when it admitted the frame", b._force_open == true)
 
   local before = metric("ipc_force_overlap_rejected")
-  local dup_before = metric("ipc_duplicate_frame")
   local receipt = { status = "sending" }
   local accepted = b:send(Protocol.force("S2", "Q2", { "cash_out_force_9" }), receipt)
   check("a second, byte-different force is rejected at the transport boundary",
@@ -114,9 +104,8 @@ do
   check("it never became a frame",
     count(b, dir, "actions/force") == 1, count(b, dir, "actions/force"))
   check("the overlap is counted as an overlap, not as a duplicate",
-    metric("ipc_force_overlap_rejected") == before + 1
-      and metric("ipc_duplicate_frame") == dup_before,
-    metric("ipc_force_overlap_rejected") .. "/" .. metric("ipc_duplicate_frame"))
+    metric("ipc_force_overlap_rejected") == before + 1,
+    metric("ipc_force_overlap_rejected"))
   os.execute("rm -rf " .. dir)
 end
 
@@ -125,16 +114,22 @@ do
   b:register_actions({
     { name = "play_hand", description = "play", schema = { type = "object" } },
   })
+  b.transport_session, b.transport_epoch = "wire-guard", 3
+  b.run_generation, b.decision_serial = 5, 1
+  require("tests.helpers").open_force("S1", { "play_hand" })
   b:force_actions("S1", "Q1", { "play_hand" })
-  local alias
+  local action_name
   for _, frame in ipairs(frames(b, dir)) do
-    if frame.command == "actions/force" then alias = frame.data.action_names[1] end
+    if frame.command == "actions/force" then action_name = frame.data.action_names[1] end
   end
-  b:set_message_handler(function(msg) b:send_action_result(msg.data.id, true, "done") end)
-  b:_deliver_inbox_message({ command = "action", data = { id = "w-1", name = alias, data = "{}" } })
+  b:set_message_handler(function(msg)
+    require("core.execute").answer(b, msg.data.id, msg.data.name, true, "done")
+  end)
+  b:_deliver_inbox_message({ command = "action", data = { id = "w-1", name = action_name, data = "{}" } })
   check("an answered force closes the window", b._force_open == nil)
-  check("and the successor force is admitted",
-    b:force_actions("S2", "Q2", { "play_hand" }) == true)
+  check("and the successor force is admitted once it registers its offer again",
+    b:register_actions({ { name = "play_hand", description = "play", schema = { type = "object" } } }) == true
+      and b:force_actions("S2", "Q2", { "play_hand" }) == true)
   check("both force frames are on the wire",
     count(b, dir, "actions/force") == 2, count(b, dir, "actions/force"))
   os.execute("rm -rf " .. dir)
@@ -171,7 +166,6 @@ do
 end
 
 do
-  local TxCache = require("core.tx_cache")
   local b, dir = fresh_bridge()
   TxCache.reset()
   TxCache.open("owed-1", "play_hand", 0)
@@ -181,11 +175,16 @@ do
     b:answer_owed_results(nil, "swept") == 1)
   check("nothing is owed afterwards",
     #TxCache.outstanding(0) == 0, #TxCache.outstanding(0))
-  local settled = TxCache.get("owed-1")
-  check("the verdict was committed by send_action_result itself",
-    settled ~= nil and settled.ok == true and settled.message == "swept",
-    settled and tostring(settled.message))
-  check("and the id can never be answered a second time", TxCache.claim("owed-1") == false)
+  local swept
+  for _, frame in ipairs(frames(b, dir)) do
+    if frame.command == "action/result" and frame.data.id == "owed-1" then swept = frame.data end
+  end
+  check("the sweep's result went out as an acknowledgement carrying its message",
+    swept ~= nil and swept.success == true and swept.message == "swept", swept and tostring(swept.message))
+  check("and send_action_result itself marked the id answered", TxCache.get("owed-1") == true)
+  check("and the id can never be answered a second time",
+    TxCache.open("owed-1", "play_hand", 0) == false
+      and b:send_action_result("owed-1", true, "again", nil, false, false, true) == false)
   check("exactly one action/result frame reached the wire",
     count(b, dir, "action/result") == 1, count(b, dir, "action/result"))
   TxCache.reset()

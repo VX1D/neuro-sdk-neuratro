@@ -1,24 +1,14 @@
 local GameFacts = require("facts.game_facts")
 local DebuffFacts = require("facts.debuff_facts")
+local BossModel = require("facts.boss.model")
 local CardUtil = require("facts.card_util")
-local NUMERIC_EFFECTS = require("facts.numeric_effects")
 local DeckNames = require("facts.deck_names")
 local Scoring = require("util.scoring")
 local PublicCard = require("facts.public_card_identity")
 local Utils = require("util.utils")
 local M = {}
 
-local HAND_VALUE_RANK = {
-  ["2"] = 2, ["3"] = 3, ["4"] = 4, ["5"] = 5, ["6"] = 6,
-  ["7"] = 7, ["8"] = 8, ["9"] = 9, ["10"] = 10,
-  Jack = 11, Queen = 12, King = 13, Ace = 14,
-}
-
-local HAND_RANK_LABEL = {
-  [14] = "A", [13] = "K", [12] = "Q", [11] = "J", [10] = "10",
-  [9] = "9", [8] = "8", [7] = "7", [6] = "6", [5] = "5",
-  [4] = "4", [3] = "3", [2] = "2",
-}
+local HAND_RANK_LABEL = { [14] = "A", [13] = "K", [12] = "Q", [11] = "J" }
 
 local HAND_ORDER = {
   ["High Card"] = 1, ["Pair"] = 2, ["Two Pair"] = 3, ["Three of a Kind"] = 4,
@@ -26,89 +16,43 @@ local HAND_ORDER = {
   ["Straight Flush"] = 9, ["Five of a Kind"] = 10, ["Flush House"] = 11, ["Flush Five"] = 12,
 }
 
-local function smods() return rawget(_G, "SMODS") end
-local function sm(fn, arg)
-  local SM = smods()
-  if SM and type(SM[fn]) == "function" then
-    local ok, v = pcall(SM[fn], arg)
-    if ok then return v end
-  end
-  return nil
-end
-local function has_no_suit(card)
-  local SM = smods()
-  if SM and type(SM.has_no_suit) == "function" then
-    local ok, v = pcall(SM.has_no_suit, card); if ok and v then return true end
-  end
-  local ck = card and card.config and card.config.center and card.config.center.key
-  return ck == "m_stone"
-end
-local has_no_rank = CardUtil.has_no_rank
-local function rank_of(card)
-  if card and type(card.get_id) == "function" then
-    local ok, id = pcall(card.get_id, card); if ok and type(id) == "number" then return id end
-  end
-  local base = card and card.base
-  return base and HAND_VALUE_RANK[tostring(base.value)] or nil
-end
-local BASE_SUITS = { "Hearts", "Diamonds", "Spades", "Clubs" }
-local function suit_list()
-  local SM = smods()
-  return (SM and SM.Suit and SM.Suit.obj_buffer and #SM.Suit.obj_buffer > 0)
-    and SM.Suit.obj_buffer or BASE_SUITS
-end
+local has_no_suit = CardUtil.has_no_suit
+local rank_of = CardUtil.rank_id
+local function suit_list() return SMODS.Suit.obj_buffer end
 
 local SUIT_COLOR = { Hearts = "red", Diamonds = "red", Spades = "black", Clubs = "black" }
-local function smeared_active()
-  if not (G and G.jokers and G.jokers.cards) then return false end
-  for i, jc in ipairs(G.jokers.cards) do
-    local ck = (type(jc) == "table" and not jc.debuff)
-      and PublicCard.multiset_key(jc, "jokers", i) or nil
-    if ck == "center:j_smeared" then return true end
+local function smeared_active() return CardUtil.owns_live_joker("j_smeared") end
+
+local function public_cards(cards)
+  local out = {}
+  for _, c in ipairs(cards) do
+    if type(c) == "table" and PublicCard.is_public(c) then out[#out + 1] = c end
   end
-  return false
+  return out
 end
 
-local function smeared_concealed()
-  if not (G and G.jokers and G.jokers.cards) then return false end
-  for _, jc in ipairs(G.jokers.cards) do
-    if type(jc) == "table" and not jc.debuff and not PublicCard.is_public(jc) then
-      local center = jc.config and jc.config.center
-      if center and center.key == "j_smeared" then return true end
-    end
+local function public_pool(pool, concealed)
+  if type(pool) ~= "table" or (tonumber(concealed) or 0) > 0 then return false end
+  for _, c in ipairs(pool) do
+    if not (PublicCard.is_public(c) or CardUtil.is_aggregate_public(c)) then return false end
   end
-  return false
-end
-
-local function any_suit_on_face(card)
-  if sm("has_any_suit", card) then return true end
-  local ck = card and card.config and card.config.center and card.config.center.key
-  return ck == "m_wild"
+  return true
 end
 
 local function in_suit(card, suit)
-  local yes
-  if card and type(card.is_suit) == "function" then
-    local ok, v = pcall(card.is_suit, card, suit, true, true)
-    if ok then yes = v and true or false end
-  end
-  if yes == nil then
-    local base = card and card.base
-    yes = (base and tostring(base.suit) == suit) or false
-  end
-  if yes and not smeared_active() and smeared_concealed() and not any_suit_on_face(card) then
-    local own = card and card.base and card.base.suit
-    if own ~= nil and tostring(own) ~= suit then return false end
-  end
-  return yes
+  local ok, v = pcall(card.is_suit, card, suit, true, true)
+  return ok and v and true or false
 end
+
+local function suited(c, key) return not has_no_suit(c) and in_suit(c, key) end
+local function suit_key_of(s) return (type(s) == "table" and (s.key or s.name)) or s end
 
 local function count_suits(cards)
   local res, max_suit = {}, 0
   for _, s in ipairs(suit_list()) do
-    local key = (type(s) == "table" and (s.key or s.name)) or s
+    local key = suit_key_of(s)
     local n = 0
-    for _, c in ipairs(cards) do if not has_no_suit(c) and in_suit(c, key) then n = n + 1 end end
+    for _, c in ipairs(cards) do if suited(c, key) then n = n + 1 end end
     res[key] = n
     if n > max_suit then max_suit = n end
   end
@@ -118,13 +62,11 @@ end
 local function count_ranks(cards)
   local counts, present = {}, {}
   for _, c in ipairs(cards) do
-    if not has_no_rank(c) then
-      local rid = rank_of(c)
-      if rid and rid >= 2 then
-        counts[rid] = (counts[rid] or 0) + 1
-        present[rid] = true
-        if rid == 14 then present[1] = true end
-      end
+    local rid = rank_of(c)
+    if rid and rid >= 2 then
+      counts[rid] = (counts[rid] or 0) + 1
+      present[rid] = true
+      if rid == 14 then present[1] = true end
     end
   end
   return counts, present
@@ -139,7 +81,7 @@ local function rank_top(rank_counts, min_count, exclude)
 end
 
 local function max_run_of(present)
-  local shortcut = sm("shortcut") and true or false
+  local shortcut = SMODS.shortcut() and true or false
   local function run_from(start)
     local len, r, ranks = 1, start, { [start] = true }
     while true do
@@ -161,15 +103,16 @@ local function max_run_of(present)
   return max_run, best_ranks
 end
 
-local function near_straight_window(present, thr)
-  if not thr or thr < 2 then return false end
-  for w = 1, 15 - thr do
-    local cnt = 0
-    for r = w, w + thr - 1 do if present[r] then cnt = cnt + 1 end end
-    if cnt == thr - 1 then return true end
+local function rank_tally(cards)
+  local t = {}
+  for _, c in ipairs(cards) do
+    local r = rank_of(c)
+    if r then t[r] = (t[r] or 0) + 1 end
   end
-  return false
+  return t
 end
+
+local function rank_is(r) return function(c) return rank_of(c) == r end end
 
 local function straight_outs(present, thr)
   local outs, n = {}, 0
@@ -186,46 +129,51 @@ local function straight_outs(present, thr)
   return outs, n
 end
 
-local function best_near_straight_ranks(present, thr)
+local function best_straight_keep(present, thr)
   if not thr or thr < 2 then return nil end
-  local remaining = {}
-  local pool = CardUtil.unplayed_pool()
-  for _, c in ipairs(pool or {}) do
-    if not has_no_rank(c) then
-      local r = rank_of(c)
-      if r then remaining[r] = (remaining[r] or 0) + 1 end
-    end
-  end
-  local best_w, best_cnt, best_outs = nil, 0, -1
-  for w = 1, 15 - thr do
-    local cnt, outs = 0, 0
-    for r = w, w + thr - 1 do
-      if present[r] then
-        cnt = cnt + 1
-      else
-        outs = outs + (remaining[r == 1 and 14 or r] or 0)
+  local pool, flipped = CardUtil.unplayed_pool()
+  local live = public_pool(pool, flipped) and rank_tally(pool) or nil
+  local ranks = {}
+  for r = 2, 14 do if present[r] then ranks[#ranks + 1] = r end end
+  local best, best_score
+  local keep = {}
+  local function consider()
+    local probe = {}
+    for _, r in ipairs(keep) do probe[r] = true; if r == 14 then probe[1] = true end end
+    local outs, n_ranks = straight_outs(probe, thr)
+    if n_ranks == 0 then return end
+    local n_live = 0
+    for r in pairs(outs) do n_live = n_live + ((live and live[r]) or 0) end
+    local score = { live and n_live or n_ranks, n_ranks }
+    local better = not best_score
+    if not better then
+      for k = 1, 2 do
+        if score[k] ~= best_score[k] then better = score[k] > best_score[k]; break end
       end
     end
-    if cnt > best_cnt or (cnt == best_cnt and outs > best_outs) then
-      best_cnt, best_w, best_outs = cnt, w, outs
+    if better then
+      probe[1] = nil
+      best, best_score = { set = probe, outs = outs, out_ranks = n_ranks }, score
     end
   end
-  if best_w and best_cnt == thr - 1 then
-    local set, missing = {}, {}
-    for r = best_w, best_w + thr - 1 do
-      if present[r] then set[r] = true else missing[r] = true end
+  local function choose(from, left)
+    if left == 0 then consider(); return end
+    for i = from, #ranks - left + 1 do
+      keep[#keep + 1] = ranks[i]
+      choose(i + 1, left - 1)
+      keep[#keep] = nil
     end
-    return set, missing
   end
-  return nil
+  choose(1, thr - 1)
+  return best
 end
 
 local function shape(cards)
   local suit_counts, max_suit = count_suits(cards)
   local rank_counts, present = count_ranks(cards)
   local max_run, run_ranks = max_run_of(present)
-  local flush_thr = tonumber(sm("four_fingers", "flush")) or 5
-  local straight_thr = tonumber(sm("four_fingers", "straight")) or 5
+  local flush_thr = SMODS.four_fingers("flush")
+  local straight_thr = SMODS.four_fingers("straight")
   local straight_out_count = 0
   if max_run < straight_thr then
     local _, count = straight_outs(present, straight_thr)
@@ -262,9 +210,7 @@ local function positions_of(set)
   return out
 end
 
-local function play_cap()
-  return CardUtil.highlight_limit()
-end
+local function play_cap() return CardUtil.highlight_limit() end
 
 local function discard_cap()
   local ok, n = pcall(function()
@@ -273,16 +219,7 @@ local function discard_cap()
   return (ok and n) or CardUtil.highlight_limit()
 end
 
-local function active_boss_key()
-  local b = G and G.GAME and G.GAME.blind
-  if type(b) ~= "table" or b.disabled or not b.in_blind then return nil end
-  local ok, key = pcall(function() return require("facts.boss.model").resolve_key(b) end)
-  return ok and key or nil
-end
-
-local function arm_active()
-  return active_boss_key() == "bl_arm"
-end
+local function arm_active() return BossModel.active_key(true) == "bl_arm" end
 
 local function arm_drop(level, chips, mult, hd)
   if not arm_active() or (level or 1) <= 1 then return level, chips, mult end
@@ -291,8 +228,17 @@ local function arm_drop(level, chips, mult, hd)
   return level - 1, math.max(chips - lc, 0), math.max(mult - lm, 1)
 end
 
--- Plasma balances chips against mult at final_scoring_step (back.lua:157-160), so the PRODUCT of a
--- hand's two printed factors is not the score it makes; the factors themselves are untouched.
+-- `score_level`, chips and mult already reflect The Arm’s level drop and Flint’s halving.
+local function hand_values(name, hd)
+  if type(hd) ~= "table" then return nil end
+  local level = tonumber(hd.level) or 1
+  local lv, ch, mu = arm_drop(level, tonumber(hd.chips) or 0, tonumber(hd.mult) or 0, hd)
+  if DebuffFacts.flint_active() then ch, mu = DebuffFacts.flint_halve(ch, mu) end
+  return { name = name, level = level, score_level = lv, chips = ch, mult = mu,
+    played = tonumber(hd.played) or 0 }
+end
+local function current_values(name) return hand_values(name, G and G.GAME and G.GAME.hands and G.GAME.hands[name]) end
+
 local function plasma_balances()
   local c = DeckNames.current_deck_center()
   return not not (c and c.key == "b_plasma")
@@ -307,7 +253,7 @@ local function draws_after_discard(d)
   local pile = (G and G.deck and G.deck.cards and #G.deck.cards) or nil
   local k = math.max(cap - (held - d), 0)
   if pile then
-    if active_boss_key() == "bl_serpent" then
+    if BossModel.active_key(true) == "bl_serpent" then
       k = math.min(pile, 3)
     elseif k > pile then
       k = pile
@@ -339,10 +285,16 @@ local function play_value(card)
   local ed = card.edition
   if type(ed) == "table" then
     if ed.foil then v = v + 50 end
-    if ed.holo or ed.holographic then v = v + 25 end
+    if ed.holo then v = v + 25 end
     if ed.polychrome then v = v + 30 end
   end
   if v < 1 then v = 1 end
+  return v
+end
+
+local function set_value(cards)
+  local v = 0
+  for _, c in ipairs(cards) do v = v + play_value(c) end
   return v
 end
 
@@ -363,24 +315,27 @@ local function sort_by_play_value(list, order, priority)
   end)
 end
 
-local function suit_key_of(s) return (type(s) == "table" and (s.key or s.name)) or s end
+local function sort_in_play_order(list)
+  local order = {}
+  for i, c in ipairs(list) do order[c] = i end
+  sort_by_play_value(list, order)
+end
 
-local function rank_copies(cards)
+local function rank_copies(cards, key)
   local by, ord = {}, {}
   for i, c in ipairs(cards) do
     ord[c] = i
-    if not has_no_rank(c) then
-      local r = rank_of(c)
-      if r and r >= 2 then
-        by[r] = by[r] or {}
-        by[r][#by[r] + 1] = c
-      end
+    local r = rank_of(c)
+    if r and r >= 2 then
+      by[r] = by[r] or {}
+      by[r][#by[r] + 1] = c
     end
   end
+  local priority = key and function(card) return suited(card, key) and 1 or 0 end
   for _, list in pairs(by) do
-    sort_by_play_value(list, ord)
+    sort_by_play_value(list, ord, priority)
   end
-  return by
+  return by, ord
 end
 
 local function dedup_run(group)
@@ -411,29 +366,14 @@ local function best_window(seq, L)
 end
 
 local function best_straight_flush_set(group, straight_thr, flush_thr, cap)
-  local shortcut = sm("shortcut") and true or false
+  local shortcut = SMODS.shortcut() and true or false
   local best, best_v = nil, -1
   for _, s in ipairs(suit_list()) do
     local key = suit_key_of(s)
-    local by, ord, suited = {}, {}, {}
-    for i, c in ipairs(group) do
-      ord[c] = i
-      if not has_no_suit(c) and in_suit(c, key) then suited[#suited + 1] = c end
-      if not has_no_rank(c) then
-        local r = rank_of(c)
-        if r and r >= 2 then
-          by[r] = by[r] or {}
-          by[r][#by[r] + 1] = c
-        end
-      end
-    end
-    local function suit_priority(card)
-      return ((not has_no_suit(card)) and in_suit(card, key)) and 1 or 0
-    end
-    for _, list in pairs(by) do
-      sort_by_play_value(list, ord, suit_priority)
-    end
-    sort_by_play_value(suited, ord)
+    local by, ord = rank_copies(group, key)
+    local in_key = {}
+    for _, c in ipairs(group) do if suited(c, key) then in_key[#in_key + 1] = c end end
+    sort_by_play_value(in_key, ord)
     by[1] = by[14]
     local function consider_run(seq)
       local set, used, n_suited = {}, {}, 0
@@ -441,9 +381,9 @@ local function best_straight_flush_set(group, straight_thr, flush_thr, cap)
         local c = by[rk][1]
         if used[c] then return end
         set[#set + 1] = c; used[c] = true
-        if not has_no_suit(c) and in_suit(c, key) then n_suited = n_suited + 1 end
+        if suited(c, key) then n_suited = n_suited + 1 end
       end
-      for _, c in ipairs(suited) do
+      for _, c in ipairs(in_key) do
         if n_suited >= flush_thr or #set >= cap then break end
         if not used[c] then
           set[#set + 1] = c; used[c] = true; n_suited = n_suited + 1
@@ -451,7 +391,7 @@ local function best_straight_flush_set(group, straight_thr, flush_thr, cap)
       end
       if n_suited < flush_thr then return end
       local pool = {}
-      for _, c in ipairs(suited) do if not used[c] then pool[#pool + 1] = c end end
+      for _, c in ipairs(in_key) do if not used[c] then pool[#pool + 1] = c end end
       for _, rk in ipairs(seq) do
         for _, c in ipairs(by[rk]) do
           if not used[c] then pool[#pool + 1] = c end
@@ -462,8 +402,7 @@ local function best_straight_flush_set(group, straight_thr, flush_thr, cap)
         if #set >= cap then break end
         if not used[c] then set[#set + 1] = c; used[c] = true end
       end
-      local v = 0
-      for _, c in ipairs(set) do v = v + play_value(c) end
+      local v = set_value(set)
       if v > best_v then best_v, best = v, set end
     end
     local seq = {}
@@ -487,31 +426,13 @@ local function best_flush_set(name, group, flush_thr, cap)
   local best, best_c = nil, -1
   for _, s in ipairs(suit_list()) do
     local key = suit_key_of(s)
-    local by, ord = {}, {}
-    for i, c in ipairs(group) do
-      ord[c] = i
-      if not has_no_rank(c) then
-        local r = rank_of(c)
-        if r and r >= 2 then
-          by[r] = by[r] or {}
-          by[r][#by[r] + 1] = c
-        end
-      end
-    end
-    for _, list in pairs(by) do
-      sort_by_play_value(list, ord, function(card)
-        return ((not has_no_suit(card)) and in_suit(card, key)) and 1 or 0
-      end)
-    end
+    local by = rank_copies(group, key)
     local function consider(cards)
       if #cards == 0 or #cards > cap then return end
-      local suited = 0
-      for _, c in ipairs(cards) do
-        if not has_no_suit(c) and in_suit(c, key) then suited = suited + 1 end
-      end
-      if suited < flush_thr then return end
-      local sc = 0
-      for _, c in ipairs(cards) do sc = sc + play_value(c) end
+      local n = 0
+      for _, c in ipairs(cards) do if suited(c, key) then n = n + 1 end end
+      if n < flush_thr then return end
+      local sc = set_value(cards)
       if sc > best_c then best_c, best = sc, cards end
     end
     local rids = {}
@@ -544,20 +465,15 @@ local NATURAL_SIZE = {
   ["Four of a Kind"] = 4, ["Five of a Kind"] = 5,
 }
 
-local VERIFY_REBUILT = {
-  ["Straight"] = true, ["Straight Flush"] = true,
-  ["Flush House"] = true, ["Flush Five"] = true,
-  ["Full House"] = true, ["Two Pair"] = true,
-}
-
-local function best_scoring_cards(name, set)
+-- Straight Flush and Flush House groups use only the first flush suit found, which may not complete the hand.
+local function best_scoring_cards(name, set, hand)
   local cap = play_cap()
   local out = {}
   for _, c in ipairs(best_group(set)) do out[#out + 1] = c end
+  local whole = {}
+  for _, c in ipairs(hand or out) do whole[#whole + 1] = c end
   if name == "Flush" then
-    local ord = {}
-    for i, c in ipairs(out) do ord[c] = i end
-    sort_by_play_value(out, ord)
+    sort_in_play_order(out)
   elseif name == "Straight" then
     local seq = dedup_run(out)
     local win = best_window(seq, math.min(#seq, cap))
@@ -581,31 +497,15 @@ local function best_scoring_cards(name, set)
     end
     out = win
   elseif name == "Straight Flush" then
-    out = best_straight_flush_set(out,
-      tonumber(sm("four_fingers", "straight")) or 5,
-      tonumber(sm("four_fingers", "flush")) or 5, cap) or {}
+    out = best_straight_flush_set(whole,
+      SMODS.four_fingers("straight"),
+      SMODS.four_fingers("flush"), cap) or {}
   elseif name == "Flush House" or name == "Flush Five" then
-    out = best_flush_set(name, out, tonumber(sm("four_fingers", "flush")) or 5, cap) or {}
-  elseif name == "Full House" or name == "Two Pair" then
-    local by = rank_copies(out)
-    local want = (name == "Full House") and 3 or 2
-    local a, b
-    for r, list in pairs(by) do if #list >= want and (not a or r > a) then a = r end end
-    for r, list in pairs(by) do if r ~= a and #list >= 2 and (not b or r > b) then b = r end end
-    if a and b then
-      local kept = {}
-      for k = 1, want do kept[#kept + 1] = by[a][k] end
-      for k = 1, 2 do kept[#kept + 1] = by[b][k] end
-      out = kept
-    else
-      out = {}
-    end
+    out = best_flush_set(name, whole, SMODS.four_fingers("flush"), cap) or {}
   elseif NATURAL_SIZE[name] then
     local n = NATURAL_SIZE[name]
     if #out > n then
-      local ord = {}
-      for i, c in ipairs(out) do ord[c] = i end
-      sort_by_play_value(out, ord)
+      sort_in_play_order(out)
       while #out > n do table.remove(out) end
     end
   end
@@ -655,15 +555,13 @@ function contained_types(cards)
     local suits = suit_list()
     local rank_total, rs = {}, {}
     for _, c in ipairs(cards) do
-      if not has_no_rank(c) then
-        local r = rank_of(c)
-        if r then
-          rank_total[r] = (rank_total[r] or 0) + 1
-          for _, s in ipairs(suits) do
-            if in_suit(c, s) then
-              rs[s] = rs[s] or {}
-              rs[s][r] = (rs[s][r] or 0) + 1
-            end
+      local r = rank_of(c)
+      if r then
+        rank_total[r] = (rank_total[r] or 0) + 1
+        for _, s in ipairs(suits) do
+          if in_suit(c, s) then
+            rs[s] = rs[s] or {}
+            rs[s][r] = (rs[s][r] or 0) + 1
           end
         end
       end
@@ -693,78 +591,293 @@ function contained_types(cards)
   return t
 end
 
-local function idx_suffix(ix)
-  if type(ix) ~= "table" or #ix == 0 then return "" end
-  local s = {}
-  for i, v in ipairs(ix) do s[i] = tostring(v) end
-  return "[" .. table.concat(s, ",") .. "]"
+-- Check each type against the whole selection; Flush plus Straight also flags Straight Flush.
+local function forced_card(cards)
+  for _, c in ipairs(cards or {}) do
+    if type(c) == "table" and type(c.ability) == "table" and c.ability.forced_selection then return c end
+  end
+  return nil
 end
 
-local function level_note(name)
-  local hd = G and G.GAME and G.GAME.hands and G.GAME.hands[name]
-  if type(hd) ~= "table" then return "" end
-  local lv = tonumber(hd.level) or 1
-  local ch, mu = tonumber(hd.chips) or 0, tonumber(hd.mult) or 0
-  lv, ch, mu = arm_drop(lv, ch, mu, hd)
-  if DebuffFacts.flint_active() then ch, mu = DebuffFacts.flint_halve(ch, mu) end
-  return string.format("(lv%g %gc x%g)", lv, ch, mu)
+local function top_of(types)
+  local top, order = nil, 0
+  for n in pairs(types) do
+    if (HAND_ORDER[n] or 0) > order then top, order = n, HAND_ORDER[n] end
+  end
+  return top
 end
 
-local function type_conditional_jokers()
-  local map
-  if not (G and G.jokers and G.jokers.cards) then return nil end
-  for i, jc in ipairs(G.jokers.cards) do
-    -- Amber Acorn (blind.lua:222-231) flips the row and shuffles it three times: the slot of a
-    -- face-down joker IS the fact the boss removes, so it may not be recorded, let alone printed.
-    local ab = type(jc) == "table" and not jc.debuff and PublicCard.is_public(jc) and jc.ability
-    local ht = type(ab) == "table" and ab.type
-    if type(ht) == "string" and ht ~= "" then
-      for _, e in ipairs(NUMERIC_EFFECTS) do
-        local v = NUMERIC_EFFECTS.read(ab, e)
-        if e.gate == "hand_type" and v and v ~= e.skip then
-          map = map or {}
-          map[ht] = map[ht] or {}
-          map[ht][#map[ht] + 1] = i
-          break
-        end
+local function played_type(set)
+  if G and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
+    local ok, text = pcall(G.FUNCS.get_poker_hand_info, set)
+    if ok and type(text) == "string" and HAND_ORDER[text] then return text end
+  end
+  return top_of(contained_types_cached(set))
+end
+
+local function each_subset(cards, size, fn)
+  local cur = {}
+  local function rec(from)
+    if #cur == size then return fn(cur) end
+    for i = from, #cards - (size - #cur) + 1 do
+      cur[#cur + 1] = cards[i]
+      local stop = rec(i + 1)
+      cur[#cur] = nil
+      if stop then return true end
+    end
+  end
+  if size >= 1 and size <= #cards then rec(1) end
+end
+
+local function copy_list(list)
+  local out = {}
+  for i, v in ipairs(list) do out[i] = v end
+  return out
+end
+
+-- The engine scores only the selection’s top type, so a Ready row must top its own cards.
+local function as_top(name, best, cards)
+  if top_of(contained_types_cached(best)) == name then return best end
+  for size = #best, 1, -1 do
+    local pick, pick_v
+    each_subset(cards, size, function(s)
+      if top_of(contained_types(s)) == name then
+        local v = set_value(s)
+        if not pick or v > pick_v then pick, pick_v = copy_list(s), v end
+      end
+    end)
+    if pick then return pick end
+  end
+  return nil
+end
+
+local function with_forced(name, best, forced)
+  for _, c in ipairs(best) do if c == forced then return best end end
+  local cands = {}
+  if #best < play_cap() then
+    local s = { forced }
+    for _, c in ipairs(best) do s[#s + 1] = c end
+    cands[1] = s
+  end
+  for i = 1, #best do
+    local s = { forced }
+    for j, c in ipairs(best) do if j ~= i then s[#s + 1] = c end end
+    cands[#cands + 1] = s
+  end
+  local pick, pick_v
+  for _, s in ipairs(cands) do
+    if played_type(s) == name then
+      local v = set_value(s)
+      if not pick or v > pick_v then pick, pick_v = s, v end
+    end
+  end
+  return pick
+end
+
+local function with_always_scoring(best_of, cards)
+  local extra = {}
+  for _, c in ipairs(cards) do
+    if type(c) == "table" and PublicCard.is_public(c) and not c.debuff and Scoring.always_scores(c)
+        and c.seal ~= "Blue" then
+      extra[#extra + 1] = c
+    end
+  end
+  if #extra == 0 then return best_of end
+  for name, best in pairs(best_of) do
+    local set, member = {}, {}
+    for i, c in ipairs(best) do set[i] = c; member[c] = true end
+    for _, c in ipairs(extra) do
+      if #set >= play_cap() then break end
+      if not member[c] then
+        set[#set + 1] = c
+        if played_type(set) ~= name then set[#set] = nil end
+      end
+    end
+    best_of[name] = set
+  end
+  return best_of
+end
+
+local function take_copies(by, take)
+  local out = {}
+  for r, n in pairs(take) do
+    local list = by[r] or {}
+    for k = 1, math.min(n, #list) do out[#out + 1] = list[k] end
+  end
+  return out
+end
+
+local function ready_hands(cards)
+  local best_of = {}
+  if type(cards) ~= "table" or #cards == 0 then return best_of end
+  local function mark(name, best)
+    if type(best) ~= "table" or #best == 0 then return end
+    best_of[name] = as_top(name, best, cards)
+  end
+  if G and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
+    local ok, ph = pcall(function()
+      local _, _, p = G.FUNCS.get_poker_hand_info(cards)
+      return p
+    end)
+    if ok and type(ph) == "table" then
+      for name, set in pairs(ph) do
+        if name ~= "top" and set and next(set) then mark(name, best_scoring_cards(name, set, cards)) end
       end
     end
   end
-  return map
+  local _, rank_counts = shape(cards)
+  local by = rank_copies(cards)
+  for name, want in pairs({ ["Two Pair"] = 2, ["Full House"] = 3 }) do
+    local a = rank_top(rank_counts, want)
+    local b = a and rank_top(rank_counts, 2, a)
+    local made = b and take_copies(by, { [a] = want, [b] = 2 })
+    if made and #made > 0 and contained_types(made)[name] then best_of[name] = as_top(name, made, cards) end
+  end
+  local forced = forced_card(cards)
+  if forced then
+    for name, best in pairs(best_of) do best_of[name] = with_forced(name, best, forced) end
+  end
+  return with_always_scoring(best_of, cards)
 end
 
-local function agg_text(agg)
-  if type(agg) ~= "table" then return "" end
-  local p = {}
-  if (agg.chips or 0) ~= 0 then p[#p + 1] = Utils.signed(agg.chips, "c") end
-  if (agg.mult or 0) ~= 0 then p[#p + 1] = Utils.signed(agg.mult, "m") end
-  if (agg.xmult or 1) ~= 1 then p[#p + 1] = Utils.fmt_xmult(agg.xmult) end
-  if (agg.xchips or 1) ~= 1 then p[#p + 1] = Utils.fmt_xmult(agg.xchips) .. "c" end
-  if #p == 0 then return "" end
-  return table.concat(p, " ")
+local MAX_PRICED_SELECTIONS = 1600
+
+local function n_choose(n, k)
+  if k < 0 or k > n then return 0 end
+  local r = 1
+  for i = 1, k do r = r * (n - k + i) / i end
+  return r
 end
 
-local function joker_note(matches, agg)
-  if type(matches) ~= "table" or #matches == 0 then return "" end
-  local s = {}
-  for i, v in ipairs(matches) do s[i] = "J" .. tostring(v) end
-  local val = agg_text(agg)
-  if val ~= "" then val = " " .. val else val = (#s > 1 and " apply" or " applies") end
-  return "(" .. table.concat(s, ",") .. val .. ")"
+local function ready_by_value(cards, value)
+  local out = {}
+  if type(cards) ~= "table" or #cards == 0 or type(value) ~= "function" then return out end
+  local function offer(name, set)
+    local v = name and value(set, name)
+    local cur = out[name]
+    if v and (not cur or v > cur.value) then out[name] = { set = set, value = v } end
+  end
+  local cap = math.min(play_cap(), #cards)
+  local total = 0
+  for k = 1, cap do total = total + n_choose(#cards, k) end
+  if total > MAX_PRICED_SELECTIONS then
+    for name, best in pairs(ready_hands(cards)) do offer(name, best) end
+    return out
+  end
+  local forced = forced_card(cards)
+  for k = 1, cap do
+    each_subset(cards, k, function(s)
+      local has_forced = not forced
+      for _, c in ipairs(s) do
+        if c == forced then has_forced = true end
+        if c.seal == "Blue" and Scoring.always_scores(c) then return end
+      end
+      if not has_forced then return end
+      local set = copy_list(s)
+      offer(top_of(contained_types(set)), set)
+    end)
+  end
+  return out
 end
 
-local function guaranteed_note(g)
-  if not g then return "" end
-  local val = agg_text(g)
-  if val == "" then return "" end
-  return "(jokers-always: " .. val .. ")"
+local FIVE_CARD = { Straight = true, Flush = true, ["Full House"] = true, ["Straight Flush"] = true,
+  ["Flush House"] = true, ["Flush Five"] = true }
+
+local function scoring_of(set, name)
+  for _, c in ipairs(set) do
+    if Scoring.always_scores(c) or Scoring.never_scores(c) then return Scoring.scoring_subset(set) end
+  end
+  local splash = Scoring.splash_state()
+  if splash == "yes" then return set, true end
+  local size = NATURAL_SIZE[name] or (name == "Two Pair" and 4)
+    or (FIVE_CARD[name] and SMODS.four_fingers("flush") == 5 and SMODS.four_fingers("straight") == 5 and 5)
+  if splash == "no" and size and #set == size then return set, true end
+  return Scoring.scoring_subset(set)
 end
 
-local function cond_note(agg)
-  local val = agg_text(agg)
-  if val == "" then return "" end
-  return "(jokers: " .. val .. ")"
+local function exact_value(set, name)
+  local scoring, exact = scoring_of(set, name)
+  if not (scoring and exact) then return nil end
+  return M.selection_value(set, name, scoring)
 end
+
+local function ready_sets(cards)
+  local sets = ready_hands(cards)
+  -- Price only selections where every card scores; a non-scoring card adds no known value.
+  local splash_off = Scoring.splash_state() == "no"
+  local function all_scoring(set, name)
+    if splash_off and NATURAL_SIZE[name] and #set > NATURAL_SIZE[name] then
+      local extra = false
+      for _, c in ipairs(set) do if Scoring.always_scores(c) then extra = true break end end
+      if not extra then return nil end
+    end
+    local scoring, exact = scoring_of(set, name)
+    if not (scoring and exact and #scoring == #set) then return nil end
+    return M.selection_value(set, name, scoring)
+  end
+  for name, priced in pairs(ready_by_value(cards, all_scoring)) do
+    local cur = sets[name]
+    if cur then
+      local cur_v = exact_value(cur, name)
+      if not cur_v or priced.value > cur_v then sets[name] = priced.set end
+    end
+  end
+  return sets
+end
+
+local function top_scoring(sets)
+  local top, top_v
+  for name, set in pairs(sets) do
+    local v = exact_value(set, name)
+    if not v then return nil end
+    if not top_v or v > top_v then top, top_v = name, v end
+  end
+  return top
+end
+
+local STEP_UNIT = { chips = " chips", xchips = " chips", mult = " mult", xmult = " mult" }
+
+local function step_text(kind, value)
+  if kind == "xmult" or kind == "xchips" then return Utils.fmt_xmult(value) .. STEP_UNIT[kind] end
+  return Utils.signed(value) .. STEP_UNIT[kind]
+end
+
+local function card_label(st)
+  for i, c in ipairs(G and G.hand and G.hand.cards or {}) do
+    if c == st.card then return (st.held and "on held card " or "on card ") .. i end
+  end
+  return st.held and "on the held copy" or "on a played card"
+end
+
+local function chain_list(steps)
+  local parts, last, last_card = {}, nil, nil
+  for _, st in ipairs(steps) do
+    local text = step_text(st.kind, st.value)
+    if st.card and st.card ~= last_card then
+      parts[#parts + 1] = (#parts > 0 and "then " or "") .. card_label(st) .. " joker " .. st.slot .. " " .. text
+    elseif st.slot == last then
+      parts[#parts] = parts[#parts] .. " " .. text
+    else
+      parts[#parts + 1] = "joker " .. st.slot .. " " .. text
+    end
+    last, last_card = st.slot, st.card
+  end
+  return table.concat(parts, ", ")
+end
+
+-- Engine order is every joker for each card, followed by the joker pass.
+local function chain_parts(steps)
+  local card_phase, joker_phase = {}, {}
+  for _, st in ipairs(steps or {}) do
+    local list = st.cards and card_phase or joker_phase
+    list[#list + 1] = st
+  end
+  local parts = {}
+  if #card_phase > 0 then parts[#parts + 1] = "as the cards score: " .. chain_list(card_phase) end
+  if #joker_phase > 0 then parts[#parts + 1] = "then jokers left to right: " .. chain_list(joker_phase) end
+  return parts
+end
+
 
 local STRONG_READY = {
   Straight = true, Flush = true, ["Full House"] = true, ["Four of a Kind"] = true,
@@ -790,86 +903,161 @@ local _strong_cache = { sig = nil, val = false }
 local function strong_sig()
   if not (G and G.hand and G.hand.cards) then return nil end
   local t = {}
-  t[#t + 1] = "g" .. tostring((G.NEURO and G.NEURO.run_generation) or 0)
-  for _, c in ipairs(G.hand.cards) do
-    local base = c and c.base or {}
-    t[#t + 1] = table.concat({
-      tostring(c), tostring(base.value or "-"), tostring(base.suit or "-"),
-      c.debuff and "!" or "", CardUtil.is_face_down(c) and "fd" or "up",
-    }, "/")
+  t[#t + 1] = "n" .. tostring(#G.hand.cards)
+  for i, c in ipairs(G.hand.cards) do
+    if type(c) ~= "table" or not PublicCard.is_public(c) then
+      t[#t + 1] = tostring(i) .. "/hidden"
+    else
+      local base = c and c.base or {}
+      local center = c and c.config and c.config.center or {}
+      t[#t + 1] = table.concat({
+        tostring(i), tostring(base.value or "-"), tostring(base.suit or "-"),
+        tostring(center.key or "-"), tostring(CardUtil.enhancement_key(c) or "-"),
+        c.debuff and "!" or "", "public",
+      }, "/")
+    end
   end
-  t[#t + 1] = tostring((G.jokers and G.jokers.cards and #G.jokers.cards) or 0)
-  t[#t + 1] = tostring(tonumber(sm("four_fingers", "flush")) or 5)
-  t[#t + 1] = tostring(tonumber(sm("four_fingers", "straight")) or 5)
-  t[#t + 1] = sm("shortcut") and "sc1" or "sc0"
+  local suits = {}
+  for _, suit in ipairs(suit_list()) do suits[#suits + 1] = tostring(suit_key_of(suit)) end
+  table.sort(suits)
+  t[#t + 1] = "suits:" .. table.concat(suits, ",")
+  t[#t + 1] = "smeared:" .. (smeared_active() and "active" or "off")
+  t[#t + 1] = tostring(SMODS.four_fingers("flush"))
+  t[#t + 1] = tostring(SMODS.four_fingers("straight"))
+  t[#t + 1] = SMODS.shortcut() and "sc1" or "sc0"
   return table.concat(t, ";")
 end
 
-local function n_face_down(cards)
-  local n = 0
-  for _, c in ipairs(cards or {}) do if CardUtil.is_face_down(c) then n = n + 1 end end
-  return n
+local function cache_strong(names, sig)
+  local strong = false
+  for n in pairs(names) do
+    if STRONG_READY[n] then strong = true break end
+  end
+  _strong_cache.sig, _strong_cache.val = sig, strong
+  return strong
 end
 
-local function hand_structure_summary()
+local function n_face_down(cards)
+  return require("facts.text").count(cards, function(c) return type(c) ~= "table" or not PublicCard.is_public(c) end)
+end
+
+local function draw_facing_sentence(rule)
+  local odds = rule.chance_text
+  local function how(v)
+    if not v then return "face up" end
+    if v == "all" then return "face down" end
+    if v == "chance" then
+      return odds and ("each with a " .. odds .. " chance of arriving face down")
+        or "each with a chance of arriving face down"
+    end
+    if v == "faces" then
+      return "face down if they are face cards"
+        .. (odds and (", any other card with a " .. odds .. " chance") or "")
+    end
+    return "possibly face down"
+  end
+  local p, d = how(rule.play), how(rule.discard)
+  if p == d then return "Replacements after a play or a discard are drawn " .. p .. "." end
+  return "Replacements after a discard are drawn " .. d .. "; after a play, " .. p .. "."
+end
+
+local function discard_draw_read(rule)
+  local kind = rule.discard
+  local p = tonumber(rule.chance) or 0
+  if not kind then return { q = 1 } end
+  if (kind == "chance" or kind == "faces") and p < 0.5 then
+    return { q = 1 - p, faces = kind == "faces",
+      only_faces = kind == "faces" and p == 0 and (rule.play == "faces" or not rule.play) }
+  end
+  return nil
+end
+
+local function is_face_card(c)
+  if type(c) ~= "table" or type(c.is_face) ~= "function" then return false end
+  local ok, v = pcall(c.is_face, c)
+  return ok and v and true or false
+end
+
+function M.structure()
   if not (G and G.hand and G.hand.cards and #G.hand.cards > 0) then
-    return ""
+    return nil
   end
 
   local n_fd = n_face_down(G.hand.cards)
   local fd_lead = ""
+  local odds_lead, no_odds_lead, odds_tail, no_odds_tail = "", "", "", ""
   local cards = G.hand.cards
   local hand_pos = {}
   for i, c in ipairs(G.hand.cards) do hand_pos[c] = i end
+  local draw_rule = BossModel.next_draw_facedown()
+  local read = discard_draw_read(draw_rule)
+  local facing = draw_facing_sentence(draw_rule)
+  local miss_note = (read and (read.q < 1 or read.faces)) and "The draw odds below count a face-down draw as a miss. " or ""
+  local range_note = (read and read.only_faces)
+    and "they are face cards, which the draw odds below never count as outs, so no hidden card hides a counted out. "
+    or "each draw figure below is a range whose low end assumes those cards hold every out. "
   if n_fd > 0 then
     local visible = #G.hand.cards - n_fd
-    local fish_discards_faceup = DebuffFacts.fish_discards_faceup()
     if visible == 0 then
-      if fish_discards_faceup then
-        return string.format(
-          "Structure: all %d cards face-down (hidden), 0 visible. Under The Fish, discarding hidden "
-          .. "cards draws face-up replacements; playing makes its replacement draws face-down. Your call. ",
-          n_fd)
-      end
-      return string.format(
+      return { hidden = string.format(
         "Structure: all %d cards face-down (hidden), 0 visible. No hand analysis is possible until they "
-        .. "flip; any play or discard here is blind (fresh draws may also come face-down). Your call. ",
-        n_fd)
+        .. "flip; any play or discard here is blind. %s ", n_fd, facing) }
     end
-    if fish_discards_faceup then
+    if not read then
       fd_lead = string.format(
-        "%d card(s) face-down (hidden), %d visible. Under The Fish, discarding hidden cards draws "
-        .. "face-up replacements, while replacements after a play are face-down. The one-card-away "
-        .. "odds below are withheld until every card is visible. ", n_fd, visible)
+        "%d card(s) face-down (hidden), %d visible. %s "
+        .. "Discarding here is a blind gamble: you cannot see if it helps, its replacements may come face-down "
+        .. "too, and the one-card-away odds below are withheld while a card is hidden. ",
+        n_fd, visible, facing)
     else
-      fd_lead = string.format(
-        "%d card(s) face-down (hidden), %d visible. "
-        .. "Decide from the visible cards -- discarding here is a blind gamble (you cannot see if it helps, "
-        .. "fresh draws may also come face-down, and the one-card-away odds below are withheld while a card "
-        .. "is hidden), so prefer playing your best hand from what you can see over burning discards. ",
-        n_fd, visible)
+      fd_lead = string.format("%d card(s) face-down (hidden), %d visible. %s ", n_fd, visible, facing)
+        .. ((draw_rule.discard == "faces" and "Only face cards arrive face down, so a discard toward a non-face "
+          .. "out is a real draw you will see, not a blind gamble. ")
+          or (draw_rule.discard and "Most replacements arrive face up, so a discard toward a one-card-away hand "
+            .. "is a real draw you will mostly see, not a blind gamble. ") or "")
+      odds_lead = "The hidden cards still count as unplayed"
+        .. (read.only_faces and "; " or ", so ") .. range_note
+        .. miss_note
     end
-    local vis = {}
-    for _, c in ipairs(G.hand.cards) do
-      if not CardUtil.is_face_down(c) then vis[#vis + 1] = c end
+  else
+    local _, _, where = CardUtil.unplayed_pool()
+    local unseen = where and ((where.discard or 0) + (where.other or 0)) or 0
+    if unseen > 0 then
+      fd_lead = string.format("%d card(s) you discarded unseen still count as unplayed, so the draw pile's "
+        .. "exact makeup is unknown", unseen)
+      if read then
+        odds_lead, no_odds_lead = "; " .. range_note, ". "
+      else
+        fd_lead = fd_lead .. " and the one-card-away odds below are withheld. "
+      end
     end
-    cards = vis
+    if draw_rule.discard then
+      if read then
+        odds_tail = facing .. " " .. miss_note
+        no_odds_tail = facing .. " "
+      else
+        fd_lead = fd_lead .. facing .. " The one-card-away odds below are withheld. "
+      end
+    end
   end
+  if n_fd > 0 then cards = public_cards(G.hand.cards) end
 
   local debuffed = DebuffFacts.count(cards)
   local has_restr = DebuffFacts.has_hand_restriction()
 
-  local facedown = DebuffFacts.boss_draws_facedown()
+  local facedown = (draw_rule.play or draw_rule.discard) and true or false
 
   local sh, rank_counts, present_ranks, suit_counts = shape(cards)
-  local rank_copies_memo
-  local function copies_by_rank()
-    rank_copies_memo = rank_copies_memo or rank_copies(cards)
-    return rank_copies_memo
+  -- The +LOCK card leaves on every discard, so one-card-away keeps exclude it.
+  local forced = forced_card(cards)
+  local kcards, ksh, k_rank_counts, k_present, k_suit_counts = cards, sh, rank_counts, present_ranks, suit_counts
+  if forced then
+    kcards = {}
+    for _, c in ipairs(cards) do if c ~= forced then kcards[#kcards + 1] = c end end
+    ksh, k_rank_counts, k_present, k_suit_counts = shape(kcards)
   end
-  local function top_rank(min_count, exclude) return rank_top(rank_counts, min_count, exclude) end
+  local function top_rank(min_count, exclude) return rank_top(k_rank_counts, min_count, exclude) end
   local pair_count, trips_count = sh.pairs, sh.trips
-  local has3, has4 = sh.trips > 0, sh.quads > 0
   local high_pair_rank = sh.high_pair_rank
   local max_suit, max_run = sh.max_suit, sh.max_run
   local flush_thr, straight_thr = sh.flush_thr, sh.straight_thr
@@ -884,9 +1072,9 @@ local function hand_structure_summary()
     ["Full House"] = 5, ["Five of a Kind"] = 5, ["Flush House"] = 5, ["Flush Five"] = 5,
     ["Straight"] = straight_thr, ["Flush"] = flush_thr, ["Straight Flush"] = math.max(straight_thr, flush_thr),
   }
-  local function floor_note(name)
-    if min_play > (HAND_PLAY_SIZE[name] or min_play) then return "(play " .. min_play .. "+ cards)" end
-    return ""
+  local function floor_of(name)
+    if min_play > (HAND_PLAY_SIZE[name] or min_play) then return min_play end
+    return nil
   end
   local function deb_in_ix(ix)
     local n = 0
@@ -897,29 +1085,17 @@ local function hand_structure_summary()
     local inx = {}
     for _, i in ipairs(ix) do inx[i] = true end
     local rest = {}
-    for _, c in ipairs(cards) do
-      local i = hand_pos[c]
-      if i and not inx[i] then rest[#rest + 1] = i end
+    for i in ipairs(G.hand.cards) do
+      if not inx[i] then rest[#rest + 1] = i end
     end
     return rest
   end
-  local function others_suffix(ix)
+  local function draws_for(ix) return draws_after_discard(math.min(#others_of(ix), discard_cap())) end
+  local function keep_entry(name, ix, draw, deb)
     local rest = others_of(ix)
-    if #rest == 0 then return "" end
     local cap = discard_cap()
-    if #rest <= cap then return "/other" .. idx_suffix(rest) end
-    local order = {}
-    for i, p in ipairs(rest) do order[i] = p end
-    table.sort(order, function(a, b)
-      local ra = rank_of(G.hand.cards[a]) or 0
-      local rb = rank_of(G.hand.cards[b]) or 0
-      if ra ~= rb then return ra < rb end
-      return a < b
-    end)
-    local take = {}
-    for i = 1, cap do take[i] = order[i] end
-    table.sort(take)
-    return "/other" .. idx_suffix(take) .. "(discard at most " .. cap .. ")"
+    return { name = name, ix = ix, others = #rest > 0 and rest or nil, cap = #rest > cap and cap or nil,
+      draw = draw, deb = deb, floor = floor_of(name) }
   end
   local function complete_pct(n, m, k)
     if k < 1 or n < 1 or m < 1 then return 0 end
@@ -932,41 +1108,74 @@ local function hand_structure_summary()
     end
     return math.floor((1 - miss) * 100 + 0.5)
   end
+  -- A completing card drawn face-down counts as a miss because the out must be seen.
+  local function seen_pct(n, m, k, q)
+    if q >= 1 then return complete_pct(n, m, k) end
+    if k < 1 or n < 1 or m < 1 then return 0 end
+    k = math.min(k, m)
+    local all, miss = n_choose(m, k), 0
+    for j = 0, math.min(n, k) do
+      miss = miss + n_choose(n, j) * n_choose(m - n, k - j) / all * (1 - q) ^ j
+    end
+    return math.floor((1 - miss) * 100 + 0.5)
+  end
   local function draw_note(match, k)
-    local pool, flipped = CardUtil.unplayed_pool()
-    if not pool or #pool == 0 or not match then return "" end
-    if flipped > 0 then return "" end
-    if (tonumber(k) or 0) < 1 then return "" end
-    local n = 0
-    for _, c in ipairs(pool) do if match(c) then n = n + 1 end end
+    local pool, concealed = CardUtil.unplayed_pool()
+    if not pool or #pool == 0 or not match or not read then return false end
+    if (tonumber(k) or 0) < 1 then return false end
+    k = k or 1
+    local function outs()
+      local n, hideable, faced = 0, 0, 0
+      for _, c in ipairs(pool) do
+        if match(c) then
+          if read.faces and is_face_card(c) then
+            faced = faced + 1
+          else
+            n = n + 1
+            if not read.only_faces or is_face_card(c) then hideable = hideable + 1 end
+          end
+        end
+      end
+      return n, hideable, faced
+    end
+    if (concealed or 0) == 0 then
+      -- Draw odds are public only when every card in the pool is public.
+      if not public_pool(pool, concealed) then return false end
+      local n, _, faced = outs()
+      if n == 0 then return nil end
+      return { n = n, m = #pool, pct = seen_pct(n, #pool, k, read.q), faced = faced > 0 and faced or nil }
+    end
+    for _, c in ipairs(pool) do
+      if not (PublicCard.is_public(c) or CardUtil.is_composition_public(c)) then return false end
+    end
+    local m = #pool - concealed
+    if m < 1 then return false end
+    local n, hideable, faced = outs()
     if n == 0 then return nil end
-    return string.format("(draw %d/%d=%d%%)", n, #pool, complete_pct(n, #pool, k or 1))
+    faced = faced > 0 and faced or nil
+    local lo, hi = n - math.min(concealed, hideable), math.min(n, m)
+    local plo, phi = seen_pct(lo, m, k, read.q), seen_pct(hi, m, k, read.q)
+    if lo == hi then return { n = hi, m = m, pct = phi, faced = faced } end
+    return { lo = lo, n = hi, m = m, plo = plo, pct = phi, faced = faced }
   end
   local pile_memo
   local function deck_rank_pile()
     if pile_memo ~= nil then return pile_memo end
     local dk, flipped = CardUtil.unplayed_pool()
-    if type(dk) ~= "table" or #dk == 0 or flipped > 0 then pile_memo = false; return false end
-    local pile = {}
-    for _, c in ipairs(dk) do
-      if not has_no_rank(c) then
-        local r = rank_of(c)
-        if r ~= nil then pile[r] = (pile[r] or 0) + 1 end
-      end
+    if type(dk) ~= "table" or #dk == 0 or not public_pool(dk, flipped) then
+      pile_memo = false; return false
     end
-    pile_memo = pile
-    return pile
+    pile_memo = rank_tally(dk)
+    return pile_memo
   end
   local function best_kicker(exclude)
     local pile = deck_rank_pile()
     if not pile then return nil end
     local best, best_n = nil, 0
-    for _, c in ipairs(cards) do
-      if not has_no_rank(c) then
-        local r = rank_of(c)
-        if r ~= nil and r ~= exclude and (rank_counts[r] or 0) == 1 and (pile[r] or 0) > best_n then
-          best, best_n = r, pile[r]
-        end
+    for _, c in ipairs(kcards) do
+      local r = rank_of(c)
+      if r ~= nil and r ~= exclude and (k_rank_counts[r] or 0) == 1 and (pile[r] or 0) > best_n then
+        best, best_n = r, pile[r]
       end
     end
     return best
@@ -976,12 +1185,9 @@ local function hand_structure_summary()
     if type(ix) ~= "table" or #ix == 0 then return nil end
     local deb = deb_in_ix(ix)
     if deb == #ix then return nil end
-    local draws = draws_after_discard(math.min(#others_of(ix), discard_cap()))
-    local dn = draw_note(match, draws)
+    local dn = draw_note(match, draws_for(ix))
     if dn == nil then return nil end
-    local note = (deb > 0) and ("(" .. deb .. " debuffed~0)") or ""
-    return name .. " keep" .. idx_suffix(ix) .. others_suffix(ix)
-      .. dn .. note .. floor_note(name)
+    return keep_entry(name, ix, dn, deb)
   end
 
   local ready_set = {}
@@ -990,8 +1196,6 @@ local function hand_structure_summary()
   local ready_ix = {}
   local ready_best = {}
   local function mark_ready(name, best)
-    if type(best) ~= "table" or #best == 0 then return end
-    if VERIFY_REBUILT[name] and not contained_types_cached(best)[name] then return end
     ready_set[name] = true
     ready_best[name] = best
     ready_ix[name] = positions_of(best)
@@ -1000,81 +1204,47 @@ local function hand_structure_summary()
       if DebuffFacts.all_debuffed(best) then ready_dud[name] = true end
     end
   end
-  if G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function" then
-    local ok, ph = pcall(function()
-      local _, _, p = G.FUNCS.get_poker_hand_info(cards)
-      return p
-    end)
-    if ok and type(ph) == "table" then
-      for name, set in pairs(ph) do
-        if name ~= "top" and set and next(set) then
-          mark_ready(name, best_scoring_cards(name, set))
-        end
-      end
-    end
-  end
+  for name, best in pairs(ready_sets(cards)) do mark_ready(name, best) end
 
-  do
-    local function take_cards(take)
-      local by = copies_by_rank()
-      local out = {}
-      for r, n in pairs(take) do
-        local list = by[r] or {}
-        for k = 1, math.min(n, #list) do out[#out + 1] = list[k] end
-      end
-      return out
-    end
-    local function compose(name)
-      if name == "Two Pair" then
-        local a = top_rank(2)
-        local b = a and top_rank(2, a)
-        if a and b then return { [a] = 2, [b] = 2 } end
-      elseif name == "Full House" then
-        local a = top_rank(3)
-        local b = a and top_rank(2, a)
-        if a and b then return { [a] = 3, [b] = 2 } end
-      end
-      return nil
-    end
-    for _, name in ipairs({ "Two Pair", "Full House" }) do
-      local take = compose(name)
-      local made = take and take_cards(take)
-      if made and #made > 0 and contained_types(made)[name] then
-        mark_ready(name, made)
-      end
-    end
-  end
-
-  do
-    local strong = false
-    for n in pairs(ready_set) do
-      if STRONG_READY[n] then strong = true break end
-    end
-    _strong_cache.sig = strong_sig()
-    _strong_cache.val = strong
-  end
+  cache_strong(ready_set, strong_sig())
 
   local near_set = {}
   local discards = GameFacts.discards_left()
   if discards > 0 then
-    local function near(name) if not ready_set[name] then near_set[name] = true end end
-    if flush_thr > 1 and max_suit == flush_thr - 1 then near("Flush") end
-    if straight_thr > 1 and max_run < straight_thr and (max_run == straight_thr - 1
-        or (not sm("shortcut") and near_straight_window(present_ranks, straight_thr))) then near("Straight") end
-    if has4 then near("Five of a Kind") end
-    if has3 then near("Four of a Kind") end
-    if trips_count >= 1 or pair_count >= 2 then near("Full House") end
-    if pair_count >= 1 then near("Three of a Kind") end
-    if pair_count == 1 then near("Two Pair") end
+    -- An outranked hand type already present is not one card away.
+    local held = contained_types(cards)
+    -- Keep an unrevealed secret hand unnamed until the game exposes it.
+    local hands = G and G.GAME and G.GAME.hands or {}
+    local function near(name)
+      if hands[name] and hands[name].visible == false then return end
+      if not ready_set[name] and not held[name] then near_set[name] = true end
+    end
+    if flush_thr > 1 and ksh.max_suit == flush_thr - 1 then near("Flush") end
+    if ksh.near_straight then near("Straight") end
+    if ksh.quads > 0 then near("Five of a Kind") end
+    if ksh.trips > 0 then near("Four of a Kind") end
+    if ksh.trips >= 1 or ksh.pairs >= 2 then near("Full House") end
+    if ksh.pairs >= 1 then near("Three of a Kind") end
+    if ksh.pairs == 1 then near("Two Pair") end
   end
 
-  local function ranked(set, cap, cache)
+  local function by_order(a, b) return (HAND_ORDER[a] or 0) > (HAND_ORDER[b] or 0) end
+  local function ranked(set, cap, cache, keep)
     local list = {}
     for name in pairs(set) do
       if (HAND_ORDER[name] or 0) >= 2 then list[#list + 1] = name end
     end
-    table.sort(list, function(a, b) return (HAND_ORDER[a] or 0) > (HAND_ORDER[b] or 0) end)
+    if #list == 0 and set["High Card"] then list[1] = "High Card" end
+    table.sort(list, by_order)
     while #list > cap do table.remove(list) end
+    if keep and set[keep] then
+      local listed = false
+      for _, n in ipairs(list) do if n == keep then listed = true end end
+      if not listed then
+        list[math.min(#list + 1, cap)] = keep
+        table.sort(list, by_order)
+      end
+    end
     if #list <= 1 or not cache then return list end
     local canon = {}
     for i, n in ipairs(list) do canon[i] = n end
@@ -1088,28 +1258,21 @@ local function hand_structure_summary()
     return out
   end
 
-  local high_pair = high_pair_rank > 0 and (HAND_RANK_LABEL[high_pair_rank] or tostring(high_pair_rank)) or "-"
-  local out = fd_lead .. string.format("Structure: pairs>=2:%d trips>=3:%d quads>=4:%d top:%s suit_max:%d run_max:%d.",
-    pair_count, trips_count, sh.quads, high_pair, max_suit, max_run)
+  local out = {
+    lead = fd_lead, debuffed = debuffed, facedown = facedown, ready = {}, close = {},
+    shape = { pairs = pair_count, trips = trips_count, quads = sh.quads, max_suit = max_suit, max_run = max_run,
+      top = high_pair_rank > 0 and M.rank_label(high_pair_rank) or nil },
+  }
 
-  if debuffed > 0 then
-    out = out .. string.format(" %d card(s) DEBUFFED (they score 0).", debuffed)
-  end
-
-  local ready = ranked(ready_set, 4, _ready_order_cache)
+  local ready = ranked(ready_set, 4, _ready_order_cache, top_scoring(ready_best))
   local ready_zeroed = {}
   if has_restr then
-    local min_sz = 0
-    do
-      local d = G.GAME and G.GAME.blind and not G.GAME.blind.disabled and G.GAME.blind.debuff
-      if type(d) == "table" then min_sz = tonumber(d.h_size_ge) or 0 end
-    end
     local function padded(best)
-      if min_sz <= #best then return best end
+      if min_play <= #best then return best end
       local set, present = {}, {}
       for _, c in ipairs(best) do set[#set + 1] = c; present[c] = true end
       for _, c in ipairs(cards) do
-        if #set >= min_sz then break end
+        if #set >= min_play then break end
         if not present[c] then set[#set + 1] = c; present[c] = true end
       end
       return set
@@ -1124,160 +1287,40 @@ local function hand_structure_summary()
     end
   end
   if #ready > 0 then
-    local jmap = type_conditional_jokers()
-    local function applied_jokers(name)
-      if not jmap then return nil end
-      local ct = with_type(ready_best[name] or {}, name)
-      local seen, list = {}, {}
-      for htype, idxs in pairs(jmap) do
-        if ct[htype] then
-          for _, ji in ipairs(idxs) do
-            if not seen[ji] then seen[ji] = true; list[#list + 1] = ji end
-          end
-        end
-      end
-      table.sort(list)
-      return list
-    end
-    local jsum = Scoring.joker_summary()
-    local by_type = (jsum and jsum.ledger and jsum.ledger.by_type) or {}
-    local by_type_names = {}
-    for t in pairs(by_type) do by_type_names[#by_type_names + 1] = t end
-    table.sort(by_type_names)
-    local ready_cond = {}
-    do
-      if next(by_type) then
-        for _, n in ipairs(ready) do
-          local ct = with_type(ready_best[n] or {}, n)
-          local agg = { chips = 0, mult = 0, xmult = 1, xchips = 1 }
-          for _, t in ipairs(by_type_names) do
-            local b = by_type[t]
-            if ct[t] then
-              if t == n then
-                agg.chips = agg.chips + (b.chips or 0)
-                agg.mult = agg.mult + (b.mult or 0)
-                agg.xmult = agg.xmult * (b.xmult or 1)
-                agg.xchips = agg.xchips * (b.xchips or 1)
-              else
-                agg.chips = agg.chips + (b.chips or 0) - (b.acc_chips or 0)
-                agg.mult = agg.mult + (b.mult or 0) - (b.acc_mult or 0)
-                agg.xmult = agg.xmult * ((b.xmult or 1) / (b.acc_xmult or 1))
-                agg.xchips = agg.xchips * ((b.xchips or 1) / (b.acc_xchips or 1))
-              end
-            end
-          end
-          if agg.chips ~= 0 or agg.mult ~= 0 or agg.xmult ~= 1 or agg.xchips ~= 1 then
-            ready_cond[n] = agg
-          end
-        end
-      end
-    end
-    local joker_index = {}
-    for ji, jc in ipairs((G.jokers and G.jokers.cards) or {}) do
-      local nm = (jc and PublicCard.is_public(jc)) and jc.ability and jc.ability.name or nil
-      if nm and not joker_index[nm] then joker_index[nm] = ji end
-    end
-    local function selection_totals(name)
-      local best = ready_best[name]
-      if type(best) ~= "table" or #best == 0 then return nil, nil end
-      local ok, js = pcall(Scoring.joker_summary, best)
-      local led = ok and js and js.ledger or nil
-      if not led or not led.gated then return nil, nil end
-      local agg, any = { chips = 0, mult = 0, xmult = 1, xchips = 1 }, false
-      for _, kind in ipairs({ "chips", "mult", "xmult", "xchips" }) do
-        local q = led.gated[kind]
-        if type(q) == "table" and q.k == "known" and not Scoring.Q.is_identity(kind, q) then
-          any = true
-          agg[kind] = q.n
-        end
-      end
-      if not any then return nil, nil end
-      local srcs = {}
-      for _, s in ipairs(led.sources or {}) do
-        local ji = joker_index[s.name]
-        if ji then srcs[ji] = true end
-      end
-      return agg, srcs
-    end
     local tooth_on = DebuffFacts.tooth_active()
     local ox_hand = DebuffFacts.ox_active() and DebuffFacts.most_played_hand() or nil
     for i, n in ipairs(ready) do
-      local deb_note = ""
-      if ready_dud[n] then
-        deb_note = "(all debuffed~0)"
-      elseif (ready_deb[n] or 0) > 0 then
-        deb_note = "(" .. tostring(ready_deb[n]) .. " debuffed~0)"
-      end
-      local cost_note = ""
-      if tooth_on and ready_ix[n] and #ready_ix[n] > 0 then
-        cost_note = " (-$" .. #ready_ix[n] .. ")"
-      end
-      local ox_note = (ox_hand and n == ox_hand) and " (OX: zeroes $ if played)" or ""
-      local zeroed = ready_zeroed[n] and (" -- " .. ready_zeroed[n]) or ""
-      local jlist = (jmap and applied_jokers(n)) or {}
-      local jagg = ready_cond[n]
-      local sel_agg, sel_src = selection_totals(n)
-      if sel_agg then
-        local merged = { chips = 0, mult = 0, xmult = 1, xchips = 1 }
-        local function fold(part)
-          if not part then return end
-          merged.chips = merged.chips + (part.chips or 0)
-          merged.mult = merged.mult + (part.mult or 0)
-          merged.xmult = merged.xmult * (part.xmult or 1)
-          merged.xchips = merged.xchips * (part.xchips or 1)
-        end
-        fold(jagg)
-        fold(sel_agg)
-        jagg = merged
-        local seen = {}
-        for _, ji in ipairs(jlist) do seen[ji] = true end
-        for ji in pairs(sel_src) do
-          if not seen[ji] then seen[ji] = true; jlist[#jlist + 1] = ji end
-        end
-        table.sort(jlist)
-      end
-      local jnote = (#jlist > 0) and joker_note(jlist, jagg) or ""
-      if jnote == "" and jagg then jnote = cond_note(jagg) end
-      ready[i] = n .. idx_suffix(ready_ix[n]) .. level_note(n)
-        .. jnote .. deb_note .. floor_note(n)
-        .. cost_note .. ox_note
-        .. guaranteed_note(jsum) .. zeroed
+      local ix = ready_ix[n]
+      out.ready[i] = {
+        name = n, ix = ix, level = current_values(n),
+        deb = ready_dud[n] and "all" or (ready_deb[n] or 0), floor = floor_of(n),
+        cost = (tooth_on and ix and #ix > 0) and #ix or nil, ox = (ox_hand and n == ox_hand) and true or nil,
+        chain = chain_parts(M.joker_chain(ready_best[n], n)), zeroed = ready_zeroed[n],
+      }
     end
-    out = out .. " Ready: " .. table.concat(ready, "; ") .. "."
-    if G.jokers and G.jokers.cards then
-      for i, jc in ipairs(G.jokers.cards) do
-        local ck = (jc and not jc.debuff) and PublicCard.multiset_key(jc, "jokers", i) or nil
-        if ck == "center:j_splash" then
-          out = out .. string.format(" All played cards score (Splash) -- you may still play at most %d.",
-            CardUtil.highlight_limit())
-          break
-        end
-      end
-    end
+    if CardUtil.owns_live_joker("j_splash") then out.splash = CardUtil.highlight_limit() end
   end
 
   local near_label = {}
   if near_set["Flush"] then
-    local counts = suit_counts
+    local counts = k_suit_counts
     for _, s in ipairs(suit_list()) do
-      local key = (type(s) == "table" and (s.key or s.name)) or s
+      local key = suit_key_of(s)
       if counts[key] == flush_thr - 1 then
         local ix, all_deb = {}, true
-        for _, c in ipairs(cards) do
-          if not has_no_suit(c) and in_suit(c, key) then
+        for _, c in ipairs(kcards) do
+          if suited(c, key) then
             ix[#ix + 1] = hand_pos[c]
             if not c.debuff then all_deb = false end
           end
         end
-        local outs = draw_note(function(c) return not has_no_suit(c) and in_suit(c, key) end,
-          draws_after_discard(math.min(#others_of(ix), discard_cap())))
+        local outs = draw_note(function(c) return suited(c, key) end,
+          draws_for(ix))
         if not all_deb and outs ~= nil then
-          local deb = deb_in_ix(ix)
-          local dn = (deb > 0) and ("(" .. deb .. " debuffed~0)") or ""
-          local label = smeared_active() and (SUIT_COLOR[key] or tostring(key)) or tostring(key)
-          near_label["Flush"] = string.format("Flush: %d %s keep%s%s%s%s%s",
-            counts[key], label, idx_suffix(ix), others_suffix(ix), outs,
-            dn, floor_note("Flush"))
+          local entry = keep_entry("Flush", ix, outs, deb_in_ix(ix))
+          entry.suit_count = counts[key]
+          entry.suit = smeared_active() and (SUIT_COLOR[key] or tostring(key)) or tostring(key)
+          near_label["Flush"] = entry
           break
         end
       end
@@ -1285,25 +1328,19 @@ local function hand_structure_summary()
     if not near_label["Flush"] then near_set["Flush"] = nil end
   end
   if near_set["Straight"] then
-    local present = present_ranks
-    local rr
-    if not sm("shortcut") then rr = best_near_straight_ranks(present, straight_thr) end
-    rr = rr or sh.run_ranks or {}
-    local missing = straight_outs(rr, straight_thr)
+    local pick = best_straight_keep(k_present, straight_thr)
+    local rr = pick and pick.set or {}
+    local missing = pick and pick.outs or {}
     local st_match = function(c)
-      if has_no_rank(c) then return false end
       local r = rank_of(c)
-      if not r then return false end
-      return (missing[r] or (r == 14 and missing[1])) and true or false
+      return (r and missing[r]) and true or false
     end
     local best_at = {}
-    for _, c in ipairs(cards) do
-      if not has_no_rank(c) then
-        local rid = rank_of(c)
-        if rid and (rr[rid] or (rid == 14 and rr[1])) then
-          local cur = best_at[rid]
-          if not cur or (G.hand.cards[cur].debuff and not c.debuff) then best_at[rid] = hand_pos[c] end
-        end
+    for _, c in ipairs(kcards) do
+      local rid = rank_of(c)
+      if rid and rr[rid] then
+        local cur = best_at[rid]
+        if not cur or (G.hand.cards[cur].debuff and not c.debuff) then best_at[rid] = hand_pos[c] end
       end
     end
     local ix = {}
@@ -1312,13 +1349,8 @@ local function hand_structure_summary()
     if #ix > 0 then
       local entry = near_entry("Straight", ix, st_match)
       if entry then
-        local open = false
-        if max_run == straight_thr - 1 then
-          local lo, hi = 99, 0
-          for r in pairs(sh.run_ranks) do if r < lo then lo = r end; if r > hi then hi = r end end
-          open = (lo - 1 >= 1) and (hi + 1 <= 14)
-        end
-        near_label["Straight"] = entry .. (open and " (open draw)" or " (inside draw)")
+        entry.open = pick.out_ranks >= 2
+        near_label["Straight"] = entry
       else
         near_set["Straight"] = nil
       end
@@ -1326,14 +1358,11 @@ local function hand_structure_summary()
   end
 
   do
+    local kby
     local function rank_positions(take)
-      local pos = hand_pos
-      local by = copies_by_rank()
+      kby = kby or rank_copies(kcards)
       local ix = {}
-      for r, n in pairs(take) do
-        local list = by[r] or {}
-        for k = 1, math.min(n, #list) do ix[#ix + 1] = pos[list[k]] end
-      end
+      for _, c in ipairs(take_copies(kby, take)) do ix[#ix + 1] = hand_pos[c] end
       table.sort(ix)
       return ix
     end
@@ -1363,49 +1392,20 @@ local function hand_structure_summary()
         local take = forming(name)
         if take then
           local match
-          if name == "Five of a Kind" or name == "Four of a Kind" or name == "Three of a Kind" then
-            local rneed
-            for r in pairs(take) do rneed = r end
-            match = function(c)
-              if has_no_rank(c) then return false end
-              return rank_of(c) == rneed
-            end
-          elseif name == "Two Pair" then
-            local pr
-            for r in pairs(take) do pr = r end
-            local kick = best_kicker(pr)
-            if kick == nil then
-              match = nil
-            else
-              take[kick] = 1
-              match = function(c)
-                if has_no_rank(c) then return false end
-                return rank_of(c) == kick
-              end
-            end
-          elseif name == "Full House" then
-            local trip
-            for r, nn in pairs(take) do if nn >= 3 then trip = r end end
-            if trip then
-              local kick = best_kicker(trip)
-              if kick == nil then
-                match = nil
-              else
-                take[kick] = 1
-                match = function(c)
-                  if has_no_rank(c) then return false end
-                  return rank_of(c) == kick
-                end
-              end
-            else
-              match = function(c)
-                if has_no_rank(c) then return false end
-                local r = rank_of(c)
-                return r ~= nil and take[r] ~= nil
-              end
-            end
+          local anchor = name == "Two Pair" and next(take) or nil
+          if name == "Full House" then
+            for r, nn in pairs(take) do if nn >= 3 then anchor = r end end
           end
-          local entry = near_entry(name, rank_positions(take), match)
+          if name == "Five of a Kind" or name == "Four of a Kind" or name == "Three of a Kind" then
+            match = rank_is(next(take))
+          elseif anchor then
+            -- One-card outs require a public kicker rank; otherwise the anchor needs two cards.
+            local kick = best_kicker(anchor)
+            if kick ~= nil then take[kick] = 1; match = rank_is(kick) end
+          elseif name == "Full House" then
+            match = function(c) return take[rank_of(c) or false] ~= nil end
+          end
+          local entry = match and near_entry(name, rank_positions(take), match) or nil
           if entry then near_label[name] = entry else near_set[name] = nil end
         end
       end
@@ -1421,101 +1421,48 @@ local function hand_structure_summary()
       end
     end
   end
-  if #nr > 0 then
-    for i, n in ipairs(nr) do
-      nr[i] = "near " .. (near_label[n] or n) .. (near_zeroed[n] and (" -- " .. near_zeroed[n]) or "")
-    end
-    out = out .. " Close: " .. table.concat(nr, "; ") .. "."
+  local figures = false
+  for i, n in ipairs(nr) do
+    out.close[i] = near_label[n] or { name = n }
+    out.close[i].zeroed = near_zeroed[n]
+    if type(out.close[i].draw) == "table" then figures = true end
   end
-
-  if facedown then
-    out = out .. " (This boss draws some cards face-down - your hand may change.)"
-  end
-
-  return out .. " "
-end
-
-local LEVEL_ORDER = {}
-for k, v in pairs(HAND_ORDER) do LEVEL_ORDER[k] = v end
-LEVEL_ORDER["mix"] = 13
-LEVEL_ORDER["mixhouse"] = 14
-LEVEL_ORDER["straightmix"] = 15
-LEVEL_ORDER["mixed5"] = 16
-local function hand_visible(hd)
-  return not not (type(hd) == "table" and hd.visible)
-end
-local function sort_level_rows(rows)
-  table.sort(rows, function(a, b)
-    local ao, bo = LEVEL_ORDER[a.name] or 999, LEVEL_ORDER[b.name] or 999
-    if ao ~= bo then return ao < bo end
-    return tostring(a.name) < tostring(b.name)
-  end)
-end
-local function levels()
-  local rows = {}
-  if not (G and G.GAME and G.GAME.hands) then return rows end
-  local flint = DebuffFacts.flint_active()
-  for name, hd in pairs(G.GAME.hands) do
-    if hand_visible(hd) then
-      local lv, ch, mu = hd.level or 1, hd.chips or 0, hd.mult or 0
-      lv, ch, mu = arm_drop(lv, ch, mu, hd)
-      if flint then ch, mu = DebuffFacts.flint_halve(ch, mu) end
-      rows[#rows + 1] = { name = name, level = lv, chips = ch, mult = mu, played = hd.played or 0 }
-    end
-  end
-  sort_level_rows(rows)
-  return rows
-end
-
--- Level-1 base values, which are fixed game data: `chips = s_chips + l_chips*(level-1)`
--- (common_events.lua:483), so the base survives every Planet upgrade. Flint's halving is a boss
--- debuff on the CURRENT values and must not touch these -- this row is what retained context
--- states as permanently true about a hand type.
-local function base_levels()
-  local rows = {}
-  if not (G and G.GAME and G.GAME.hands) then return rows end
-  for name, hd in pairs(G.GAME.hands) do
-    if hand_visible(hd) then
-      local level = hd.level or 1
-      local chips = hd.s_chips or (level == 1 and hd.chips) or nil
-      local mult = hd.s_mult or (level == 1 and hd.mult) or nil
-      if chips and mult then
-        rows[#rows + 1] = { name = name, chips = math.max(chips, 0), mult = math.max(mult, 0) }
-      end
-    end
-  end
-  sort_level_rows(rows)
-  return rows
-end
-
-local function leveled_types()
-  local rows = levels()
-  local out = {}
-  for _, r in ipairs(rows) do
-    if (r.level or 1) >= 2 then out[#out + 1] = r end
-  end
-  table.sort(out, function(a, b)
-    if a.level ~= b.level then return a.level > b.level end
-    return tostring(a.name) < tostring(b.name)
-  end)
+  out.lead = fd_lead .. (figures and (odds_lead .. odds_tail) or (no_odds_lead .. no_odds_tail))
   return out
 end
 
-local function leveled_spread_note()
-  local rows = leveled_types()
-  if #rows < 2 then return "" end
-  local parts = {}
-  for _, r in ipairs(rows) do
-    parts[#parts + 1] = string.format("%s (lvl %d, played %dx)", r.name, r.level, r.played or 0)
+local function hand_visible(hd)
+  return not not (type(hd) == "table" and hd.visible)
+end
+local function level_rows(row_of)
+  local rows = {}
+  if not (G and G.GAME and G.GAME.hands) then return rows end
+  for name, hd in pairs(G.GAME.hands) do
+    if hand_visible(hd) then rows[#rows + 1] = row_of(name, hd) end
   end
-  return string.format("Leveled hand types this run (%d): %s. ", #rows, table.concat(parts, ", "))
+  table.sort(rows, function(a, b)
+    local ao, bo = HAND_ORDER[a.name] or 999, HAND_ORDER[b.name] or 999
+    if ao ~= bo then return ao < bo end
+    return tostring(a.name) < tostring(b.name)
+  end)
+  return rows
+end
+local function levels() return level_rows(hand_values) end
+
+function M.base_levels()
+  return level_rows(function(name, hd)
+    local level = hd.level or 1
+    local chips = hd.s_chips or (level == 1 and hd.chips) or nil
+    local mult = hd.s_mult or (level == 1 and hd.mult) or nil
+    if chips and mult then return { name = name, chips = math.max(chips, 0), mult = math.max(mult, 0) } end
+  end)
 end
 
-local function level_notes()
+function M.level_notes()
   local notes = {}
   if DebuffFacts.flint_active() then notes[#notes + 1] = "Flint active: c,m already halved" end
   if arm_active() then
-    notes[#notes + 1] = "The Arm active: rows already include the one-level drop it applies to the hand you play"
+    notes[#notes + 1] = "The Arm active: chips and mult already include the one-level drop it applies to the hand you play"
   end
   if plasma_balances() then
     notes[#notes + 1] = "Plasma deck: final score balances total chips and mult"
@@ -1527,37 +1474,95 @@ function M.any_face_down()
   return (G and G.hand and G.hand.cards and n_face_down(G.hand.cards) > 0) or false
 end
 
+function M.discard_advice_applies()
+  return not M.any_face_down() or discard_draw_read(BossModel.next_draw_facedown()) ~= nil
+end
+
 function M.has_strong_ready()
   if not (G and G.hand and G.hand.cards and G.FUNCS and type(G.FUNCS.get_poker_hand_info) == "function") then
     return false
   end
-  if n_face_down(G.hand.cards) > 0 then return false end
   local sig = strong_sig()
   if sig and sig == _strong_cache.sig then return _strong_cache.val end
-  local ok, ph = pcall(function() local _, _, p = G.FUNCS.get_poker_hand_info(G.hand.cards); return p end)
-  if not (ok and type(ph) == "table") then return false end
-  for name, set in pairs(ph) do
-    if STRONG_READY[name] and set and next(set) then
-      local best = best_scoring_cards(name, set)
-      if type(best) == "table" and #best > 0
-        and (not VERIFY_REBUILT[name] or contained_types(best)[name]) then return true end
+  return cache_strong(ready_hands(public_cards(G.hand.cards)), sig)
+end
+
+function M.joker_chain(cards, name)
+  if type(cards) ~= "table" or #cards == 0 then return nil end
+  local ok, js = pcall(Scoring.joker_summary, cards)
+  if not ok or not js then return nil end
+  local ct = with_type(cards, name)
+  return Scoring.slot_chain(js, function(t, exact) return ct[t] and (t == name or not exact) end), js
+end
+
+function M.joker_chain_prose(steps)
+  return table.concat(chain_parts(steps), "; ")
+end
+
+local function level_base(name)
+  local v = current_values(name)
+  if v then return v.chips, v.mult end
+  return nil
+end
+
+function M.level_value(name)
+  local chips, mult = level_base(name)
+  return chips and chips * mult or nil
+end
+
+-- Exclude chance effects such as Lucky, so this estimate is a floor; editions score afterward.
+local function card_parts(c)
+  local ab = type(c.ability) == "table" and c.ability or {}
+  local ok, v = pcall(c.get_chip_bonus, c)
+  local chips = ok and tonumber(v) or 0
+  local mult = (tonumber(ab.perma_mult) or 0) + (ab.effect ~= "Lucky Card" and tonumber(ab.mult) or 0)
+  -- `Card:get_chip_x_mult` adds `perma_x_mult` to `x_mult`.
+  local base_x = tonumber(ab.x_mult) or 1
+  if base_x == 0 then base_x = 1 end
+  local x = base_x * (1 + ((not ab.extra_enhancement and tonumber(ab.perma_x_mult)) or 0))
+  if x < 1 then x = 1 end
+  local ed = type(c.edition) == "table" and c.edition or {}
+  return chips + (tonumber(ed.chips) or 0), mult, x, tonumber(ed.mult) or 0, tonumber(ed.x_mult) or 1
+end
+
+function M.selection_value(played, name, scoring)
+  if type(played) ~= "table" or #played == 0 then return nil end
+  for _, c in ipairs(played) do if not PublicCard.is_public(c) then return nil end end
+  local chips, mult = level_base(name)
+  if not chips then return nil end
+  scoring = scoring or Scoring.scoring_subset(played) or played
+  for _, c in ipairs(scoring) do
+    if type(c) == "table" and not c.debuff then
+      local cc, cm, cx, em, ex = card_parts(c)
+      chips, mult = chips + cc, ((mult + cm) * cx + em) * ex
     end
   end
-  return false
+  -- Held Steel cards score after played cards, so different kept cards affect the comparison.
+  local in_play = {}
+  for _, c in ipairs(played) do in_play[c] = true end
+  for _, c in ipairs((G and G.hand and G.hand.cards) or {}) do
+    local ab = type(c) == "table" and type(c.ability) == "table" and c.ability
+    if ab and not in_play[c] and not c.debuff and PublicCard.is_public(c) then
+      for _ = 1, c.seal == "Red" and 2 or 1 do
+        mult = (mult + (tonumber(ab.h_mult) or 0)) * math.max(tonumber(ab.h_x_mult) or 1, 1)
+      end
+    end
+  end
+  for _, st in ipairs(M.joker_chain(played, name) or {}) do
+    local v = tonumber(st.value) or 0
+    if st.kind == "chips" then chips = chips + v
+    elseif st.kind == "xchips" then chips = chips * v
+    elseif st.kind == "mult" then mult = mult + v
+    elseif st.kind == "xmult" then mult = mult * v end
+  end
+  return chips * mult
 end
 
-M.summary = hand_structure_summary
-M.level_notes = level_notes
-M.leveled_spread_note = leveled_spread_note
-M.shape = shape
-M.contained_types = contained_types
 M.HAND_ORDER = HAND_ORDER
+function M.rank_label(id) return HAND_RANK_LABEL[id] or tostring(id) end
 M.levels = levels
-M.base_levels = base_levels
+M.hand_values = current_values
 M.plasma_balances = plasma_balances
-
-if _G.NEURO_TEST then
-  M.hand_visible = hand_visible
-end
+M.ready_hands = ready_hands
 
 return M

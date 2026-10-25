@@ -31,16 +31,6 @@ local function note(msg)
     key, n, _drops_total, text))
 end
 
-local function drop_stats()
-  local by_site = {}
-  for k, v in pairs(_drops_by_site) do by_site[k] = v end
-  return { total = _drops_total, by_site = by_site }
-end
-
-local function save_skip_total()
-  return _save_skip_total
-end
-
 local function reset()
   _drops_total = 0
   _drops_by_site = {}
@@ -96,8 +86,6 @@ end
 
 function M.install()
   wrap_event_handle()
-  pcall(function() require("core.joker_recorder").install() end)
-  pcall(function() require("core.joker_hits").install() end)
 
   guard_method(rawget(_G, "Moveable"), "move", "__neuro_move_guard",
     function(self) return not (self and self.FRAME) end)
@@ -115,9 +103,7 @@ function M.install()
       local orig = Card.remove
       Card.remove = function(self, ...)
         if self and self.area and type(self.area.remove_card) ~= "function" then self.area = nil end
-        local result = orig(self, ...)
-        pcall(function() require("core.joker_recorder").prune_owned() end)
-        return result
+        return orig(self, ...)
       end
     end
   end
@@ -144,13 +130,5 @@ function M.install()
 end
 
 M.reset_run_state = reset
-
-if rawget(_G, "NEURO_TEST") then
-  M._test = {
-    drop_stats = drop_stats,
-    save_skip_total = save_skip_total,
-    reset = reset,
-  }
-end
 
 return M

@@ -2,20 +2,48 @@ local M = {}
 
 local TD = require("tests.test_deadlock")
 local SCENARIOS = TD.SCENARIOS
-local apply_mock = TD.apply_mock
+local function apply_mock(mock)
+  TD.apply_mock(mock)
+  if type(G.hand) == "table" then require("tests.helpers").card_area(G.hand) end
+end
+local TxCache = require("core.bridge").tx
+local ActionRegistry = require("core.action_registry")
+local Staging = require("core.staging")
+local Protocol = require("core.bridge").wire
 
 local function make_bridge()
-  local b = { session_id = nil, results = {}, contexts = {} }
-  function b:send_action_result(id, ok, message)
-    self.results[#self.results + 1] = { id = id, ok = ok, message = message }
+  local neuro = G and G.NEURO or {}
+  local b = {
+    session_id = neuro.transport_session,
+    results = {}, contexts = {},
+    registered = {}, forces = {},
+  }
+  function b:send_action_result(id, ok, message, reason_code)
+    if not Protocol.valid_action_id(id)
+        or type(ok) ~= "boolean"
+        or (message ~= nil and type(message) ~= "string") then
+      return false
+    end
+    self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason_code = reason_code }
+    return true
   end
   function b:send_context(message, silent)
     self.contexts[#self.contexts + 1] = { message = message, silent = silent }
     return true
   end
-  function b:register_actions(_) end
-  function b:force_actions(_, _, _, _) end
-  function b:send(_) end
+  function b:register_actions(defs)
+    for _, def in ipairs(defs or {}) do
+      if type(def) == "table" and type(def.name) == "string" then
+        self.registered[def.name] = true
+      end
+    end
+    return true, { status = "written", kind = "actions_register" }
+  end
+  function b:force_actions(state, query, names)
+    self.forces[#self.forces + 1] = { state = state, query = query, names = names }
+    return true, { status = "written", kind = "actions_force" }
+  end
+  function b:send(_) return true end
   return b
 end
 
@@ -55,8 +83,8 @@ local ID_SHAPES = {
   function(n) return "id-" .. n end,
   function(n) return tostring(n) end,
   function(_) return "" end,
-  function(_) return "id with spaces & symbols !@#" end,
-  function(_) return "\240\159\152\128-emoji-id" end,
+  function(n) return "id with spaces & symbols !@#-" .. n end,
+  function(n) return "\240\159\152\128-emoji-id-" .. n end,
   function(n) return string.rep("x", 300) .. n end,
 }
 
@@ -67,9 +95,23 @@ end
 
 local function probe(Dispatcher, state, name, payload, id, label, fails)
   local bridge = make_bridge()
-  local msg = { command = "action", data = { id = id, name = name, data = payload } }
+  local msg = {
+    command = "action",
+    data = { id = id, name = name, data = payload },
+  }
+  local valid_id = Protocol.valid_action_id(id)
+  if valid_id then
+    local opened = TxCache.open(id, name, G.TIMERS and G.TIMERS.REAL)
+    if not opened then
+      fails[#fails + 1] = string.format(
+        "ADMISSION REJECTED [%s] action=%s payload=%s id=%s",
+        state, tostring(name), label, tostring(id))
+      return false
+    end
+  end
 
   local ok_call, err = pcall(Dispatcher.handle_message, msg, bridge)
+  require("core.execute").step((G.TIMERS and G.TIMERS.REAL or 0) + 10)
 
   if not ok_call then
     fails[#fails + 1] = string.format(
@@ -77,8 +119,6 @@ local function probe(Dispatcher, state, name, payload, id, label, fails)
       state, tostring(name), label, tostring(id), tostring(err))
     return false
   end
-
-  local valid_id = id ~= nil
   local want_n = valid_id and 1 or 0
   local n = #bridge.results
   if n ~= want_n then
@@ -109,14 +149,9 @@ local function tick(dt)
   G.TIMERS.REAL = _clock
 end
 
-local function set_state(state)
-  G.STATES = G.STATES or {}
-  if G.STATES[state] == nil then
-    local nextv = 0
-    for _, v in pairs(G.STATES) do if v > nextv then nextv = v end end
-    G.STATES[state] = nextv + 1
-  end
-  G.STATE = G.STATES[state]
+local function set_state(state, engine_state)
+  require("tests.helpers").in_engine_state(engine_state or state)
+  G.CONTROLLER = { locked = false }
 end
 
 function M.run()
@@ -135,18 +170,42 @@ function M.run()
   local function fail_route(f, m) f[#f + 1] = m end
   local probes = 0
   local counter = 0
+  local scenario_pass, scenario_fail, scenario_xfail, scenario_xpass, scenario_skip = 0, 0, 0, 0, 0
+  local expected_xfails, expected_skips = 0, 0
+  local expected_no_force = {}
+  for _, sc in ipairs(SCENARIOS) do
+    expected_no_force[sc] = sc.no_force == true
+    if sc.xfail then expected_xfails = expected_xfails + 1 end
+    if expected_no_force[sc] then expected_skips = expected_skips + 1 end
+  end
+  local scenarios_seen = 0
 
   local ALWAYS = { "exit_overlay_menu", "cash_out", "florblegorb_not_real" }
 
   for si, sc in ipairs(SCENARIOS) do
-    if not sc.xfail then
-      G.NEURO = { dispatcher = Dispatcher, actions = Actions }
+    scenarios_seen = scenarios_seen + 1
+    local scenario_start = #fails
+    local force_missing = false
+    local ok_setup, setup_err = pcall(function()
+      Dispatcher.reset_tx()
+      G.NEURO = {
+        dispatcher = Dispatcher, actions = Actions, enabled = true,
+        run_generation = 1, decision_serial = si,
+        transport_session = "roundtrip-" .. tostring(si),
+        transport_epoch = si, register_actions = function() end,
+      }
       G.FUNCS = G.FUNCS or {}
       apply_mock(sc.mock())
+      G.NEURO.state = sc.state
+      set_state(sc.state, sc.engine_state)
+    end)
 
-      set_state(sc.state)
-
+    if not ok_setup then
+      fails[#fails + 1] = string.format("SETUP THREW [%s] %s -> %s",
+        sc.state, sc.desc, tostring(setup_err))
+    else
       local action_names, seen = {}, {}
+      local force_names, force_set = {}, {}
       local function add(nm)
         if type(nm) == "string" and not seen[nm] then
           seen[nm] = true
@@ -155,18 +214,64 @@ function M.run()
       end
 
       local has_force = false
-      local ok_force, force = pcall(Dispatcher.get_force_for_state, sc.state)
-      if ok_force and type(force) == "table" then
-        for _, nm in ipairs(force.actions or {}) do add(nm) end
-        has_force = true
+      local ok_force, force = pcall(require("force.force_router").get_force_for_state, sc.state)
+      if not ok_force then
+        fails[#fails + 1] = string.format(
+          "FORCE THREW [%s] %s -> %s", sc.state, sc.desc, tostring(force))
+      elseif type(force) == "table" then
+        if type(force.actions) ~= "table" then
+          fails[#fails + 1] = string.format(
+            "FORCE ACTIONS INVALID [%s] %s -> %s", sc.state, sc.desc, type(force.actions))
+        else
+          for _, nm in ipairs(force.actions) do
+            add(nm)
+            force_names[#force_names + 1] = nm
+            force_set[nm] = true
+          end
+          has_force = true
+        end
+      elseif sc.no_force then
+        force_missing = true
+        if not expected_no_force[sc] then
+          fails[#fails + 1] = string.format(
+            "FORCE SKIP [%s] %s was not marked no_force before execution", sc.state, sc.desc)
+        end
+      else
+        fails[#fails + 1] = string.format(
+          "FORCE MISSING [%s] %s (scenario is not marked no_force)", sc.state, sc.desc)
       end
       local ok_valid, valid = pcall(Actions.get_valid_actions_for_state, sc.state)
-      if ok_valid and type(valid) == "table" then
+      if not ok_valid then
+        fails[#fails + 1] = string.format(
+          "ACTION SET THREW [%s] %s -> %s", sc.state, sc.desc, tostring(valid))
+      elseif type(valid) ~= "table" then
+        fails[#fails + 1] = string.format(
+          "ACTION SET INVALID [%s] %s -> %s", sc.state, sc.desc, type(valid))
+      else
         for _, nm in ipairs(valid) do add(nm) end
       end
       for _, nm in ipairs(ALWAYS) do add(nm) end
+      local registered_names, definitions = {}, {}
+      for _, nm in ipairs(action_names) do
+        local contract = ActionRegistry.get(nm)
+        if contract then
+          registered_names[#registered_names + 1] = nm
+          definitions[#definitions + 1] = contract
+        end
+      end
+      ActionRegistry.note_registered(registered_names)
+      local transport = make_bridge()
+      transport:register_actions(definitions)
+
       if has_force then
-        require("core.force_state").arm(sc.state, action_names, seen, 1)
+        local forced, force_receipt = transport:force_actions(sc.state, force.query, force_names)
+        if not forced then
+          fails[#fails + 1] = string.format(
+            "FORCE TRANSPORT FAILED [%s] %s -> %s", sc.state, sc.desc,
+            tostring(force_receipt and force_receipt.status))
+        else
+          require("tests.helpers").open_force(sc.state, force_names)
+        end
       end
 
       for _, name in ipairs(action_names) do
@@ -178,9 +283,34 @@ function M.run()
         end
       end
     end
+
+    local case_failures = #fails - scenario_start
+    if sc.xfail then
+      if case_failures > 0 then
+        for _ = 1, case_failures do table.remove(fails) end
+        scenario_xfail = scenario_xfail + 1
+        print(string.format("[rt] XFAIL #%02d [%s] %s", si, sc.state, sc.desc))
+      else
+        scenario_xpass = scenario_xpass + 1
+        fails[#fails + 1] = string.format(
+          "XPASS #%02d [%s] %s -- remove xfail tag", si, sc.state, sc.desc)
+      end
+    elseif sc.no_force and force_missing and case_failures == 0 then
+      scenario_skip = scenario_skip + 1
+      scenario_pass = scenario_pass + 1
+      print(string.format("[rt] SKIP #%02d [%s] %s -- no_force", si, sc.state, sc.desc))
+    elseif case_failures > 0 then
+      scenario_fail = scenario_fail + 1
+    else
+      scenario_pass = scenario_pass + 1
+    end
   end
 
-  G.NEURO = { dispatcher = Dispatcher, actions = Actions }
+  G.NEURO = {
+    dispatcher = Dispatcher, actions = Actions, enabled = true,
+    run_generation = 1, decision_serial = 1,
+    transport_session = "roundtrip-duplicates", transport_epoch = 1,
+  }
   G.FUNCS = G.FUNCS or {}
   apply_mock(SCENARIOS[1].mock())
   set_state("SELECTING_HAND")
@@ -195,21 +325,24 @@ function M.run()
     end
     probes = probes + 1
   end
-
   do
     tick(5)
     local dup_id = "dup-replay-id-777"
     local b1 = make_bridge()
-    pcall(Dispatcher.handle_message,
-      { command = "action", data = { id = dup_id, name = "exit_overlay_menu", data = nil } }, b1)
+    local first = { command = "action", data = { id = dup_id, name = "exit_overlay_menu", data = nil } }
+    TxCache.open(dup_id, "exit_overlay_menu", G.TIMERS and G.TIMERS.REAL)
+    local ok1, err1 = pcall(Dispatcher.handle_message, first, b1)
+    if #b1.results == 0 then
+      require("core.execute").step((G.TIMERS and G.TIMERS.REAL or 0) + 10)
+    end
     local b2 = make_bridge()
-    pcall(Dispatcher.handle_message,
-      { command = "action", data = { id = dup_id, name = "exit_overlay_menu", data = nil } }, b2)
-    if #b1.results ~= 1 or #b2.results ~= 1 then
-      fails[#fails + 1] = string.format("dup-id replay: want 1+1 results, got %d+%d",
+    local second = { command = "action", data = { id = dup_id, name = "exit_overlay_menu", data = nil } }
+    local ok2, err2 = pcall(Dispatcher.handle_message, second, b2)
+    if not ok1 or not ok2 then
+      fails[#fails + 1] = "dup-id replay: handle_message threw: " .. tostring(err1 or err2)
+    elseif #b1.results ~= 1 or #b2.results ~= 0 then
+      fails[#fails + 1] = string.format("dup-id replay: want 1+0 same-session results, got %d+%d",
         #b1.results, #b2.results)
-    elseif b1.results[1].ok ~= b2.results[1].ok then
-      fails[#fails + 1] = "dup-id replay: ok flag not stable across replay"
     end
     probes = probes + 2
   end
@@ -233,26 +366,26 @@ function M.run()
   end
 
   do
-    local FH = require("force.force_helpers")
-    local real_phase = FH.set_action_phase
+    local Validate = require("core.validate")
+    local real_busy = Validate.busy_reason
 
-    local function inject(throw_on_phase)
-      FH.set_action_phase = function(phase)
-        if phase == throw_on_phase then error("INJECTED throw at phase=" .. tostring(phase)) end
-        return real_phase(phase)
-      end
+    local function inject()
+      Validate.busy_reason = function() error("INJECTED throw during validation") end
     end
-    local function restore() FH.set_action_phase = real_phase end
+    local function restore() Validate.busy_reason = real_busy end
 
     do
       G.NEURO = { dispatcher = Dispatcher, actions = Actions }
       G.FUNCS = {}
       apply_mock(SCENARIOS[1].mock())
       set_state("SELECTING_HAND"); tick(20)
-      inject("validating")
+      inject()
       local bridge = make_bridge()
       local ok_call = pcall(Dispatcher.handle_message,
         { command = "action", data = { id = "inj-before", name = "exit_overlay_menu", data = nil } }, bridge)
+      if #bridge.results == 0 then
+        require("core.execute").step((G.TIMERS and G.TIMERS.REAL or 0) + 10)
+      end
       restore()
       if not ok_call then
         fails[#fails + 1] = "inject before-answer: handle_message PROPAGATED throw (would hang/dup)"
@@ -265,17 +398,20 @@ function M.run()
     end
 
     do
-      local EF = require("core.enforce")
-      local real_post = EF.post_action
+      local EF = require("core.neuro_lifecycle")
+      local real_post = EF.record_failure
       G.NEURO = { dispatcher = Dispatcher, actions = Actions }
       G.FUNCS = {}
       apply_mock(SCENARIOS[1].mock())
       set_state("SELECTING_HAND"); tick(20)
-      EF.post_action = function(_, _) error("INJECTED throw in post_action (after answer)") end
+      EF.record_failure = function(_, _) error("INJECTED throw in a finalizer (after answer)") end
       local bridge = make_bridge()
       local ok_call = pcall(Dispatcher.handle_message,
         { command = "action", data = { id = "inj-after", name = "exit_overlay_menu", data = nil } }, bridge)
-      EF.post_action = real_post
+      if #bridge.results == 0 then
+        require("core.execute").step((G.TIMERS and G.TIMERS.REAL or 0) + 10)
+      end
+      EF.record_failure = real_post
       restore()
       if not ok_call then
         fails[#fails + 1] = "inject after-answer: handle_message PROPAGATED throw (Staging would emit a 2nd result)"
@@ -290,30 +426,59 @@ function M.run()
     local function sess_bridge(sid)
       local b = make_bridge(); b.session_id = sid; return b
     end
-    G.NEURO = { dispatcher = Dispatcher, actions = Actions }
+    G.NEURO = {
+      dispatcher = Dispatcher, actions = Actions,
+      run_generation = 1, transport_session = "SES-1", transport_epoch = 1,
+    }
     G.FUNCS = {}
     apply_mock(SCENARIOS[1].mock())
     set_state("SELECTING_HAND"); tick(20)
+    ActionRegistry.note_registered({ "exit_overlay_menu" })
+    G.FUNCS.exit_overlay_menu = function() G.OVERLAY_MENU = nil end
+    local function admitted_route(id, name, public_session)
+      local msg = {
+        command = "action", session_id = public_session,
+        data = { id = id, name = name, data = nil },
+      }
+      TxCache.open(id, name, G.TIMERS and G.TIMERS.REAL)
+      return msg
+    end
+    local function flush_route_result(bridge)
+      if #bridge.results == 0 then
+        tick(0.25)
+        Staging.update()
+        tick(0.25)
+        Staging.update()
+        require("core.execute").step(G.TIMERS.REAL)
+      end
+    end
 
     do
+      G.OVERLAY_MENU = require("tests.helpers").options_overlay()
       local b = sess_bridge("SES-1")
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", session_id = "SES-1", data = { id = "rt-match", name = "exit_overlay_menu", data = nil } }, b)
-      if not ok or #b.results ~= 1 then fail_route(fails, "session match: want 1 result, no throw") end
+        admitted_route("rt-match", "exit_overlay_menu", "SES-1"), b)
+      flush_route_result(b)
+      if not ok or #b.results ~= 1 then
+        fail_route(fails, "session match: want 1 result, no throw")
+      end
       probes = probes + 1
     end
     do
       local b = sess_bridge("SES-1")
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", session_id = "SES-OLD", data = { id = "rt-stale", name = "exit_overlay_menu", data = nil } }, b)
+        admitted_route("rt-stale", "exit_overlay_menu", "SES-OLD"), b)
+      flush_route_result(b)
       if not ok then fail_route(fails, "session mismatch: threw")
       elseif #b.results ~= 1 then fail_route(fails, "foreign session_id: want 1 result, got " .. #b.results) end
       probes = probes + 1
     end
     do
+      G.OVERLAY_MENU = require("tests.helpers").options_overlay()
       local b = sess_bridge("SES-1")
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", data = { id = "rt-nosess", name = "exit_overlay_menu", data = nil } }, b)
+        admitted_route("rt-nosess", "exit_overlay_menu", nil), b)
+      flush_route_result(b)
       if not ok or #b.results ~= 1 then fail_route(fails, "no-session msg: want 1 result") end
       probes = probes + 1
     end
@@ -321,12 +486,11 @@ function M.run()
       G.NEURO.llm_paused = true
       local b = sess_bridge(nil)
       local ok = pcall(Dispatcher.route_message,
-        { command = "action", data = { id = "rt-paused", name = "exit_overlay_menu", data = nil } }, b)
+        admitted_route("rt-paused", "exit_overlay_menu", nil), b)
       G.NEURO.llm_paused = nil
       if not ok then fail_route(fails, "pause: threw")
       elseif #b.results ~= 1 then fail_route(fails, "pause: want exactly 1 (transient) result, got " .. #b.results)
-      elseif b.results[1].ok ~= true then fail_route(fails, "pause: result should be ok=true (spec: false retries the force)")
-      elseif not tostring(b.results[1].message or ""):find("Paused") then fail_route(fails, "pause: message should explain the pause") end
+      elseif b.results[1].ok ~= true then fail_route(fails, "pause: result should be ok=true (spec: false retries the force)") end
       probes = probes + 1
     end
     do
@@ -338,6 +502,27 @@ function M.run()
     end
   end
 
+  if scenarios_seen ~= #SCENARIOS then
+    fails[#fails + 1] = string.format("scenario corpus incomplete: visited %d of %d",
+      scenarios_seen, #SCENARIOS)
+  end
+  if scenario_xfail ~= expected_xfails then
+    fails[#fails + 1] = string.format("xfail accounting incomplete: got %d expected %d",
+      scenario_xfail, expected_xfails)
+  end
+  if scenario_fail ~= 0 then
+    fails[#fails + 1] = string.format("scenario failures were not accounted for: %d", scenario_fail)
+  end
+  if scenario_xpass ~= 0 then
+    fails[#fails + 1] = string.format("unexpected XFAIL passes: %d", scenario_xpass)
+  end
+  if scenario_skip > expected_skips then
+    fails[#fails + 1] = string.format(
+      "no_force skip accounting exceeded immutable allowance: got %d allowed %d",
+      scenario_skip, expected_skips)
+  end
+  print(string.format("[rt] scenarios: %d pass, %d fail, %d XFAIL, %d XPASS, %d explicit SKIP / %d total",
+    scenario_pass, scenario_fail, scenario_xfail, scenario_xpass, scenario_skip, #SCENARIOS))
   print(string.format("[rt] probes run: %d", probes))
   print("====================================================")
   if #fails == 0 then

@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 rawset(_G, "NEURO_TEST", true)
 love = { timer = { getTime = function() return 0 end } }
 _G.localize = function() return "" end
@@ -17,8 +18,8 @@ end
 
 local function base_G()
   _G.G = {
-    NEURO = { run_generation = 1 }, STATE = 1,
-    STATES = { SELECTING_HAND = 1, SHOP = 2, BLIND_SELECT = 3, ROUND_EVAL = 7, MENU = 20 },
+    NEURO = { run_generation = 1 }, STATE = ES.SELECTING_HAND,
+    STATES = ES,
     P_BLINDS = {}, P_TAGS = {}, TIMERS = { REAL = 100, TOTAL = 100 },
     SETTINGS = { GAMESPEED = 1, paused = false }, SPEEDFACTOR = 1,
     jokers = { cards = {}, config = { card_limit = 5 } },
@@ -35,10 +36,7 @@ local function base_G()
   return _G.G
 end
 
-local function fresh_game_rules()
-  package.loaded["context.game_rules"] = nil
-  return require("context.game_rules")
-end
+local fresh_game_rules = require("tests.helpers").fresh_game_rules
 
 do
   local g = base_G()
@@ -52,7 +50,7 @@ do
   check("a face-down joker's identity is not read off config.center.key",
     flipped:find("Splash", 1, true) == nil, flipped)
   check("and the rest of the run frame is unchanged by the flip",
-    flipped == (face_up:gsub("Current scoring exceptions: Splash scores every played card%. ", "")),
+    flipped == (face_up:gsub("\nCurrent scoring exceptions: Splash scores every played card%.", "")),
     "[" .. flipped .. "] vs [" .. face_up .. "]")
 end
 
@@ -82,7 +80,6 @@ do
     j.area = G.jokers
     G.jokers.cards = { j }
     FactHints.reset_pending()
-    require("context.context_compact").invalidate_cache()
     local built = require("force.force_selecting_hand").build()
     return (type(built) == "table" and built.query) or ""
   end

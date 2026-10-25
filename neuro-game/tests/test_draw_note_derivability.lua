@@ -1,26 +1,14 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
+require("tests.stubs").setup({ love = "lazy" })
 
 local H = require("tests.helpers")
 local HandFacts = require("facts.hand_facts")
+local function hand_prose() return require("context.context_readable").structure_prose(HandFacts.structure()) end
 local check, done = H.harness("draw note derivability")
 
 local RANKS = { "2","3","4","5","6","7","8","9","10","J","Q","K","A" }
 local SUITS = { "Spades","Hearts","Clubs","Diamonds" }
 
-local sid = 0
-local function card(v, suit)
-  sid = sid + 1
-  local id = H.RID[v]
-  local c = {
-    base = { value = H.VALN[v] or v, suit = suit, id = id, nominal = (id <= 10 and id or 10) },
-    sort_id = sid, ability = { set = "Default", name = "Base", effect = "" },
-    config = { center = { key = "c_base", set = "Default" } }, facing = "front",
-  }
-  c.is_suit = function(_, s) return s == suit end
-  c.get_id = function(self) return self.base.id end
-  return c
-end
+local card = require("tests.fake_cards").deck_maker()
 
 local function real_phi(list)
   local by_rank, ranks, by_suit, suits = {}, {}, {}, {}
@@ -61,7 +49,7 @@ local function board(hidden_key, face_up)
   local hidden = by[hidden_key]
   if not face_up then
     hidden.facing = "back"
-    hidden.ability.wheel_flipped = true   -- cardarea.lua:59
+    hidden.ability.wheel_flipped = true
   end
   local in_hand, seen = {}, {}
   for _, c in ipairs(visible) do in_hand[#in_hand + 1] = c; c.area = G.hand; seen[c] = true end
@@ -77,27 +65,23 @@ local function board(hidden_key, face_up)
   end
   for _, c in ipairs(in_hand) do G.playing_cards[#G.playing_cards + 1] = c end
   for _, c in ipairs(pile) do G.playing_cards[#G.playing_cards + 1] = c end
-  local pile_hearts = 0
-  for _, c in ipairs(pile) do if c.base.suit == "Hearts" then pile_hearts = pile_hearts + 1 end end
   HandFacts._set_shuffle(function(l) return l end)
-  local s = HandFacts.summary()
+  local s = hand_prose()
   HandFacts._set_shuffle(nil)
-  return s, pile_hearts
+  return s
 end
 
-local heart_hidden, heart_pile = board("KHearts")   -- pile keeps 8 hearts, the K is face down
-local club_hidden,  club_pile  = board("2Clubs")    -- pile keeps 9 hearts, the 2 is face down
+local heart_hidden = board("KHearts")
+local club_hidden = board("2Clubs")
 
-check("the two boards' piles really differ, so a pile-derived out count could not be equal",
-  heart_pile == 8 and club_pile == 9, heart_pile .. " vs " .. club_pile)
 check("out counts do not reveal the suit of the face-down hand card",
   heart_hidden == club_hidden, "[" .. heart_hidden .. "]\nvs\n[" .. club_hidden .. "]")
 
 local face_up = board("4Clubs", true)
 check("nothing face down: the near-Flush odds are still published",
-  face_up:find("(draw ", 1, true) ~= nil, face_up)
-check("the flipped board reached the same near-Flush row, minus the odds",
-  heart_hidden:find("near Flush", 1, true) ~= nil
-    and heart_hidden:find("(draw ", 1, true) == nil, heart_hidden)
+  face_up:find("draw-pile cards complete it", 1, true) ~= nil, face_up)
+check("the flipped board reached the same near-Flush row, its odds only a range over the public pool",
+  heart_hidden:find("One card away: Flush: ", 1, true) ~= nil
+    and heart_hidden:find("(8 to 9 of the 44 draw-pile cards complete it", 1, true) ~= nil, heart_hidden)
 
 done()

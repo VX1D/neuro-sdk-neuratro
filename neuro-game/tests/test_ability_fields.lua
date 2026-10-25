@@ -11,7 +11,17 @@ local check, done = require("tests.helpers").harness("ability-fields")
 
 local function jokers(list) G.jokers = { cards = list } end
 
--- Greedy/Lusty/Wrathful/Gluttonous store their mult under config.extra.s_mult (game.lua:386-389); ability.s_mult is always nil.
+local function cond(s, scope, kind)
+  local total = (kind == "xmult" or kind == "xchips") and 1 or 0
+  for _, e in ipairs(s and s.conditional or {}) do
+    if not (e.hand_type and e.hand_type ~= "") and e.scope == scope and e.kind == kind then
+      if kind == "xmult" or kind == "xchips" then total = total * e.value else total = total + e.value end
+    end
+  end
+  return total
+end
+
+-- These jokers store mult in config.extra.s_mult; ability.s_mult is nil.
 local function suit_joker(key, suit)
   return { ability = { extra = { s_mult = 3, suit = suit }, type = "" },
            config = { center = { key = key, set = "Joker" } } }
@@ -28,21 +38,21 @@ check("s_mult is conditional, never guaranteed", projected and projected.certain
 check("empty ability.type normalizes to nil hand_type", projected and projected.hand_type == nil,
   projected and ("[" .. tostring(projected.hand_type) .. "]"))
 
--- The game applies s_mult per matching scoring card (card.lua:3597-3601), so it must land in the per-card total, not the per-hand total.
+-- s_mult applies per matching scoring card, not once per hand.
 jokers({ greedy })
 local s = Scoring.joker_summary()
-check("a suit joker reaches the summary as a PER-CARD rate", s and s.cond_mult_per_card == 3,
-  s and s.cond_mult_per_card)
-check("a suit joker is NOT summed into the per-hand conditional total", s and s.cond_mult == 0,
-  s and s.cond_mult)
+check("a suit joker reaches the summary as a PER-CARD rate", s and cond(s, "scoring_card", "mult") == 3,
+  cond(s, "scoring_card", "mult"))
+check("a suit joker is NOT summed into the per-hand conditional total", s and cond(s, "hand", "mult") == 0,
+  cond(s, "hand", "mult"))
 
 jokers({ suit_joker("j_greedy_joker", "Diamonds"), suit_joker("j_lusty_joker", "Hearts"),
          suit_joker("j_wrathful_joker", "Spades"), suit_joker("j_gluttenous_joker", "Clubs") })
 s = Scoring.joker_summary()
-check("all four suit jokers total +12 per scoring card", s and s.cond_mult_per_card == 12,
-  s and s.cond_mult_per_card)
-check("four suit jokers still contribute 0 to the per-hand total", s and s.cond_mult == 0,
-  s and s.cond_mult)
+check("all four suit jokers total +12 per scoring card", s and cond(s, "scoring_card", "mult") == 12,
+  cond(s, "scoring_card", "mult"))
+check("four suit jokers still contribute 0 to the per-hand total", s and cond(s, "hand", "mult") == 0,
+  cond(s, "hand", "mult"))
 check("suit jokers stay out of the guaranteed flat Mult", s and s.mult == 0, s and s.mult)
 
 jokers({ { ability = { h_chips = 25 } } })
@@ -52,15 +62,15 @@ for _, e in ipairs(s and s.conditional or {}) do
   if e.source == "h_chips" then held_chips = e end
 end
 check("h_chips is read as a per-held-card chips RATE, not a per-hand total",
-  held_chips ~= nil and held_chips.scope == "held_card" and held_chips.rate == 25 and s.cond_chips == 0,
-  held_chips and (held_chips.scope .. "/" .. tostring(held_chips.rate) .. "/" .. tostring(s.cond_chips)))
+  held_chips ~= nil and held_chips.scope == "held_card" and held_chips.rate == 25 and cond(s, "hand", "chips") == 0,
+  held_chips and (held_chips.scope .. "/" .. tostring(held_chips.rate) .. "/" .. tostring(cond(s, "hand", "chips"))))
 
 jokers({ { ability = { extra = { h_size = 5, h_mod = 1 } },
            config = { center = { key = "j_turtle_bean", set = "Joker" } } } })
 s = Scoring.joker_summary()
 check("Turtle Bean's extra.h_mod is not reported as chips",
-  s == nil or (s.chips == 0 and s.cond_chips == 0),
-  s and (tostring(s.chips) .. "/" .. tostring(s.cond_chips)))
+  s == nil or (s.chips == 0 and cond(s, "hand", "chips") == 0),
+  s and (tostring(s.chips) .. "/" .. tostring(cond(s, "hand", "chips"))))
 
 jokers({ { ability = { c_mult = 5, d_mult = 5, p_mult = 5, chips = 5, h_mod = 5 } } })
 s = Scoring.joker_summary()
@@ -68,27 +78,34 @@ check("fields absent from the game contribute nothing", s == nil, s and "summary
 
 jokers({ { ability = { extra = { Xmult = 2 } } }, { ability = { h_mult = 4 } } })
 s = Scoring.joker_summary()
-check("untyped conditional xMult is kept", s and s.cond_xmult == 2, s and s.cond_xmult)
+check("untyped conditional xMult is kept", s and cond(s, "hand", "xmult") == 2, cond(s, "hand", "xmult"))
 local held_mult
 for _, e in ipairs(s and s.conditional or {}) do
   if e.source == "h_mult" then held_mult = e end
 end
 check("untyped conditional flat Mult is kept as a per-held-card rate",
-  held_mult ~= nil and held_mult.scope == "held_card" and held_mult.rate == 4 and s.cond_mult == 0,
-  held_mult and (held_mult.scope .. "/" .. tostring(held_mult.rate) .. "/" .. tostring(s.cond_mult)))
+  held_mult ~= nil and held_mult.scope == "held_card" and held_mult.rate == 4 and cond(s, "hand", "mult") == 0,
+  held_mult and (held_mult.scope .. "/" .. tostring(held_mult.rate) .. "/" .. tostring(cond(s, "hand", "mult"))))
 
--- The game gates a targeted consumable on #highlighted >= min_highlighted (card.lua:1887); Death is the one base card with min_highlighted = 2 (game.lua:563).
-local death = { ability = { consumeable = { max_highlighted = 2, min_highlighted = 2 } },
-                config = { center = { key = "c_death", set = "Tarot" } } }
-local chariot = { ability = { consumeable = { max_highlighted = 1, min_highlighted = 1 } },
-                  config = { center = { key = "c_chariot", set = "Tarot" } } }
-G.hand = { cards = {} }
+local EngineCards = require("tests.engine_cards")
+local function held(n, edition)
+  local cards = {}
+  for i = 1, n do cards[i] = EngineCards.playing(tostring(i + 1), "Hearts", { edition = edition and edition(i) }) end
+  return { cards = cards, highlighted = {} }
+end
+G.STATES = EngineCards.states()
+G.STATE = G.STATES.SELECTING_HAND
+G.jokers = { cards = {}, config = { card_limit = 5 } }
+G.consumeables = { cards = {}, config = { card_limit = 2 } }
+local death = EngineCards.consumable("c_death")
+local chariot = EngineCards.consumable("c_chariot")
+G.hand = held(0)
 check("Death unusable with an empty hand", CardUtil.consumable_usable_now(death) == false)
-G.hand = { cards = { {} } }
+G.hand = held(1)
 check("Death unusable with 1 card (needs 2)", CardUtil.consumable_usable_now(death) == false)
 check("a min_highlighted=1 consumable is still usable with 1 card",
   CardUtil.consumable_usable_now(chariot) == true)
-G.hand = { cards = { {}, {} } }
+G.hand = held(2)
 check("Death usable once the hand holds 2", CardUtil.consumable_usable_now(death) == true)
 
 local BOSS_NAME = {
@@ -97,7 +114,8 @@ local BOSS_NAME = {
 }
 local function set_blind(key, round)
   G.GAME = { blind = { config = { blind = { key = key } }, name = BOSS_NAME[key], debuff = {} },
-             current_round = round or { hands_played = 0, discards_used = 0, hands_left = 4 } }
+             current_round = round or { hands_played = 0, discards_used = 0, hands_left = 4 },
+             probabilities = { normal = 1 } }
 end
 set_blind("bl_wheel")
 check("blind_is resolves by name (the only live path -- real blinds carry no .key)",
@@ -105,21 +123,23 @@ check("blind_is resolves by name (the only live path -- real blinds carry no .ke
 check("blind_is does not match a different boss by name",
   DebuffFacts.blind_is(G.GAME.blind, "bl_fish") == false)
 
-check("The Wheel flips on any draw", DebuffFacts.boss_draws_facedown() == true)
+local BossModel = require("facts.boss.model")
+local function draws() local r = BossModel.next_draw_facedown(); return r.play, r.discard end
+check("The Wheel may flip any draw", select(1, draws()) == "chance" and select(2, draws()) == "chance")
 set_blind("bl_mark")
-check("The Mark flips on any draw", DebuffFacts.boss_draws_facedown() == true)
+check("The Mark flips drawn face cards", select(1, draws()) == "faces" and select(2, draws()) == "faces")
 set_blind("bl_fish", { hands_played = 0, discards_used = 0, hands_left = 4 })
-check("The Fish warns before the first play (prepped is already cleared by then)",
-  DebuffFacts.boss_draws_facedown() == true)
-set_blind("bl_fish", { hands_played = 2, discards_used = 0, hands_left = 1 })
-check("The Fish still warns mid-blind", DebuffFacts.boss_draws_facedown() == true)
+check("The Fish flips draws after a play, not after a discard",
+  select(1, draws()) == "all" and select(2, draws()) == false)
 set_blind("bl_fish", { hands_played = 3, discards_used = 0, hands_left = 0 })
-check("The Fish stops warning with no hands left to redraw into",
-  DebuffFacts.boss_draws_facedown() == false)
+check("The Fish stops warning with no hands left to redraw into", select(1, draws()) == false)
 set_blind("bl_house", { hands_played = 0, discards_used = 0, hands_left = 4 })
-check("The House does not warn about future draws", DebuffFacts.boss_draws_facedown() == false)
+check("The House flips no later draw (blind.lua:673 needs no play and no discard yet)",
+  select(1, draws()) == false and select(2, draws()) == false)
+set_blind("bl_wheel")
+G.GAME.blind.disabled = true
+check("a disabled boss flips nothing", select(1, draws()) == false and select(2, draws()) == false)
 
--- Violet Vessel is mult=6 vs a normal boss's 2 (game.lua:293); Amber Acorn shuffles joker order (blind.lua:218-232).
 set_blind("bl_final_vessel")
 local BossRender = require("facts.boss.render")
 local vessel = BossRender.boss_line("select", "bl_final_vessel", G.GAME.blind) or ""
@@ -131,7 +151,7 @@ check("Amber Acorn rule names the boss", acorn:find("Amber Acorn", 1, true) ~= n
 check("Amber Acorn rule states the joker ORDER fact, the part that affects scoring",
   acorn:lower():find("order", 1, true) ~= nil, acorn)
 
--- Bootstraps' calculate is gated on floor(dollars/extra.dollars) >= 1 (card.lua:4394); in debt it contributes nothing, and the negative figure shown there is display-only (card.lua:1118).
+-- Bootstraps contributes only for each whole dollar threshold; its negative figure is display-only.
 local DynamicJokers = require("facts.dynamic_jokers")
 local boot = { ability = { extra = { mult = 2, dollars = 5 } } }
 local boot_mult = function(c) return DynamicJokers.read_from(c, DynamicJokers.ROWS.j_bootstraps[1].from) end
@@ -170,7 +190,6 @@ local GameFacts = require("facts.game_facts")
 G.P_CENTERS = { j_card_sharp = { config = { extra = { Xmult = 3 } } } }
 local sharp_fx = CardUtil.joker_fx({ ability = { extra = { Xmult = 3 } },
                                      config = { center = { key = "j_card_sharp" } } }) or ""
-check("extra.Xmult produces a joker_fx string", sharp_fx ~= "", "[" .. sharp_fx .. "]")
 check("extra.Xmult stamp carries the registry gate, never a bare number",
   sharp_fx == "x3 Mult (replaying a hand type you already played this round)", "[" .. sharp_fx .. "]")
 G.P_CENTERS = nil
@@ -194,12 +213,13 @@ for _, e in ipairs(CardSemantics.project(
 end
 check("the h_x_mult default of 0 never becomes an x0 multiplier", zero_fx == nil)
 
---  Aura's gate also requires the target to be editionless (card.lua:1866)
-local aura = { ability = { consumeable = {} }, config = { center = { key = "c_aura", set = "Spectral" } } }
-G.hand = { cards = { { edition = { foil = true } } } }
+local aura = EngineCards.consumable("c_aura")
+G.STATES = EngineCards.states()
+G.STATE = G.STATES.SELECTING_HAND
+G.hand = held(1, function() return { foil = true } end)
 check("Aura unusable when every hand card already has an edition",
   CardUtil.consumable_usable_now(aura) == false)
-G.hand = { cards = { { edition = { foil = true } }, {} } }
+G.hand = held(2, function(i) return i == 1 and { foil = true } or nil end)
 check("Aura usable once an editionless card is in hand", CardUtil.consumable_usable_now(aura) == true)
 
 G.NEURO = { blind_reward_cache = 5, blind_reward_round = 3 }
@@ -215,13 +235,6 @@ do
   local same = #F == #expect
   if same then for i = 1, #expect do if F[i] ~= expect[i] then same = false end end end
   check("placeholder field order is exactly the known-real sequence", same, table.concat(F, ","))
-  for _, ghost in ipairs({ "c_mult", "d_mult", "p_mult" }) do
-    local found = false
-    for _, f in ipairs(F) do if f == ghost then found = true end end
-    check("ghost field '" .. ghost .. "' is not in the placeholder list", not found)
-  end
-  check("mult and chips stay last", F[#F - 1] == "mult" and F[#F] == "chips",
-    tostring(F[#F - 1]) .. "," .. tostring(F[#F]))
 end
 
 do

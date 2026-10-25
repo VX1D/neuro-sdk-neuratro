@@ -8,9 +8,9 @@ for _, e in ipairs(NUMERIC_EFFECTS) do NUMERIC_EFFECTS_BY_FIELD[e.field] = e end
 local function live_area(a)
   return (a and a.cards and not a.REMOVED) and a or nil
 end
-local function pack_area()
+function M.pack_area()
   if not G then return nil end
-  return live_area(G.pack_cards) or live_area(G.booster_pack)
+  return live_area(G.pack_cards)
 end
 
 local function center_of(card)
@@ -18,49 +18,27 @@ local function center_of(card)
 end
 
 local function center_key(card)
-  local c = card and card.config and card.config.center
+  local c = center_of(card)
   return c and c.key
 end
 
 local function card_set(card)
   local ability = card and card.ability
-  local center = card and card.config and card.config.center
+  local center = center_of(card)
   return (ability and ability.set) or (center and center.set) or ""
-end
-
-local CONSUMABLE_SETS_FALLBACK = { Tarot = true, Planet = true, Spectral = true }
-
-local function live_consumable_type(set)
-  local smods = rawget(_G, "SMODS")
-  if type(smods) ~= "table" then return nil end
-  local ctype = smods.ConsumableType
-  local buffer = type(ctype) == "table" and ctype.obj_buffer or nil
-  if type(buffer) == "table" and #buffer > 0 then
-    for _, key in ipairs(buffer) do
-      if key == set then return true end
-    end
-    return false
-  end
-  local types = smods.ConsumableTypes
-  if type(types) == "table" and next(types) ~= nil then
-    return types[set] ~= nil
-  end
-  return nil
 end
 
 local function is_consumable_set(set)
   if type(set) ~= "string" or set == "" then return false end
-  local live = live_consumable_type(set)
-  if live ~= nil then return live end
-  return CONSUMABLE_SETS_FALLBACK[set] == true
+  return SMODS.ConsumableTypes[set] ~= nil
 end
 local function is_consumable_card(card)
   return is_consumable_set(card_set(card))
     or type(card and card.ability and card.ability.consumeable) == "table"
 end
 
-local function booster_kind(card)
-  local center = card and card.config and card.config.center
+function M.booster_kind(card)
+  local center = center_of(card)
   return (center and center.kind) or ""
 end
 
@@ -69,11 +47,8 @@ local function is_negative(card)
 end
 
 local function is_joker_like_card(card, area_name)
-  local set = card_set(card)
-  local center = card and card.config and card.config.center
-  return area_name == "shop_jokers"
-    or set == "Joker"
-    or (center and center.set == "Joker")
+  local center = center_of(card)
+  return area_name == "shop_jokers" or card_set(card) == "Joker" or (center and center.set == "Joker")
 end
 
 local function joker_count()      return ((G and G.jokers and G.jokers.cards and #G.jokers.cards) or 0) + ((G and G.GAME and tonumber(G.GAME.joker_buffer)) or 0) end
@@ -81,10 +56,10 @@ local function consumable_count() return ((G and G.consumeables and G.consumeabl
 
 local function joker_limit()      return (G and G.jokers and G.jokers.config and G.jokers.config.card_limit) or 5 end
 local function consumable_limit() return (G and G.consumeables and G.consumeables.config and G.consumeables.config.card_limit) or 2 end
-local function hand_limit()       return (G and G.hand and G.hand.config and G.hand.config.card_limit) or 8 end
-local function highlight_limit()  return (G and G.hand and G.hand.config and G.hand.config.highlighted_limit) or 5 end
+function M.hand_limit()       return (G and G.hand and G.hand.config and G.hand.config.card_limit) or 8 end
+function M.highlight_limit()  return (G and G.hand and G.hand.config and G.hand.config.highlighted_limit) or 5 end
 
-local function score_per_hand(remaining, hands)
+function M.score_per_hand(remaining, hands)
   if not hands or hands <= 0 then return nil end
   return math.ceil(remaining / hands)
 end
@@ -98,22 +73,15 @@ local function has_consumable_space()
   return consumable_count() < consumable_limit()
 end
 
-local function joker_slot_status()
-  local count = joker_count()
-  local limit = joker_limit()
-  return { count = count, limit = limit, full = count >= limit }
-end
-local function consumable_slot_status()
-  local count = consumable_count()
-  local limit = consumable_limit()
-  return { count = count, limit = limit, full = count >= limit }
-end
+local function slot_status(count, limit) return { count = count, limit = limit, full = count >= limit } end
+function M.joker_slot_status() return slot_status(joker_count(), joker_limit()) end
+local function consumable_slot_status() return slot_status(consumable_count(), consumable_limit()) end
 
-local function slot_status_text(status)
+function M.slot_status_text(status)
   return string.format("slots %d/%d%s", status.count, status.limit, status.full and " FULL" or "")
 end
 
-local function can_buy_card_space(card, area_name)
+function M.can_buy_card_space(card, area_name)
   local set = card_set(card)
   if set == "Booster" or area_name == "shop_booster" or area_name == "shop_vouchers" then
     return true
@@ -122,11 +90,8 @@ local function can_buy_card_space(card, area_name)
     if is_negative(card) or has_consumable_space() then return true end
     local _, max_t = M.consumable_target_range(card)
     if max_t and max_t > 0 then return false end
-    if type(card.can_use_consumeable) == "function" then
-      local ok, usable = pcall(card.can_use_consumeable, card, true, true)
-      return ok and usable and true or false
-    end
-    return false
+    local ok, usable = pcall(card.can_use_consumeable, card, true, true)
+    return ok and usable and true or false
   end
   if is_joker_like_card(card, area_name) then
     return has_joker_space_for(card)
@@ -142,50 +107,15 @@ local function named_hand_target(card)
   return key and NAMED_HAND_TARGET[key] or nil
 end
 
-local function hand_card_count(predicate)
-  local cards = (G and G.hand and G.hand.cards) or nil
-  if type(cards) ~= "table" then return 0 end
-  if not predicate then return #cards end
-  local n = 0
-  for _, c in ipairs(cards) do
-    if type(c) == "table" and predicate(c) then n = n + 1 end
-  end
-  return n
-end
-
 local function consumable_usable_now(card)
-  local min_h, max_h = M.consumable_target_range(card)
-  if max_h and max_h > 0 then
-    local named = named_hand_target(card)
-    return hand_card_count(named and named.needs) >= (min_h or 1)
-  end
-  if type(card and card.can_use_consumeable) == "function" then
-    local ok, usable = pcall(card.can_use_consumeable, card, true, true)
-    if ok then return usable and true or false end
-  end
-  return has_consumable_space()
+  return require("facts.use_gate").usable(card)
 end
 
-local function has_blocked_consumable()
-  local cards = G and G.consumeables and G.consumeables.cards
-  if not cards then return false end
-  for _, c in ipairs(cards) do
-    if not consumable_usable_now(c) then return true end
-  end
-  return false
-end
-
-local function can_take_pack_card(card)
+function M.can_take_pack_card(card)
   if card and card.base and card.base.suit then
     return true
   end
   if is_consumable_card(card) then
-    local min_target, max_target = M.consumable_target_range(card)
-    local named_target = named_hand_target(card)
-    if max_target and max_target > 0
-        and hand_card_count(named_target and named_target.needs) < (min_target or 1) then
-      return has_consumable_space()
-    end
     return consumable_usable_now(card)
   end
   if is_joker_like_card(card) then
@@ -194,7 +124,7 @@ local function can_take_pack_card(card)
   return true
 end
 
-local function consumable_target_range(card)
+function M.consumable_target_range(card)
   local nt = named_hand_target(card)
   if nt then return nt.min, nt.max end
   local c = card and card.ability and card.ability.consumeable
@@ -211,58 +141,44 @@ local function resolve_field(v)
   return v
 end
 
-local CENTER_CONFIG_FALLBACK = {
-  m_bonus = { bonus = 30 },
-  m_mult = { mult = 4 },
-  m_wild = {},
-  m_glass = { Xmult = 2, extra = 4 },
-  m_steel = { h_x_mult = 1.5 },
-  m_stone = { bonus = 50 },
-  m_gold = { h_dollars = 3 },
-  m_lucky = { mult = 20, p_dollars = 20 },
-  e_foil = { extra = 50 },
-  e_holo = { extra = 10 },
-  e_polychrome = { extra = 1.5 },
-  e_negative = { extra = 1 },
-}
-
 local function center_config(key)
   local center = G and G.P_CENTERS and G.P_CENTERS[key]
   local cfg = (type(center) == "table") and center.config or nil
-  if type(cfg) == "table" then return cfg end
-  return CENTER_CONFIG_FALLBACK[key] or {}
+  return type(cfg) == "table" and cfg or {}
 end
 
 local function cfg_num(key, field)
-  local v = tonumber(center_config(key)[field])
-  if v == nil then v = tonumber((CENTER_CONFIG_FALLBACK[key] or {})[field]) end
-  return v or 0
+  return tonumber(center_config(key)[field]) or 0
 end
 
-local function numtext(v)
-  return Utils.fmt_num(v)
+local function numtext(v) return Utils.fmt_num(v) end
+local function cfg_text(key, field) return numtext(cfg_num(key, field)) end
+
+local function stat(rec, label_field, label, key, field, sign, unit, desc_sign)
+  rec[label_field] = function() return label .. "(" .. sign .. cfg_text(key, field) .. unit .. ")" end
+  rec.desc = function() return (desc_sign or sign) .. cfg_text(key, field) .. (unit == "c" and " Chips" or " Mult") end
+  rec.fx = function() return sign .. cfg_text(key, field) .. unit end
+  return rec
 end
 
 local LUCKY_MULT_ODDS = 5
 local LUCKY_DOLLAR_ODDS = 15
 
+-- Negative edition adds capacity according to card type: joker/consumable slots or hand size.
+local NEGATIVE_EFFECT = {
+  joker = function() return "Takes no slot (+" .. cfg_text("e_negative", "extra") .. " Joker slot)" end,
+  consumable = function() return "Takes no slot (+" .. cfg_text("e_negative", "extra") .. " consumable slot)" end,
+  playing = function() return "+" .. cfg_text("e_negative", "extra") .. " hand size" end,
+}
+
 local EDITIONS = {
   { test = function(e) return e.negative or e.key == "e_negative" end, name = "Negative",
     tag = "Negative(free_slot)",
-    desc = function() return "Takes no slot (+" .. numtext(cfg_num("e_negative", "extra")) .. " joker/consumable slot)" end,
+    desc = function(kind) return NEGATIVE_EFFECT[kind or "joker"]() end,
     fx = "" },
-  { test = function(e) return e.polychrome end, name = "Polychrome",
-    tag = function() return "Poly(x" .. numtext(cfg_num("e_polychrome", "extra")) .. "m)" end,
-    desc = function() return "X" .. numtext(cfg_num("e_polychrome", "extra")) .. " Mult" end,
-    fx = function() return "x" .. numtext(cfg_num("e_polychrome", "extra")) .. "m" end },
-  { test = function(e) return e.holo end, name = "Holographic",
-    tag = function() return "Holo(+" .. numtext(cfg_num("e_holo", "extra")) .. "m)" end,
-    desc = function() return "+" .. numtext(cfg_num("e_holo", "extra")) .. " Mult" end,
-    fx = function() return "+" .. numtext(cfg_num("e_holo", "extra")) .. "m" end },
-  { test = function(e) return e.foil end, name = "Foil",
-    tag = function() return "Foil(+" .. numtext(cfg_num("e_foil", "extra")) .. "c)" end,
-    desc = function() return "+" .. numtext(cfg_num("e_foil", "extra")) .. " Chips" end,
-    fx = function() return "+" .. numtext(cfg_num("e_foil", "extra")) .. "c" end },
+  stat({ test = function(e) return e.polychrome end, name = "Polychrome" }, "tag", "Poly", "e_polychrome", "extra", "x", "m", "X"),
+  stat({ test = function(e) return e.holo end, name = "Holographic" }, "tag", "Holo", "e_holo", "extra", "+", "m"),
+  stat({ test = function(e) return e.foil end, name = "Foil" }, "tag", "Foil", "e_foil", "extra", "+", "c"),
 }
 
 local function find_test_match(list, subject)
@@ -272,100 +188,155 @@ local function find_test_match(list, subject)
   return nil
 end
 
-local function edition_desc(edition)
-  if type(edition) ~= "table" then return nil end
-  local e = find_test_match(EDITIONS, edition)
-  return e and resolve_field(e.desc) or nil
+local function record_field(r, field, fallback, key)
+  local v = r and resolve_field(r[field])
+  if v then return v end
+  return fallback and fallback(key) or nil
 end
 
-local function edition_fx_short(edition)
-  if type(edition) ~= "table" then return "" end
-  local e = find_test_match(EDITIONS, edition)
-  return (e and resolve_field(e.fx)) or ""
+local function edition_record(edition)
+  return type(edition) == "table" and find_test_match(EDITIONS, edition) or nil
 end
+
+local function edition_kind(card)
+  if card and card.base and card.base.suit then return "playing" end
+  if is_consumable_card(card) then return "consumable" end
+  return "joker"
+end
+
+local function edition_desc(edition, kind)
+  local r = edition_record(edition)
+  local d = r and r.desc
+  if type(d) == "function" then return d(kind) end
+  return d
+end
+
+function M.edition_fx_short(edition) return record_field(edition_record(edition), "fx") or "" end
 
 local function edition_name(edition)
   if type(edition) ~= "table" then return nil end
   local e = find_test_match(EDITIONS, edition)
   if e then return e.name end
+  if type(edition.key) == "string" then return require("facts.display_names").center(edition.key, "Edition") end
   if edition.name and edition.name ~= "" then return tostring(edition.name) end
-  if edition.type and edition.type ~= "" then return tostring(edition.type) end
-  if edition.key then return (tostring(edition.key):gsub("^e_", "")) end
+  if edition.type and edition.type ~= "" then return require("facts.display_names").humanize_key(edition.type) end
   return nil
 end
 
-local function prob_odds(base)
+function M.edition_prose(card)
+  local edition = card and card.edition
+  local nm = edition_name(edition)
+  if not nm then return "" end
+  local d = edition_desc(edition, edition_kind(card))
+  return d and (nm .. ": " .. d) or nm
+end
+
+local function odds_text(base, sep)
   local p = tonumber(G and G.GAME and G.GAME.probabilities and G.GAME.probabilities.normal) or 1
-  return p, base
+  return numtext(p) .. sep .. numtext(base)
 end
-local function live_odds(base)
-  local num, den = prob_odds(base)
-  return numtext(num) .. " in " .. numtext(den)
+local function live_odds(base) return odds_text(base, " in ") end
+local function odds_frac(base) return odds_text(base, "/") end
+
+local REWRITERS = {
+  { key = "j_vampire", short = "Vampire_strips_it", desc = "Vampire strips it" },
+  { key = "j_midas_mask", short = "Midas_Mask_turns_a_face_card_Gold", desc = "Midas Mask turns a face card Gold" },
+}
+
+function M.owns_live_joker(key)
+  local PublicCard = require("facts.public_card_identity")
+  local concealed = false
+  for i, j in ipairs((G and G.jokers and G.jokers.cards) or {}) do
+    if not PublicCard.is_public(j) then
+      concealed = true
+    elseif PublicCard.multiset_key(j, "jokers", i) == "center:" .. key and not j.debuff then
+      return true
+    end
+  end
+  if concealed then return nil end
+  return false
 end
-local function odds_frac(base)
-  local num, den = prob_odds(base)
-  return numtext(num) .. "/" .. numtext(den)
+
+local function scoring_rewriters()
+  local out = {}
+  for _, r in ipairs(REWRITERS) do
+    if M.owns_live_joker(r.key) then out[#out + 1] = r end
+  end
+  return out
+end
+
+local function rewriter_list(field, sep)
+  local parts = {}
+  for _, r in ipairs(scoring_rewriters()) do parts[#parts + 1] = r[field] end
+  return #parts > 0 and table.concat(parts, sep) or nil
 end
 
 local ENHANCEMENTS = {
-  m_bonus = {
-    name = "Bonus",
-    short = function() return "Bonus(+" .. numtext(cfg_num("m_bonus", "bonus")) .. "c)" end,
-    desc = function() return "+" .. numtext(cfg_num("m_bonus", "bonus")) .. " Chips" end,
-    fx = function() return "+" .. numtext(cfg_num("m_bonus", "bonus")) .. "c" end,
-  },
-  m_mult = {
-    name = "Mult",
-    short = function() return "Mult(+" .. numtext(cfg_num("m_mult", "mult")) .. "m)" end,
-    desc = function() return "+" .. numtext(cfg_num("m_mult", "mult")) .. " Mult" end,
-    fx = function() return "+" .. numtext(cfg_num("m_mult", "mult")) .. "m" end,
-  },
+  m_bonus = stat({ name = "Bonus", scored = true }, "short", "Bonus", "m_bonus", "bonus", "+", "c"),
+  m_mult = stat({ name = "Mult", scored = true }, "short", "Mult", "m_mult", "mult", "+", "m"),
   m_wild = { name = "Wild", short = "Wild(counts_as_any_suit)", desc = "Can be used as any suit", fx = "" },
   m_glass = {
-    name = "Glass",
+    name = "Glass", scored = true,
     short = function()
-      return "Glass(x" .. numtext(cfg_num("m_glass", "Xmult")) .. "m_always_then_"
+      return "Glass(x" .. cfg_text("m_glass", "Xmult") .. "m"
+        .. (rewriter_list("short", "") and "" or "_always") .. "_then_"
         .. odds_frac(cfg_num("m_glass", "extra")) .. "_destroyed)"
     end,
     desc = function()
-      return "x" .. numtext(cfg_num("m_glass", "Xmult")) .. " Mult, "
+      return "x" .. cfg_text("m_glass", "Xmult") .. " Mult, "
         .. live_odds(cfg_num("m_glass", "extra")) .. " chance to break"
     end,
-    fx = function() return "x" .. numtext(cfg_num("m_glass", "Xmult")) .. "m" end,
+    fx = function() return "x" .. cfg_text("m_glass", "Xmult") .. "m" end,
   },
   m_steel = {
     name = "Steel",
-    short = function() return "Steel(x" .. numtext(cfg_num("m_steel", "h_x_mult")) .. "m_per_copy_held_not_played)" end,
-    desc = function() return "x" .. numtext(cfg_num("m_steel", "h_x_mult")) .. " Mult while in hand" end,
-    fx = function() return "x" .. numtext(cfg_num("m_steel", "h_x_mult")) .. "m" end,
+    short = function() return "Steel(x" .. cfg_text("m_steel", "h_x_mult") .. "m_per_copy_held_not_played)" end,
+    desc = function() return "x" .. cfg_text("m_steel", "h_x_mult") .. " Mult while in hand" end,
+    fx = function() return "x" .. cfg_text("m_steel", "h_x_mult") .. "m" end,
   },
   m_stone = {
-    name = "Stone",
-    short = function() return "Stone(no_suit_no_rank+" .. numtext(cfg_num("m_stone", "bonus")) .. "c_always)" end,
-    desc = function() return "+" .. numtext(cfg_num("m_stone", "bonus")) .. " Chips, no rank/suit" end,
-    fx = function() return "+" .. numtext(cfg_num("m_stone", "bonus")) .. "c" end,
+    name = "Stone", scored = true,
+    short = function() return "Stone(no_suit_no_rank+" .. cfg_text("m_stone", "bonus") .. "c_always)" end,
+    desc = function() return "+" .. cfg_text("m_stone", "bonus") .. " Chips, no rank/suit" end,
+    fx = function() return "+" .. cfg_text("m_stone", "bonus") .. "c" end,
   },
   m_gold = {
     name = "Gold",
-    short = function() return "Gold(+$" .. numtext(cfg_num("m_gold", "h_dollars")) .. "_held_EOround)" end,
-    desc = function() return "$" .. numtext(cfg_num("m_gold", "h_dollars")) .. " at end of round if held" end,
-    fx = function() return "+$" .. numtext(cfg_num("m_gold", "h_dollars")) end,
+    short = function() return "Gold(" .. Utils.money_change(cfg_num("m_gold", "h_dollars")) .. "_held_EOround)" end,
+    desc = function() return Utils.money(cfg_num("m_gold", "h_dollars")) .. " at end of round if held" end,
+    fx = function() return Utils.money_change(cfg_num("m_gold", "h_dollars")) end,
   },
   m_lucky = {
-    name = "Lucky",
+    name = "Lucky", scored = true,
     short = function()
-      return "Lucky(" .. odds_frac(LUCKY_MULT_ODDS) .. ":+" .. numtext(cfg_num("m_lucky", "mult"))
-        .. "m_or_" .. odds_frac(LUCKY_DOLLAR_ODDS) .. ":+" .. numtext(cfg_num("m_lucky", "p_dollars")) .. "$)"
+      return "Lucky(" .. odds_frac(LUCKY_MULT_ODDS) .. ":+" .. cfg_text("m_lucky", "mult")
+        .. "m_and_" .. odds_frac(LUCKY_DOLLAR_ODDS) .. ":+" .. cfg_text("m_lucky", "p_dollars") .. "$)"
     end,
     desc = function()
-      return live_odds(LUCKY_MULT_ODDS) .. " for +" .. numtext(cfg_num("m_lucky", "mult")) .. " Mult, "
-        .. live_odds(LUCKY_DOLLAR_ODDS) .. " for $" .. numtext(cfg_num("m_lucky", "p_dollars"))
+      return live_odds(LUCKY_MULT_ODDS) .. " for +" .. cfg_text("m_lucky", "mult") .. " Mult, "
+        .. live_odds(LUCKY_DOLLAR_ODDS) .. " for " .. Utils.money(cfg_num("m_lucky", "p_dollars"))
     end,
     fx = "",
   },
 }
 
-local function edition_tag(edition)
+for _, r in pairs(ENHANCEMENTS) do
+  if r.scored then
+    local short, desc = r.short, r.desc
+    r.short = function()
+      local base, who = resolve_field(short), rewriter_list("short", "_and_")
+      if not who then return base end
+      return (base:gsub("%)$", ";if_played_" .. who .. "_first)"))
+    end
+    r.desc = function()
+      local base, who = resolve_field(desc), rewriter_list("desc", " and ")
+      if not who then return base end
+      return base .. " -- if played, " .. who .. " before it scores"
+    end
+  end
+end
+
+function M.edition_tag(edition)
   if type(edition) ~= "table" then
     return (edition ~= nil) and tostring(edition) or ""
   end
@@ -375,17 +346,15 @@ local function edition_tag(edition)
   return ""
 end
 
-local function edition_readable(edition)
-  if type(edition) ~= "table" then
-    return (edition ~= nil) and tostring(edition) or ""
-  end
-  local e = find_test_match(EDITIONS, edition)
-  if e then return e.name .. ": " .. resolve_field(e.desc) end
-  if edition.name and edition.name ~= "" then return tostring(edition.name) end
-  return ""
-end
 
 local RARITY_NAMES = { [1] = "Common", [2] = "Uncommon", [3] = "Rare", [4] = "Legendary" }
+
+local function misc_label(key)
+  local misc = G and G.localization and G.localization.misc
+  local text = misc and ((misc.labels and misc.labels[key]) or (misc.dictionary and misc.dictionary[key]))
+  if type(text) == "string" and text ~= "" then return text end
+  return nil
+end
 
 local function smods_rarity(rarity)
   local smods = rawget(_G, "SMODS")
@@ -402,11 +371,7 @@ local function live_rarity_name(rarity)
     local ok, text = pcall(badge, smods.Rarity, rarity)
     if ok and type(text) == "string" and text ~= "" and not text:find("^k_") then return text end
   end
-  local misc = G and G.localization and G.localization.misc
-  local key = "k_" .. tostring(rarity):lower()
-  local text = misc and ((misc.labels and misc.labels[key]) or (misc.dictionary and misc.dictionary[key]))
-  if type(text) == "string" and text ~= "" then return text end
-  return nil
+  return misc_label("k_" .. tostring(rarity):lower())
 end
 
 local function humanized_rarity(rarity)
@@ -420,37 +385,21 @@ local function copy_joker_kind(card)
   local key = center_key(card)
   return key and COPY_JOKER_KEYS[key] or nil
 end
-local function rarity_name(rarity)
+function M.rarity_name(rarity)
   if rarity == nil then return "Common" end
   return RARITY_NAMES[rarity] or live_rarity_name(rarity) or humanized_rarity(rarity)
 end
 
-local function lookup_field(tbl, key, field, fallback)
-  local r = key and tbl[key]
-  local v = r and resolve_field(r[field])
-  if v then return v end
-  return fallback and fallback(key) or nil
+local function enh_field(key, field, fallback)
+  return record_field(key and ENHANCEMENTS[key], field, fallback, key)
 end
-local function enhancement_record(key)
-  local r = key and ENHANCEMENTS[key]
-  if not r then return nil end
-  return {
-    name = resolve_field(r.name),
-    short = resolve_field(r.short),
-    desc = resolve_field(r.desc),
-    fx = resolve_field(r.fx),
-  }
+function M.enhancement_name(key)
+  return enh_field(key, "name", function(k)
+    return type(k) == "string" and require("facts.display_names").center(k, "Enhanced") or nil
+  end)
 end
-local function identity(k) return k end
-local function enhancement_name(key)
-  return lookup_field(ENHANCEMENTS, key, "name", identity)
-end
-local function enhancement_short(key)
-  return lookup_field(ENHANCEMENTS, key, "short", identity)
-end
-local function enhancement_fx_short(key)
-  return lookup_field(ENHANCEMENTS, key, "fx", function() return "" end) or ""
-end
+function M.enhancement_short(key) return enh_field(key, "short", function(k) return k end) end
+function M.enhancement_fx_short(key) return enh_field(key, "fx") or "" end
 
 local GOLD_SEAL_DOLLARS = 3
 
@@ -471,26 +420,23 @@ local function seal_dollars(seal)
   return nil
 end
 
-local function gold_dollars() return seal_dollars("Gold") or GOLD_SEAL_DOLLARS end
+local function gold_dollars() return seal_dollars("Gold") end
+M.gold_seal_dollars = gold_dollars
 
 local SEALS = {
-  Red               = { name = "Red", fx = "x2", short = "Red(x2_trigger_when_scored)", desc = "Retriggers when scored (this card scores twice)" },
+  Red               = { name = "Red", fx = "x2", short = "Red(x2_trigger_scored_and_held)", desc = "Retriggers this card once: it scores twice, and its held-in-hand effects (Steel xMult, Gold Card's end-of-round $) also fire twice" },
   Blue              = { name = "Blue", fx = "Planet", short = "Blue(hold_in_hand=free_planet_EOround)", desc = "If held at end of round, creates the Planet for your last-played poker hand (needs a free consumable slot)" },
   Gold              = {
     name = "Gold",
-    fx = function() return "+$" .. numtext(gold_dollars()) end,
-    short = function() return "Gold(+$" .. numtext(gold_dollars()) .. "_when_scored)" end,
-    desc = function() return "Earn $" .. numtext(gold_dollars()) .. " when this card is scored" end,
+    fx = function() return Utils.money_change(gold_dollars()) end,
+    short = function() return "Gold(" .. Utils.money_change(gold_dollars()) .. "_when_scored)" end,
+    desc = function() return "Earn " .. Utils.money(gold_dollars()) .. " when this card is scored" end,
   },
   Purple            = { name = "Purple", fx = "Tarot", short = "Purple(discard=free_tarot)", desc = "Creates a Tarot card when discarded (needs a free consumable slot)" },
 }
 
 local function seal_label(seal)
-  local misc = G and G.localization and G.localization.misc
-  local key = tostring(seal):lower() .. "_seal"
-  local text = misc and ((misc.labels and misc.labels[key]) or (misc.dictionary and misc.dictionary[key]))
-  if type(text) == "string" and text ~= "" then return text end
-  return nil
+  return misc_label(tostring(seal):lower() .. "_seal")
 end
 
 local function seal_record(seal)
@@ -501,18 +447,12 @@ local function seal_record(seal)
   local d = seal_dollars(seal)
   return {
     name = name,
-    fx = d and ("+$" .. numtext(d)) or "",
-    short = d and (name .. "(+$" .. numtext(d) .. "_when_scored)") or (name .. "(seal)"),
-    desc = d and ("Earn $" .. numtext(d) .. " when this card is scored") or nil,
+    fx = d and Utils.money_change(d) or "",
+    short = d and (name .. "(" .. Utils.money_change(d) .. "_when_scored)") or (name .. "(seal)"),
+    desc = d and ("Earn " .. Utils.money(d) .. " when this card is scored") or nil,
   }
 end
 
-local function seal_field(seal, field, fallback)
-  local r = seal and seal_record(seal)
-  local v = r and resolve_field(r[field])
-  if v then return v end
-  return fallback and fallback(seal) or nil
-end
 
 local function enhancement_key(card)
   if type(card) ~= "table" then return nil end
@@ -523,27 +463,33 @@ local function enhancement_key(card)
   return nil
 end
 
--- Canonical no-rank predicate. Stone and every no_rank enhancement answer here: SMODS is the
--- authority when loaded, Card:get_id returns a large negative for them (card.lua:1174-1179), and
--- the centre key is the offline fallback.
 local function has_no_rank(card)
   if type(card) ~= "table" then return false end
-  local SM = rawget(_G, "SMODS")
-  if SM and type(SM.has_no_rank) == "function" then
-    local ok, v = pcall(SM.has_no_rank, card)
-    if ok and v then return true end
-  end
-  if type(card.get_id) == "function" then
-    local ok, id = pcall(card.get_id, card)
-    if ok and type(id) == "number" and id < 0 then return true end
-  end
-  return center_key(card) == "m_stone"
+  local ok, v = pcall(SMODS.has_no_rank, card)
+  return ok and v and true or false
 end
 
--- The engine moves every highlighted card out of G.hand into G.play before any scoring pass runs
--- (functions/state_events.lua:493-500), so nothing that reads the hand at score time may see the
--- pending selection. Returns the remaining cards and whether that list is exact.
-local function held_after_play(selection)
+function M.has_no_suit(card)
+  if type(card) ~= "table" then return false end
+  local ok, v = pcall(SMODS.has_no_suit, card)
+  return ok and v and true or false
+end
+
+local VALUE_ID = {
+  ["2"] = 2, ["3"] = 3, ["4"] = 4, ["5"] = 5, ["6"] = 6, ["7"] = 7, ["8"] = 8, ["9"] = 9,
+  ["10"] = 10, Jack = 11, Queen = 12, King = 13, Ace = 14,
+}
+-- Rankless cards return a fresh random negative id each call, so their ids cannot be compared.
+function M.rank_id(card)
+  if type(card) ~= "table" or has_no_rank(card) then return nil end
+  if type(card.get_id) == "function" then
+    local ok, id = pcall(card.get_id, card)
+    if ok and type(id) == "number" then return id end
+  end
+  return card.base and VALUE_ID[tostring(card.base.value)] or nil
+end
+
+function M.held_after_play(selection)
   local held = G and G.hand and G.hand.cards
   if type(held) ~= "table" or #held == 0 then return nil, false end
   if type(selection) ~= "table" or #selection == 0 then return held, false end
@@ -553,10 +499,14 @@ local function held_after_play(selection)
   for _, card in ipairs(held) do
     if not played[card] then remaining[#remaining + 1] = card end
   end
+  -- The Hook discards two random held cards before scoring, making this list only a ceiling.
+  if require("facts.boss.model").active_key() == "bl_hook" then
+    return remaining, false
+  end
   return remaining, true
 end
 
-local function deck_has_stone()
+function M.deck_has_stone()
   local cards = G and G.playing_cards
   if type(cards) ~= "table" then return false end
   for _, c in ipairs(cards) do
@@ -565,48 +515,36 @@ local function deck_has_stone()
   return false
 end
 
-local function normalize_seal_key(seal)
-  if type(seal) == "table" then seal = seal.name or seal.key end
-  return seal
+local function seal_getter(field, fallback, none)
+  return function(seal)
+    if type(seal) == "table" then seal = seal.name or seal.key end
+    if not seal then return none end
+    return record_field(seal_record(seal), field, fallback, seal) or none
+  end
 end
-local function seal_name(seal)
-  seal = normalize_seal_key(seal)
-  if not seal then return nil end
-  return seal_field(seal, "name", tostring)
-end
-local function seal_fx_short(seal)
-  seal = normalize_seal_key(seal)
-  if not seal then return "" end
-  return seal_field(seal, "fx", function() return "" end) or ""
-end
+local seal_name = seal_getter("name", tostring)
+M.seal_short = seal_getter("short", tostring)
+local seal_desc = seal_getter("desc")
+M.seal_fx_short = seal_getter("fx", nil, "")
 local function rental_rate()
   return (G and G.GAME and tonumber(G.GAME.rental_rate)) or 3
 end
-local function sticker_fx_short(key)
+function M.sticker_fx_short(key)
   if key == "eternal" then return "no-sell" end
-  if key == "rental" then return "-$" .. tostring(rental_rate()) .. "/rd" end
+  if key == "rental" then return Utils.money(-rental_rate()) .. "/rd" end
   if key == "perishable" then return "debuff" end
   return ""
 end
-local function seal_short(seal)
-  seal = normalize_seal_key(seal)
-  if not seal then return nil end
-  return seal_field(seal, "short", tostring)
-end
-local function seal_desc(seal)
-  seal = normalize_seal_key(seal)
-  if not seal then return nil end
-  return seal_field(seal, "desc", nil)
-end
 
-local function card_modifier_desc(card)
+function M.card_modifier_desc(card)
   if type(card) ~= "table" then return "" end
   local parts = {}
   local ek = enhancement_key(card)
   if ek then
-    local rec = enhancement_record(ek)
-    if rec and rec.name then
-      parts[#parts + 1] = rec.desc and (rec.name .. ": " .. rec.desc) or rec.name
+    local nm = enh_field(ek, "name")
+    if nm then
+      local d = enh_field(ek, "desc")
+      parts[#parts + 1] = d and (nm .. ": " .. d) or nm
     end
   end
   if card.seal then
@@ -619,7 +557,7 @@ local function card_modifier_desc(card)
   if card.edition then
     local nm = edition_name(card.edition)
     if nm then
-      local d = edition_desc(card.edition)
+      local d = edition_desc(card.edition, edition_kind(card))
       parts[#parts + 1] = d and (nm .. ": " .. d) or nm
     end
   end
@@ -687,46 +625,33 @@ local function joker_fx(c)
   return ""
 end
 
-local function area_has_negative(area)
-  if not (area and area.cards) then return false end
-  for _, c in ipairs(area.cards) do
-    if is_negative(c) then return true end
+local function area_has_negative(area, joker_only)
+  for _, c in ipairs(area and area.cards or {}) do
+    if not M.is_hidden(c) and is_negative(c) and (not joker_only or is_joker_like_card(c)) then return true end
   end
   return false
 end
 
-local function area_has_negative_joker(area)
-  if not (area and area.cards) then return false end
-  for _, c in ipairs(area.cards) do
-    if is_negative(c) and is_joker_like_card(c) then return true end
-  end
-  return false
-end
-
-local function joker_fx_line(card, description)
+function M.joker_fx_line(card, description)
   if type(description) == "string" and description ~= "" then return "" end
   return joker_fx(card)
 end
 
 M.joker_fx = joker_fx
-M.joker_fx_line = joker_fx_line
 M.card_set = card_set
 M.is_consumable_set = is_consumable_set
 M.is_consumable_card = is_consumable_card
-M.booster_kind = booster_kind
 M.area_has_negative = area_has_negative
-M.area_has_negative_joker = area_has_negative_joker
+M.area_has_negative_joker = function(area) return area_has_negative(area, true) end
 M.is_joker_like_card = is_joker_like_card
-M.has_consumable_space = has_consumable_space
-M.pack_area = pack_area
 M.joker_limit = joker_limit
-M.consumable_limit = consumable_limit
-M.hand_limit = hand_limit
-M.highlight_limit = highlight_limit
-M.joker_slot_status = joker_slot_status
 M.consumable_slot_status = consumable_slot_status
-local function order_matters()
+function M.order_matters()
   if not (G and G.jokers and G.jokers.cards) then return false end
+  local PublicCard = require("facts.public_card_identity")
+  for _, card in ipairs(G.jokers.cards) do
+    if type(card) == "table" and not PublicCard.is_public(card) then return false end
+  end
   local CardSemantics = require("facts.card_semantics")
   local has_xmult, has_flat_mult = false, false
   for _, card in ipairs(G.jokers.cards) do
@@ -740,118 +665,159 @@ local function order_matters()
   return false
 end
 
-M.order_matters = order_matters
 M.center_config_num = cfg_num
-M.slot_status_text = slot_status_text
-M.can_buy_card_space = can_buy_card_space
-M.can_take_pack_card = can_take_pack_card
 M.consumable_usable_now = consumable_usable_now
-M.has_blocked_consumable = has_blocked_consumable
-M.consumable_target_range = consumable_target_range
+M.has_consumable_space = has_consumable_space
 M.odds_frac = odds_frac
 M.ENHANCEMENTS = ENHANCEMENTS
 M.SEALS = SEALS
 M.EDITIONS = EDITIONS
 M.edition_name = edition_name
-M.edition_tag = edition_tag
-M.edition_fx_short = edition_fx_short
-M.rarity_name = rarity_name
+M.edition_desc = edition_desc
 M.copy_joker_kind = copy_joker_kind
-M.enhancement_record = enhancement_record
 M.enhancement_key = enhancement_key
 M.has_no_rank = has_no_rank
-M.held_after_play = held_after_play
-M.deck_has_stone = deck_has_stone
 M.is_negative = is_negative
-M.enhancement_name = enhancement_name
-M.enhancement_short = enhancement_short
-M.enhancement_fx_short = enhancement_fx_short
-M.seal_fx_short = seal_fx_short
-M.sticker_fx_short = sticker_fx_short
 M.seal_name = seal_name
-M.seal_short = seal_short
-M.card_modifier_desc = card_modifier_desc
 M.center = center_of
-M.score_per_hand = score_per_hand
+M.center_key = center_key
+M.resolve_field = resolve_field
 
-local function planet_run_state_suffix(card)
-  if card_set(card) ~= "Planet" then return "" end
+local function planet_hand(card)
   local ht = card and card.ability and card.ability.consumeable and card.ability.consumeable.hand_type
   if not ht then
-    local ctr = card and card.config and card.config.center
+    local ctr = center_of(card)
     ht = ctr and ctr.config and ctr.config.hand_type
   end
-  local h = ht and G and G.GAME and type(G.GAME.hands) == "table" and G.GAME.hands[ht]
-  if type(h) ~= "table" then return "" end
-  return string.format("; played %s %dx this run (lvl %d)",
-    tostring(ht), tonumber(h.played) or 0, tonumber(h.level) or 1)
+  return ht, ht and require("facts.hand_facts").hand_values(ht)
 end
-M.planet_run_state_suffix = planet_run_state_suffix
 
-function M.is_face_down(card)
+function M.planet_run_state_suffix(card)
+  if card_set(card) ~= "Planet" then return "" end
+  local ht, h = planet_hand(card)
+  if not h then return "" end
+  return string.format("; played %s %dx this run (lvl %d)", tostring(ht), h.played, h.level)
+end
+
+function M.idle_planet_note(card)
+  if M.is_hidden(card) or card_set(card) ~= "Planet" or not consumable_slot_status().full then return nil end
+  local ht, h = planet_hand(card)
+  if not h or h.played > 0 then return nil end
+  return string.format("levels %s, which you have not played this run; selling it (%s) frees a consumable slot",
+    tostring(ht), Utils.money(card.sell_cost))
+end
+
+local function is_face_down(card)
   return not not (card and card.facing == "back")
+end
+
+function M.is_hidden(card)
+  return is_face_down(card) or not not (card and card.ability and card.ability.wheel_flipped)
+end
+
+local function is_unplayed(card)
+  if type(card) ~= "table" then return false end
+  if G and G.deck and card.area == G.deck then return true end
+  return not not (type(card.ability) == "table" and card.ability.wheel_flipped)
+end
+
+local function unplayed_off_pile(card)
+  if type(card) ~= "table" or (G and G.deck and card.area == G.deck) then return false end
+  return is_unplayed(card) or (G and G.hand and card.area == G.hand and is_face_down(card)) or false
+end
+
+function M.is_aggregate_public(card)
+  local area = type(card) == "table" and card.area or nil
+  if not (G and area) then return false end
+  if not (area == G.deck or area == G.discard or area == G.play) then return false end
+  return not unplayed_off_pile(card)
+end
+
+function M.is_composition_public(card)
+  local area = type(card) == "table" and card.area or nil
+  if not (G and area) then return false end
+  return area == G.deck or area == G.discard or area == G.play or area == G.hand
 end
 
 function M.unplayed_pool()
   local dk = G and G.deck and G.deck.cards
-  if type(dk) ~= "table" then return nil, 0 end
-  local pool, flipped = {}, 0
+  if type(dk) ~= "table" then return nil, 0, {} end
+  local pool, concealed, where = {}, 0, { hand = 0, discard = 0, other = 0 }
   for _, c in ipairs(dk) do pool[#pool + 1] = c end
-  for _, c in ipairs((G and G.hand and G.hand.cards) or {}) do
-    if M.is_face_down(c) or (c and c.ability and c.ability.wheel_flipped) then
-      pool[#pool + 1] = c
-      flipped = flipped + 1
+  for _, area in ipairs({ G.hand, G.discard, G.play }) do
+    for _, c in ipairs((type(area) == "table" and area.cards) or {}) do
+      if unplayed_off_pile(c) or (area == G.hand and is_face_down(c)) then
+        pool[#pool + 1] = c
+        concealed = concealed + 1
+        local k = (area == G.hand and "hand") or (area == G.discard and "discard") or "other"
+        where[k] = where[k] + 1
+      end
     end
   end
-  return pool, flipped
+  return pool, concealed, where
 end
 
-function M.joker_composition_signature()
-  if not (G and G.jokers and G.jokers.cards) then return "" end
-  local keys = {}
-  for _, card in ipairs(G.jokers.cards) do
-    local center = card and card.config and card.config.center
-    keys[#keys + 1] = tostring(center and (center.key or center.name) or "?")
-  end
-  table.sort(keys)
-  return table.concat(keys, "|")
+local function center_id(card)
+  local center = center_of(card)
+  return tostring(center and (center.key or center.name) or "?")
 end
+
+local function untagged_joker_indices()
+  local out = {}
+  if not (G and G.jokers and type(G.jokers.cards) == "table") then return out end
+  local tags = (G.NEURO and G.NEURO.joker_intents) or {}
+  for i, card in ipairs(G.jokers.cards) do
+    local sid = card and card.sort_id
+    if sid and not (tags[sid] and tags[sid].tag) then out[#out + 1] = i end
+  end
+  return out
+end
+
+M.untagged_joker_indices = untagged_joker_indices
 
 function M.untagged_joker_count()
-  if not (G and G.jokers and G.jokers.cards) then return 0 end
-  local tags = (G.NEURO and G.NEURO.joker_intents) or {}
-  local count = 0
-  for _, card in ipairs(G.jokers.cards) do
-    local sid = card and card.sort_id
-    if sid and not (tags[sid] and tags[sid].tag) then count = count + 1 end
-  end
-  return count
+  return #untagged_joker_indices()
 end
 
-local EDITION_FLAGS = { "foil", "holo", "polychrome", "negative" }
+function M.untagged_joker_prose()
+  local ix = untagged_joker_indices()
+  if #ix == 0 then return nil end
+  local list = tostring(ix[1])
+  for i = 2, #ix do list = list .. (i == #ix and " and " or ", ") .. ix[i] end
+  return "Jokers that carry no tag: " .. list
+end
+
 local function card_edition_tag(card)
   local e = card and card.edition
-  if not e then return "" end
-  if e.key then return tostring(e.key) end
-  for _, k in ipairs(EDITION_FLAGS) do
-    if e[k] then return k end
-  end
-  return "ed"
+  return e and tostring(e.key) or ""
 end
 
-function M.joker_build_signature()
+local function joker_signature(build)
   if not (G and G.jokers and G.jokers.cards) then return "" end
+  local PublicCard = require("facts.public_card_identity")
   local parts = {}
   for i, card in ipairs(G.jokers.cards) do
-    local center = card and card.config and card.config.center
-    parts[i] = tostring(center and (center.key or center.name) or "?") .. "#" .. card_edition_tag(card)
+    if type(card) == "table" and not PublicCard.is_public(card) then
+      parts[i] = "hidden:" .. tostring(i)
+    else
+      parts[i] = build and (center_id(card) .. "#" .. card_edition_tag(card)) or center_id(card)
+    end
   end
-  return table.concat(parts, "|")  -- order preserved: reordering changes the signature
+  if not build then table.sort(parts) end
+  return table.concat(parts, "|")
 end
+function M.joker_build_signature() return joker_signature(true) end
+function M.joker_composition_signature() return joker_signature(false) end
 
 if _G.NEURO_TEST then
-  M.live_odds = live_odds
-  M.edition_readable = edition_readable
+  M.is_face_down = is_face_down
+end
+
+local RARITY_TIER = {}
+for tier, name in pairs(RARITY_NAMES) do RARITY_TIER[name] = tier end
+function M.rarity_tier(rarity)
+  if type(rarity) == "string" then return RARITY_TIER[rarity] or tonumber(rarity) end
+  return tonumber(rarity)
 end
 
 return M

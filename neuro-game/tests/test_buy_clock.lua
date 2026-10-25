@@ -1,13 +1,14 @@
+local ES = require("tests.engine_cards").states()
 _G.NEURO_TEST = true
 
 love = { timer = { getTime = function() return G.TIMERS.REAL end } }
 _G.G = {
   NEURO = {}, FUNCS = {}, GAME = { dollars = 20, current_round = {} },
   TIMERS = { REAL = 0, TOTAL = 0 }, SETTINGS = { GAMESPEED = 1 }, SPEEDFACTOR = 1,
-  STATES = { SHOP = 5 }, STATE = 5,
+  STATES = ES, STATE = ES.SHOP,
   shop_jokers = { cards = {}, config = { card_limit = 4 } },
 }
-_G.SMODS = { Mods = {} }
+require("tests.engine_cards").install_smods({ Mods = {} })
 
 local queued = {}
 local pending = {}
@@ -43,12 +44,12 @@ local function reset_world(gamespeed)
   G.SPEEDFACTOR = gamespeed
   G.TIMERS.REAL, G.TIMERS.TOTAL = 0, 0
   G.NEURO = { ai_highlighted = setmetatable({}, { __mode = "k" }) }
-  local card = {
+  local card = require("tests.engine_cards").card({
     cost = 5, highlighted = false,
     ability = { name = "Joker", set = "Joker" },
     config = { center = { key = "j_joker", set = "Joker" } },
     juice_up = function() end,
-  }
+  })
   G.shop_jokers.cards = { card }
   G.FUNCS.buy_from_shop = function() buy_at = G.TIMERS.REAL end
   Staging.reset_run_state()
@@ -56,13 +57,18 @@ local function reset_world(gamespeed)
 end
 
 local dispatch_at
-Staging._test.set_validator(function() return true end)
-Staging.set_executor(function(msg)
+local job
+
+local function run_when_ready()
+  if not (job and Staging.ready(job)) then return end
   dispatch_at = G.TIMERS.REAL
+  Staging.take(job)
   local h = Dispatcher.get_action_handler("buy_from_shop")
-  local exec = h and h(msg.data.data)
+  local exec = h and h(job.data)
   if type(exec) == "function" then exec() end
-end)
+  Staging.finish(job, true)
+  job = nil
+end
 
 local function drive(seconds)
   local dt = 1 / 60
@@ -70,6 +76,7 @@ local function drive(seconds)
     G.TIMERS.REAL = G.TIMERS.REAL + dt
     G.TIMERS.TOTAL = G.TIMERS.TOTAL + dt * G.SPEEDFACTOR
     pcall(Staging.update, dt)
+    run_when_ready()
     for i = #pending, 1, -1 do
       local e = pending[i]
       if G.TIMERS[e.timer] >= e.fires_at then
@@ -83,8 +90,9 @@ end
 local function stage_buy(gamespeed)
   local card = reset_world(gamespeed)
   dispatch_at = nil
-  Staging.queue({ command = "action", data = { id = "buy-" .. tostring(gamespeed),
-    name = "buy_from_shop", data = { area = "shop_jokers", index = 1 } } })
+  job = { id = "buy-" .. tostring(gamespeed), name = "buy_from_shop", data = { area = "shop_jokers", index = 1 } }
+  Staging.begin(job)
+  run_when_ready()
   drive(6)
   return card
 end
