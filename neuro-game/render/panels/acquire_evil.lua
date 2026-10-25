@@ -9,11 +9,9 @@ local lg = love.graphics
 
 local TL = { IN = 0.42, HOLD = 0.55, MORPH = 0.35, FX_LEAD = 0.15, OUT = 0.55 }
 
-local GLITCH_RED = { 0.95, 0.10, 0.16 }
-local GLITCH_CYAN = { 0.12, 0.80, 0.90 }
 local FLASH_HOT = { 1, 0.95, 0.85 }
 
-local function ease(m01)   -- gate-slam
+local function ease(m01)
   local t = clamp01(m01)
   local inv = 1 - t
   local inv2 = inv * inv
@@ -67,7 +65,7 @@ local function frame(ctx, g)
       lg.rectangle("fill", g.x, g.y + 1, 1, g.h - 2)
       lg.rectangle("fill", g.x + g.w - 1, g.y + 1, 1, g.h - 2)
     end
-    lg.setColor(frame_col[1], frame_col[2], frame_col[3], 0.90 * a)
+    set_col(frame_col, 0.90 * a)
     lg.setLineWidth(1)
     lg.rectangle("line", g.x, g.y, g.w, g.h, 0, 0)
   else
@@ -122,9 +120,9 @@ local function burst(ctx, g, phase, t01)
     lg.rectangle("fill", g.x, g.y, g.w, g.h)
     local gj = math.max(1, round(cn(3) * (1 - t01)))
     lg.setLineWidth(1)
-    lg.setColor(GLITCH_RED[1], GLITCH_RED[2], GLITCH_RED[3], 0.35 * (1 - t01) * g.a)
+    set_col(Prims.GLITCH_RED, 0.35 * (1 - t01) * g.a)
     lg.rectangle("line", g.x - gj, g.y, g.w, g.h)
-    lg.setColor(GLITCH_CYAN[1], GLITCH_CYAN[2], GLITCH_CYAN[3], 0.28 * (1 - t01) * g.a)
+    set_col(Prims.GLITCH_CYAN, 0.28 * (1 - t01) * g.a)
     lg.rectangle("line", g.x + gj, g.y - 1, g.w, g.h)
   elseif phase == "morph_end" then
     local cx = g.crest_cx - cn(10)
@@ -136,7 +134,7 @@ local function burst(ctx, g, phase, t01)
       Prims.ember_bloom(cx, cy, r, cn(1), t01, th.GOLD, g.a)
     end
     local fl = math.sin(math.pi * t01)
-    lg.setColor(FLASH_HOT[1], FLASH_HOT[2], FLASH_HOT[3], 0.16 * fl * g.a)
+    set_col(FLASH_HOT, 0.16 * fl * g.a)
     lg.rectangle("fill", g.x, g.y, g.w, g.h)
     Prims.draw_glint(g.x + cn(4), g.y + cn(4), cn(2), th.ACC, 0.85 * fl * g.a, th.GOLD, true)
     Prims.draw_glint(g.x + g.w - cn(4), g.y + g.h - cn(4), cn(2), th.ACC,

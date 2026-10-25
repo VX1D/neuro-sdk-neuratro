@@ -9,37 +9,20 @@ local session = {}
 
 local function notify_runtime_change(key, value)
   if key ~= "NEURO_CONFIRM_HAND" then return end
-  local ok, HandTx = pcall(require, "core.hand_transaction")
-  if ok and HandTx and HandTx.confirmation_mode_changed then
-    pcall(HandTx.confirmation_mode_changed, value == "on")
-  end
-end
-
-local function in_values(def, value)
-  for i = 1, #def.values do
-    if def.values[i] == value then return true end
-  end
-  return false
-end
-
-local function clamp(def, value)
-  if value < def.min then return def.min end
-  if value > def.max then return def.max end
-  return value
+  local ok, Gate = pcall(require, "core.gate")
+  if ok and Gate then pcall(Gate.confirmation_mode_changed, value == "on") end
 end
 
 local function validate(def, value)
   if def.kind == "enum" then
-    if type(value) ~= "string" or not in_values(def, value) then return nil end
-    return value
-  end
-  if def.kind == "string" then
-    if type(value) ~= "string" then return nil end
-    return value
-  end
-  if def.kind == "number" then
-    if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then return nil end
-    return clamp(def, value)
+    for _, allowed in ipairs(def.values) do
+      if allowed == value then return value end
+    end
+  elseif def.kind == "string" then
+    return type(value) == "string" and value or nil
+  elseif def.kind == "number" and type(value) == "number" and value == value
+      and value ~= math.huge and value ~= -math.huge then
+    return math.max(def.min, math.min(def.max, value))
   end
   return nil
 end
@@ -115,66 +98,33 @@ function Config.runtime_entries()
   return Schema.runtime
 end
 
-function Config.default(key)
-  local def = Schema.by_key[key]
-  return def and def.default or nil
-end
-
 function Config.get_raw(key)
   ensure_initialized()
   local def = Schema.by_key[key]
   if not def then return nil end
-  if def.session then
-    local held = session[key]
-    if held ~= nil then return held end
-    return def.default
-  end
-  local value = backing.settings[key]
+  local value
+  if def.session then value = session[key] else value = backing.settings[key] end
   if value ~= nil then return value end
   return def.default
 end
 
-local PRESET_SPEED = { ["0.5x"] = 0.5, ["1x"] = 1, ["2x"] = 2, ["4x"] = 4 }
-local STREAM_CD_FACTOR = { [0.5] = 2.0, [1] = 1.0, [2] = 0.7, [4] = 0.5 }
-
-local function game_speed()
+function Config.game_speed()
   local speed = G and G.SETTINGS and G.SETTINGS.GAMESPEED
   if type(speed) ~= "number" or speed <= 0 then return 1 end
   if speed < 0.5 then return 0.5 end
   if speed > 4 then return 4 end
   return speed
 end
-if _G.NEURO_TEST then
-  Config.game_speed = game_speed
-end
-
-local function snap_speed(speed)
-  local best, distance = 1, math.huge
-  for _, candidate in ipairs({ 0.5, 1, 2, 4 }) do
-    local current = math.abs(speed - candidate)
-    if current < distance then distance, best = current, candidate end
-  end
-  return best
-end
-
 local function cooldown_scale()
   local scale = Config.get_raw("NEURO_COOLDOWN_SCALE")
   return type(scale) == "number" and scale > 0 and scale or 1
-end
-
-local function cooldown_gate_factor()
-  if not Config.bool("NEURO_AUTO_TUNE") then return 1 end
-  local preset = Config.get_raw("NEURO_CD_PRESET")
-  local speed = PRESET_SPEED[preset] or game_speed()
-  local factor = STREAM_CD_FACTOR[snap_speed(speed)] or 1
-  return type(factor) == "number" and factor > 0 and factor or 1
 end
 
 function Config.get(key)
   local value = Config.get_raw(key)
   local def = Schema.by_key[key]
   if def and def.cd and type(value) == "number" then
-    return value * cooldown_scale() * cooldown_gate_factor()
+    return value * cooldown_scale()
   end
   return value
 end
@@ -183,57 +133,40 @@ function Config.bool(key)
   return Config.get_raw(key) == "on"
 end
 
+local function store(def, key, value, stored)
+  if def.session then
+    local before = session[key] ~= nil and session[key] or def.default
+    session[key] = stored
+    if before ~= value then notify_runtime_change(key, value) end
+  elseif backing.settings[key] ~= stored then
+    backing.settings[key] = stored
+    dirty = true
+    notify_runtime_change(key, value)
+  end
+  return value
+end
+
 function Config.set(key, value)
   ensure_initialized()
   local def = Schema.by_key[key]
   if not def then return nil end
   local normalized = validate(def, value)
   if normalized == nil then return nil end
-
-  if def.session then
-    local before = session[key] ~= nil and session[key] or def.default
-    session[key] = (normalized ~= def.default) and normalized or nil
-    if before ~= normalized then notify_runtime_change(key, normalized) end
-    return normalized
-  end
-
   local stored
   if normalized ~= def.default then stored = normalized end
-  if backing.settings[key] == stored then return normalized end
-  backing.settings[key] = stored
-  dirty = true
-  notify_runtime_change(key, normalized)
-  return normalized
+  return store(def, key, normalized, stored)
 end
 
 function Config.reset(key)
   ensure_initialized()
   local def = Schema.by_key[key]
   if not def then return nil end
-  if def.session then
-    local before = session[key] ~= nil and session[key] or def.default
-    session[key] = nil
-    if before ~= def.default then notify_runtime_change(key, def.default) end
-    return def.default
-  end
-  local changed = backing.settings[key] ~= nil
-  if backing.settings[key] ~= nil then
-    backing.settings[key] = nil
-    dirty = true
-  end
-  if changed then notify_runtime_change(key, def.default) end
-  return def.default
+  return store(def, key, def.default, nil)
 end
 
 function Config.get_colours()
   ensure_initialized()
   return backing.colours
-end
-
-local function get_colour(persona, key)
-  ensure_initialized()
-  local values = backing.colours[persona]
-  return values and values[key] or nil
 end
 
 function Config.set_colour(persona, key, hex)
@@ -267,10 +200,6 @@ function Config.reset_colours(persona)
   return true
 end
 
-local function is_dirty()
-  return dirty
-end
-
 function Config.save()
   ensure_initialized()
   if not dirty then return true end
@@ -279,13 +208,6 @@ function Config.save()
   if saved ~= true then return false, tostring(err or "Steamodded rejected the config write") end
   dirty = false
   return true
-end
-
-if rawget(_G, "NEURO_TEST") then
-  Config._test = {
-    get_colour = get_colour,
-    is_dirty = is_dirty,
-  }
 end
 
 return Config

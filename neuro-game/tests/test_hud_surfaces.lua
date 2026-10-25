@@ -82,8 +82,9 @@ local function joker(name, key, rarity, cost)
     sell_cost = 2, T = { w = 1, h = 1 } }
 end
 
+local ES = require("tests.engine_cards").states()
 _G.G = {
-  NEURO = { persona = "hiyori", state = "SELECTING_HAND", enabled = true, purchase_showcase_queue = {},
+  NEURO = { persona = "hiyori", state = "SHOP", enabled = true, purchase_showcase_queue = {},
     ai_highlighted = setmetatable({}, { __mode = "k" }) },
   GAME = { dollars = 27, pack_choices = 0, round = 3, chips = 0,
     round_resets = { ante = 4, blind_choices = {}, blind_states = {} },
@@ -95,16 +96,16 @@ _G.G = {
   jokers = area({}, 5), consumeables = area({}, 2), hand = area({}, 8), deck = area({}, 52),
   play = area({}), discard = area({}),
   shop_jokers = area({}), shop_vouchers = area({}), shop_booster = area({}),
-  FUNCS = {}, TIMERS = { REAL = 0 }, STATES = { SHOP = 5 },
+  FUNCS = {}, TIMERS = { REAL = 0 }, STATES = ES,
   STAGE = 2, STAGES = { MAIN_MENU = 1, RUN = 2 },
   SETTINGS = { paused = false, GAMESPEED = 1 },
   C = setmetatable({}, { __index = function() return { 1, 1, 1, 1 } end }),
   ARGS = {}, P_CENTERS = {}, P_CENTER_POOLS = {}, P_BLINDS = {}, localization = {},
   ASSET_ATLAS = {}, SHADERS = {}, TILESCALE = 3.65, TILESIZE = 20, CANV_SCALE = 1,
-  STATE = 5, I = { MOVEABLE = {}, UIBOX = {}, NODE = {} },
+  STATE = ES.SHOP, I = { MOVEABLE = {}, UIBOX = {}, NODE = {} },
 }
-_G.SMODS = { current_mod = { path = "./", config = { settings = {}, colours = {} } },
-  save_mod_config = function() return true end, Mods = {}, findModByID = function() return nil end }
+require("tests.engine_cards").install_smods({ current_mod = { path = "./", config = { settings = {}, colours = {} } },
+  save_mod_config = function() return true end, Mods = {}, findModByID = function() return nil end })
 _G.NFS = setmetatable({}, { __index = function() return noop end })
 
 local check, done = require("tests.helpers").harness("hud surfaces")
@@ -113,7 +114,6 @@ local Config = require("core.config")
 Config.init({ settings = {}, colours = {} }, function() return true end)
 
 local HUD = require("render.hud_overlay")
-local Rows = require("hud.rows")
 G.ASSET_ATLAS.FIX71 = { image = IMG, px = 71, py = 95 }
 G.ASSET_ATLAS.centers = { image = IMG, px = 71, py = 95 }
 
@@ -151,8 +151,8 @@ local car = find_carousel(rows)
 check("mixed: carousel survives one face-down card", car ~= nil)
 check("mixed: carousel keeps both visible cards", car and #car.cards == 2
   and car.cards[1] == vis1 and car.cards[2] == vis2)
-local fd_line = find_line(rows, "face-down (hidden)")
-check("mixed: hidden count noted on its own line", fd_line ~= nil and fd_line.text == "1 face-down (hidden)",
+local fd_line = find_line(rows, "1 hidden")
+check("mixed: hidden count noted on its own line", fd_line ~= nil and fd_line.text == "1 hidden",
   fd_line and fd_line.text)
 check("mixed: hidden note uses the dim color", fd_line ~= nil and fd_line.color == COLORS.D_DIM)
 
@@ -160,18 +160,21 @@ G.jokers = area({ vis1, vis2 }, 5)
 rows = built_rows()
 car = find_carousel(rows)
 check("all visible: carousel carries every card", car and #car.cards == 2)
-check("all visible: no face-down note", find_line(rows, "face-down") == nil)
+check("all visible: no hidden note", find_line(rows, "hidden") == nil)
 
 local hid2 = joker("HiddenDelta", "j_hiddendelta", 1, 3)
 hid2.facing = "back"
 G.jokers = area({ hid, hid2 }, 5)
 rows = built_rows()
 check("all hidden: no carousel", (select(2, find_carousel(rows))) == 0)
-check("all hidden: blanket note kept", find_line(rows, "Cards are face-down (hidden)") ~= nil)
+check("all hidden: blanket note kept", find_line(rows, "Cards are hidden") ~= nil)
 
-local m = { line_h = 17, small_line_h = 14, header_line_h = 20, card_line_h = 26, sep_h = 6, carousel_pad = 18 }
-check("carousel height contract: card line + three desc lines + pad",
-  Rows.height({ kind = "carousel", cards = {} }, m) == 26 + 14 * 3 + 18)
+local flipped = joker("FlippedEpsilon", "j_flippedepsilon", 1, 7)
+flipped.ability.wheel_flipped = true
+G.jokers = area({ flipped }, 5)
+rows = built_rows()
+check("a wheel-flipped card alone draws the blanket hidden note, never a face-down claim",
+  find_line(rows, "Cards are hidden") ~= nil and find_line(rows, "face-down") == nil)
 
 G.jokers = area({ vis1, hid, vis2 }, 5)
 for k = #OPS, 1, -1 do OPS[k] = nil end
@@ -187,7 +190,7 @@ for _, op in ipairs(OPS) do
   if op.op == "T" then
     if op.text:find("VisAlpha", 1, true) then saw_vis1 = true end
     if op.text:find("VisBeta", 1, true) then saw_vis2 = true end
-    if op.text:find("face-down (hidden)", 1, true) then saw_note = true end
+    if op.text:find("1 hidden", 1, true) then saw_note = true end
     if op.text:find("HiddenGamma", 1, true) then saw_hidden = true end
   end
 end
@@ -195,58 +198,5 @@ check("full draw: both visible jokers still describe themselves", saw_vis1 and s
   string.format("vis1=%s vis2=%s", tostring(saw_vis1), tostring(saw_vis2)))
 check("full draw: the hidden note is rendered", saw_note)
 check("full draw: the face-down joker's name never leaks", not saw_hidden)
-
-local DS = require("render.debug_stats")
-local Staging = require("core.staging")
-local real_get_lines = Staging.get_debug_lines
-Staging.get_debug_lines = function() return { "stage line one", "stage line two" } end
-local StagingDebug = require("render.staging_debug")
-
-DS.set_mode_name("compact")
-CURFONT = mkfont(40)
-for k = #OPS, 1, -1 do OPS[k] = nil end
-StagingDebug.draw()
-local text_px, box_w
-for _, op in ipairs(OPS) do
-  if op.op == "T" then text_px = text_px or op.px end
-  if op.op == "R" and op.mode == "fill" and not box_w then box_w = op.w end
-end
-check("staging_debug: text uses the pinned debug font, not the ambient one", text_px == 14, text_px)
-check("staging_debug: box width at 1080p unchanged", box_w == 320, box_w)
-check("staging_debug: ambient font restored after draw", CURFONT.px == 40, CURFONT.px)
-
-for k = #OPS, 1, -1 do OPS[k] = nil end
-DS.draw()
-local ds_w
-for _, op in ipairs(OPS) do
-  if op.op == "R" and op.mode == "fill" and op.x == 8 and op.y == 8 and not ds_w then ds_w = op.w end
-end
-check("debug_stats: box width at 1080p unchanged", ds_w == 308, ds_w)
-
-SH = 2160
-for k = #OPS, 1, -1 do OPS[k] = nil end
-DS._rows = nil
-DS.draw()
-local ds_w2, ds_px
-for _, op in ipairs(OPS) do
-  if op.op == "R" and op.mode == "fill" and op.x == 8 and op.y == 8 and not ds_w2 then ds_w2 = op.w end
-  if op.op == "T" and not ds_px then ds_px = op.px end
-end
-check("debug_stats: box width doubles at 4K", ds_w2 == 616, ds_w2)
-check("debug_stats: font doubles at 4K", ds_px == 28, ds_px)
-
-for k = #OPS, 1, -1 do OPS[k] = nil end
-StagingDebug.draw()
-local sd_w2, sd_px
-for _, op in ipairs(OPS) do
-  if op.op == "R" and op.mode == "fill" and not sd_w2 then sd_w2 = op.w end
-  if op.op == "T" and not sd_px then sd_px = op.px end
-end
-check("staging_debug: box width doubles at 4K", sd_w2 == 640, sd_w2)
-check("staging_debug: font follows debug_stats at 4K", sd_px == 28, sd_px)
-
-DS.set_mode_name("off")
-Staging.get_debug_lines = real_get_lines
-SH = 1080
 
 done()

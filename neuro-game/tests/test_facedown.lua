@@ -4,42 +4,49 @@ _G.G = { GAME = { current_round = {}, blind = nil }, FUNCS = {} }
 local CardUtil = require("facts.card_util")
 local CtxHand = require("context.ctx_hand")
 local HandFacts = require("facts.hand_facts")
+local function prose() return require("context.context_readable").structure_prose(HandFacts.structure()) end
 
 local check, done = require("tests.helpers").harness("facedown")
 
-local function card(v, s) return { base = { value = v, suit = s }, config = { center = { key = "c" } } } end
+local function card(v, s) return require("tests.engine_cards").playing(v, s) end
 
 local up = card("King", "Hearts")
 local dn = card("Queen", "Spades"); dn.facing = "back"
 check("is_face_down: front/nil -> false", CardUtil.is_face_down(up) == false)
 check("is_face_down: facing 'back' -> true", CardUtil.is_face_down(dn) == true)
 
-local tok_up = CtxHand.card_token(up, false, false)
-local tok_dn = CtxHand.card_token(dn, false, false)
-check("card_token visible shows rank", tok_up:find("K", 1, true) ~= nil, tok_up)
-check("card_token face-down (compact) = FD", tok_dn == "FD", tok_dn)
-check("card_token face-down leaks no rank/suit", not (tok_dn:find("Q") or tok_dn:find("S")), tok_dn)
-check("card_token face-down (readable) = hidden", CtxHand.card_token(dn, false, true):find("hidden", 1, true) ~= nil)
+local tok_up = CtxHand.card_token(up, false)
+local tok_dn = CtxHand.card_token(dn, false)
+check("card_token visible shows rank", tok_up:find("King", 1, true) ~= nil, tok_up)
+check("card_token face-down = face-down (hidden)", tok_dn == "face-down (hidden)", tok_dn)
+check("card_token face-down leaks no rank/suit",
+  not (tok_dn:find("Q") or tok_dn:find("S") or tok_dn:find("Queen") or tok_dn:find("Spades")), tok_dn)
 
 G.hand = { cards = { card("King", "Hearts"), card("King", "Spades"), dn } }
 G.FUNCS.get_poker_hand_info = function(_)
   return "Pair", nil, { Pair = { G.hand.cards[1], G.hand.cards[2] } }, { G.hand.cards[1], G.hand.cards[2] }, nil
 end
-local s_fd = HandFacts.summary()
-check("summary w/ face-down: notes it is hidden", s_fd:find("face-down", 1, true) ~= nil, s_fd)
-check("summary w/ face-down: the visible cards are still analysed", s_fd:find("Ready:", 1, true) ~= nil, s_fd)
-check("summary w/ face-down: states how many are hidden and how many are visible",
+local s_fd = prose()
+check("hand prose w/ face-down: notes it is hidden", s_fd:find("face-down", 1, true) ~= nil, s_fd)
+check("hand prose w/ face-down: the visible cards are still analysed", s_fd:find("Ready to play now:", 1, true) ~= nil, s_fd)
+check("hand prose w/ face-down: states how many are hidden and how many are visible",
   s_fd:find("1 card(s) face-down (hidden), 2 visible", 1, true) ~= nil, s_fd)
-check("summary w/ face-down: states the consequence, not just the count",
-  s_fd:find("blind gamble", 1, true) ~= nil, s_fd)
+check("hand prose w/ face-down: states how later draws arrive, not just the count",
+  s_fd:find("Replacements after a play or a discard are drawn face up.", 1, true) ~= nil, s_fd)
+G.GAME.blind = { key = "bl_wheel", name = "The Wheel", disabled = false, in_blind = true }
+local s_wheel = prose()
+check("hand prose w/ face-down under The Wheel: states the per-card odds and that discard draws are mostly seen",
+  s_wheel:find("each with a 1 in 7 chance of arriving face down", 1, true) ~= nil
+    and s_wheel:find("not a blind gamble", 1, true) ~= nil, s_wheel)
+G.GAME.blind = nil
 
 do
   local all_dn = { card("King", "Hearts"), card("Queen", "Spades") }
   for _, c in ipairs(all_dn) do c.facing = "back" end
   local saved = G.hand
   G.hand = { cards = all_dn }
-  local s_all = HandFacts.summary()
-  check("summary w/ every card face-down: says no analysis is possible at all",
+  local s_all = prose()
+  check("hand prose w/ every card face-down: says no analysis is possible at all",
     s_all:find("all 2 cards face-down (hidden), 0 visible", 1, true) ~= nil, s_all)
   G.hand = saved
 end
@@ -49,7 +56,7 @@ do
   local saved_info = G.FUNCS.get_poker_hand_info
   local flush = {
     card("2", "Spades"), card("3", "Spades"), card("4", "Spades"),
-    card("5", "Spades"), card("6", "Spades"),
+    card("5", "Spades"), card("8", "Spades"),
   }
   flush[5].facing = "back"
   G.hand = { cards = flush }
@@ -57,7 +64,7 @@ do
     if #list >= 5 then return "Flush", nil, { Flush = list }, list, nil end
     return "High Card", nil, {}, {}, nil
   end
-  HandFacts.summary()
+  prose()
   check("strong-ready cache: hidden fifth Spade is not ready", HandFacts.has_strong_ready() == false)
   flush[5].facing = "front"
   check("strong-ready cache: revealing the same card invalidates the cached false",
@@ -66,8 +73,8 @@ do
 end
 
 G.hand = { cards = { card("King", "Hearts"), card("King", "Spades"), card("9", "Clubs") } }
-local s_vis = HandFacts.summary()
-check("summary all-visible: analysis present", (s_vis:find("Shape:", 1, true) or s_vis:find("Ready:", 1, true)) ~= nil, s_vis)
+local s_vis = prose()
+check("hand prose all-visible: analysis present", (s_vis:find("Shape:", 1, true) or s_vis:find("Ready to play now:", 1, true)) ~= nil, s_vis)
 
 G.hand = { cards = { card("King", "Hearts"), dn } }
 check("any_face_down true with a hidden card", HandFacts.any_face_down() == true)
@@ -76,25 +83,60 @@ check("any_face_down false when all visible", HandFacts.any_face_down() == false
 
 local dn2 = card("Ace", "Diamonds"); dn2.facing = "back"
 G.hand = { cards = { dn, dn2 } }
-local s_all = HandFacts.summary()
+local s_all = prose()
 check("all-hidden: 0 visible noted", s_all:find("0 visible", 1, true) ~= nil, s_all)
-check("all-hidden: neutral 'Your call'", s_all:find("Your call", 1, true) ~= nil, s_all)
+check("all-hidden: the state carries no 'Your call' instruction (the query leaves the choice open)",
+  s_all:find("Your call", 1, true) == nil, s_all)
 check("all-hidden: no play-over-discard nudge", s_all:find("prefer playing", 1, true) == nil, s_all)
 
 G.hand = { cards = { card("King", "Hearts"), dn } }
-check("partial face-down keeps prefer-playing guidance", HandFacts.summary():find("prefer playing", 1, true) ~= nil)
+for _, b in ipairs({ { "bl_wheel", "The Wheel" }, { "bl_mark", "The Mark" } }) do
+  G.GAME.blind = { key = b[1], name = b[2], disabled = false, in_blind = true }
+  check(b[2] .. ": partial face-down drops the blind-gamble premise (discard draws are mostly seen)",
+    prose():find("is a blind gamble:", 1, true) == nil, prose())
+end
+do
+  _G.find_joker = function(name) return name == "Pareidolia" and { {} } or {} end
+  G.GAME.blind = { key = "bl_mark", name = "The Mark", disabled = false, in_blind = true }
+  local all = prose()
+  check("The Mark with Pareidolia: every draw is face down, so the blind-gamble fact holds",
+    all:find("Replacements after a play or a discard are drawn face down.", 1, true) ~= nil
+      and all:find("Discarding here is a blind gamble:", 1, true) ~= nil
+      and all:find("prefer playing", 1, true) == nil, all)
+  _G.find_joker = nil
+end
+G.GAME.blind = nil
 
 do
   G.GAME.blind = { key = "bl_fish", disabled = false, in_blind = true }
   G.GAME.current_round.hands_left = 3
   G.hand = { cards = { card("King", "Hearts"), dn } }
-  local fish = HandFacts.summary()
+  local fish = prose()
   check("The Fish says discard replacements are face-up",
-    fish:find("discarding hidden cards draws face-up replacements", 1, true) ~= nil, fish)
+    fish:find("Replacements after a discard are drawn face up; after a play, face down.", 1, true) ~= nil, fish)
   check("The Fish does not retain the generic anti-discard advice",
-    fish:find("fresh draws may also come face-down", 1, true) == nil
-      and fish:find("prefer playing", 1, true) == nil, fish)
+    fish:find("may come face-down too", 1, true) == nil
+      and fish:find("blind gamble", 1, true) == nil, fish)
   G.GAME.blind = nil
+end
+
+-- The House flips only the opening draw; later replacement draws are not hidden by that effect.
+do
+  G.GAME.blind = { key = "bl_house", name = "The House", disabled = false, in_blind = true }
+  G.GAME.current_round.hands_played, G.GAME.current_round.discards_used = 0, 1
+  G.hand = { cards = { card("King", "Hearts"), dn } }
+  local house = prose()
+  check("The House: later draws are stated face up",
+    house:find("Replacements after a play or a discard are drawn face up.", 1, true) ~= nil, house)
+  check("The House: no claim that fresh draws may come face-down, no anti-discard advice",
+    house:find("face-down too", 1, true) == nil and house:find("fresh draws may also", 1, true) == nil
+      and house:find("prefer playing", 1, true) == nil and house:find("blind gamble", 1, true) == nil, house)
+  G.hand = { cards = { dn, dn } }
+  local all = prose()
+  check("The House, all hidden: no claim that fresh draws may come face-down",
+    all:find("face down", 1, true) == nil or all:find("drawn face up.", 1, true) ~= nil, all)
+  G.GAME.blind = nil
+  G.GAME.current_round.hands_played, G.GAME.current_round.discards_used = nil, nil
 end
 
 do
@@ -140,22 +182,22 @@ do
   end
 
   G.hand = hand_with(card("4", "Diamonds"))
-  local base = HandFacts.summary()
+  local base = prose()
   check("no-leak baseline: Ready and Close are computed from the visible cards",
-    base:find("Ready:", 1, true) ~= nil and base:find("Close: near Flush", 1, true) ~= nil
+    base:find("Ready to play now:", 1, true) ~= nil and base:find("One card away: Flush", 1, true) ~= nil
       and base:find("Straight", 1, true) ~= nil, base)
-  check("no-leak baseline: positions stay hand positions, hidden slot excluded",
-    base:find("Flush: 4 Hearts keep[1,2,4,5]/other[6]", 1, true) ~= nil
-      and base:find("Straight keep[1,2,4,5]/other[6]", 1, true) ~= nil
-      and base:find("Ready: Pair[1,6]", 1, true) ~= nil, base)
+  check("no-leak baseline: positions stay hand positions, the hidden slot is among the others",
+    base:find("Flush: 4 Hearts keep cards 1, 2, 4, 5, the others are 3, 6", 1, true) ~= nil
+      and base:find("Straight keep cards 1, 2, 4, 5, the others are 3, 6", 1, true) ~= nil
+      and base:find("Ready to play now: Pair (cards 1, 6)", 1, true) ~= nil, base)
 
   for _, sub in ipairs({
     { "King", "Hearts" }, { "8", "Spades" }, { "9", "Diamonds" },
     { "Jack", "Diamonds" }, { "2", "Clubs" }, { "Queen", "Hearts" },
   }) do
     G.hand = hand_with(card(sub[1], sub[2]))
-    check(string.format("hidden %s of %s changes no byte of the summary", sub[1], sub[2]),
-      HandFacts.summary() == base, HandFacts.summary())
+    check(string.format("hidden %s of %s changes no byte of the hand prose", sub[1], sub[2]),
+      prose() == base, prose())
   end
   HandFacts._set_shuffle(nil)
 end

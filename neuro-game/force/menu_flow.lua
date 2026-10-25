@@ -2,51 +2,76 @@ local Actions = require("core.actions")
 local ActionPolicy = require("core.action_policy")
 local ForceHelpers = require("force.force_helpers")
 local hiyori_persona_gate = ForceHelpers.hiyori_persona_gate
-local menu_action_tree_query = ForceHelpers.menu_action_tree_query
-local deck_name_of = ForceHelpers.deck_name_of
+local DeckFacts = require("facts.deck_facts")
 
 local M = {}
 
-function M.splash()
-  local hg = hiyori_persona_gate()
-  if hg then return hg end
-  return {
-    query = "State: SPLASH/MENU. Use open_run_setup to open the run setup screen "
-      .. "(deck, stake, and seeded-run options are inside). "
-      .. "select_deck is also available.",
-    actions = { "open_run_setup", "select_deck" }
-  }
+local function key_bits()
+  local CtxMisc = require("context.ctx_misc")
+  local ActionRegistry = require("core.action_registry")
+  local bits = {}
+  if G and G.P_CENTER_POOLS and G.P_CENTER_POOLS.Back and #DeckFacts.deck_records() > 0 then
+    bits.select_deck = ActionRegistry.prompt("select_deck") .. " with back set to a deck's key from the Decks you can select list"
+  end
+  if CtxMisc.stake_list_line() then
+    bits.select_stake = ActionRegistry.prompt("select_stake") .. " with to_key set to a stake's number from the Stakes list"
+  end
+  return bits
+end
+
+local function offer(state, candidates)
+  local state_set = Actions.get_state_action_set(state)
+  local actions, offered = {}, {}
+  for _, name in ipairs(candidates) do
+    if state_set[name] and Actions.is_action_valid(name) then
+      actions[#actions + 1] = name
+      offered[name] = true
+    end
+  end
+  return actions, offered
+end
+
+local function already_set_note(offered)
+  local fields = {}
+  if offered.select_deck then fields[#fields + 1] = "deck" end
+  if offered.select_stake then fields[#fields + 1] = "stake" end
+  if #fields == 0 then return "" end
+  return "Picking the " .. table.concat(fields, " or ") .. " already set changes nothing. "
 end
 
 function M.menu()
   local hg = hiyori_persona_gate()
   if hg then return hg end
-  local actions = { "open_run_setup", "select_deck", "select_stake" }
-  if Actions.is_action_valid("copy_seed") then actions[#actions + 1] = "copy_seed" end
+  local candidates = { "open_run_setup", "select_deck", "select_stake", "copy_seed" }
   local names = {}
-  if G and G.CHALLENGES and #G.CHALLENGES > 0 then
-    for _, ch in ipairs(G.CHALLENGES) do
-      names[#names + 1] = tostring(ch.name or ch.id)
+  local challenges = DeckFacts.selectable_challenges()
+  if #challenges > 0 then
+    for _, ch in ipairs(challenges) do
+      names[#names + 1] = ch.id .. " (" .. tostring(require("facts.display_names").challenge(ch)) .. ")"
       if #names >= 25 then break end
     end
-    actions[#actions + 1] = "select_challenge"
-    actions[#actions + 1] = "start_challenge_run"
+    candidates[#candidates + 1] = "select_challenge"
+    candidates[#candidates + 1] = "start_challenge_run"
   end
-  local offered = {}
-  for _, name in ipairs(actions) do offered[name] = true end
-  local query = "State: MENU. "
-  if G and G.GAME then
-    query = query .. string.format("Current stake: %d. ", G.GAME.stake or 1)
+  local actions, offered = offer("MENU", candidates)
+  local query = ""
+  if offered.select_deck or offered.select_stake then
+    query = "Your deck and stake are already set (see Run setup); picking the one already set changes nothing. "
   end
-  local deck_name = deck_name_of(G and G.GAME and G.GAME.selected_back)
-  query = query .. string.format("Current deck: %s. ", deck_name)
-  query = query .. "Use open_run_setup to open the run setup screen where you will choose your deck and optionally a seed. "
-  query = query .. menu_action_tree_query(offered)
+  query = query .. "Open run setup to begin a run. "
+  query = query .. DeckFacts.variety_advice(DeckFacts.viewed_deck_key())
+  query = query .. ForceHelpers.menu_action_tree_query(offered) .. " "
+  local _, picked = DeckFacts.selected_challenge()
+  if picked and offered.start_challenge_run then
+    query = query .. "Selected challenge: " .. tostring(require("facts.display_names").challenge(picked))
+      .. " -- starting the challenge run begins it. "
+  end
   if #names > 0 then
-    query = query .. "Challenges available -- use select_challenge with one of these, then "
-      .. "start_challenge_run: " .. table.concat(names, ", ") .. ". "
+    query = query .. "Unlocked challenges -- select a challenge with id set to one of these ids, then "
+      .. "start the challenge run: " .. table.concat(names, ", ") .. ". "
   end
   return {
+    tool_bits = key_bits(),
     query = query,
     actions = actions
   }
@@ -57,50 +82,58 @@ function M.game_over()
   if hg then return hg end
   local outcome = ""
   if G and G.GAME then
-    local ante = G.GAME.round_resets and G.GAME.round_resets.ante
-    outcome = "Run " .. (G.GAME.won and "WON" or "lost")
-      .. (ante and (" at Ante " .. tostring(ante)) or "")
-      .. (G.GAME.round and (", round " .. tostring(G.GAME.round)) or "") .. ". "
+    local run = require("facts.game_facts").run_progress()
+    outcome = run.won
+      and string.format("Run WON: you beat the Ante %d Boss; the Endless run after it ended. ", run.win_ante)
+      or "Run lost. "
   end
-  local seed_advice = Actions.is_action_valid("copy_seed")
-    and " For a seeded rematch: copy_seed now, then paste it inside run setup." or ""
+  local actions, offered = offer("GAME_OVER", { "open_run_setup", "select_deck", "copy_seed" })
   return {
-    query = "State: GAME_OVER. " .. outcome
-      .. "Use open_run_setup to open the run setup screen and start a new run "
-      .. "(deck, stake, and seeded-run options are inside). select_deck "
-      .. "is also available." .. seed_advice,
-    actions = (function()
-      local a = { "open_run_setup", "select_deck" }
-      if Actions.is_action_valid("copy_seed") then a[#a + 1] = "copy_seed" end
-      return a
-    end)(),
+    query = outcome
+      .. "Open run setup to start a new run "
+      .. "(deck, stake, and seeded-run options are inside). "
+      .. (offered.select_deck and "Selecting a deck is also available. " or "") .. already_set_note(offered)
+      .. DeckFacts.variety_advice(DeckFacts.viewed_deck_key())
+      .. (offered.copy_seed and "For a seeded rematch: copy the seed now, then paste it inside run setup." or ""),
+    actions = actions,
   }
 end
 
-function M.run_setup()
-  local deck_name = deck_name_of(G.GAME and G.GAME.viewed_back)
-  local query = "State: RUN_SETUP. Run setup screen is open. Current deck: " .. deck_name .. ". "
-    .. "Switch with select_deck using a deck key from the Decks you can select list. "
-  query = query .. "start_run begins the run with the current deck. "
-  query = query .. "Seeded mode: " .. (G.run_setup_seed and "ON" or "OFF") .. ". "
-  if G.setup_seed and G.setup_seed ~= "" then
-    query = query .. "Pasted seed: " .. tostring(G.setup_seed) .. ". "
+local function seed_steps(offered, seeded)
+  local paste = "paste a seed of 1-8 alphanumeric characters (letters/digits only), or omit the seed to paste from the clipboard"
+  local start = offered.start_run and ", then start the run" or ""
+  if seeded then
+    local out = offered.paste_seed and ("To play a specific seed: " .. paste .. start .. ". ") or ""
+    if offered.toggle_seeded_run then
+      out = out .. "Toggling the seeded run turns seeded mode OFF for a random seed. "
+    end
+    return out
   end
-  query = query .. 'To play a specific seed: toggle_seeded_run (turn ON), then '
-    .. 'paste_seed|{"seed":"ABC123XY"} (1-8 letters/digits; omit seed to paste from clipboard), then start_run. '
+  if offered.toggle_seeded_run and offered.paste_seed then
+    return "To play a specific seed: toggle the seeded run to turn seeded mode ON, then " .. paste .. start .. ". "
+  end
+  return ""
+end
+
+function M.run_setup()
   local candidates = { "start_run", "select_deck", "toggle_seeded_run",
     "paste_seed", "copy_seed", "select_stake" }
-  local state_set = Actions.get_state_action_set("RUN_SETUP")
-  local actions = {}
+  local actions, offered = offer("RUN_SETUP", candidates)
   local has_progress = false
-  for _, name in ipairs(candidates) do
-    if state_set[name] and Actions.is_action_valid(name) then
-      actions[#actions + 1] = name
-      if not ActionPolicy.NON_PROGRESS[name] then has_progress = true end
-    end
+  for _, name in ipairs(actions) do
+    if not ActionPolicy.NON_PROGRESS[name] then has_progress = true end
   end
   if not has_progress then return nil end
-  return { query = query, actions = actions }
+  local query = "Run setup screen is open. "
+  query = query .. already_set_note(offered)
+  if offered.select_deck then query = query .. DeckFacts.variety_advice(DeckFacts.viewed_deck_key()) end
+  if offered.start_run then
+    query = query .. "Starting the run begins it with the current deck and stake. "
+  end
+  query = query .. seed_steps(offered, (DeckFacts.run_seed()))
+  return { query = query, actions = actions, tool_bits = key_bits() }
 end
+
+M.SCREENS = { "MENU", "GAME_OVER", "RUN_SETUP" }
 
 return M

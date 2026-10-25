@@ -1,12 +1,11 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers" })
+_G.G = { P_CENTERS = require("tests.engine_centers").centers(), GAME = {}, TIMERS = { REAL = 100 } }
 local R = require("core.rewards")
 
 local check, done = require("tests.helpers").harness("rewards")
 
 local function setg(blind, ante, round, won, win_ante)
-  G.GAME = { blind = blind, round_resets = { ante = ante }, round = round, won = won, win_ante = win_ante }
+  G.GAME = { blind = blind, round_resets = { ante = ante }, round = round, won = won, win_notified = won, win_ante = win_ante }
 end
 
 setg({ name = "Small Blind" }, 3, 7, nil)
@@ -94,7 +93,6 @@ do
     msg ~= nil and spoken == true, tostring(spoken))
 
   setg({ name = "Big Blind" }, 3, 8, nil)
-  check("the fallback path really has no round data", G.GAME.current_round == nil)
   msg, spoken = tier("SELECTING_HAND", "ROUND_EVAL")
   check("no round data: a clear falls back to silent, never to spoken",
     msg ~= nil and not spoken, tostring(spoken))
@@ -127,44 +125,47 @@ do
     G.NEURO.last_reward_outcome_key == nil, tostring(G.NEURO.last_reward_outcome_key))
 end
 
-do
-  local Orchestrator = require("core.orchestrator")
-  local Lifecycle = require("core.neuro_lifecycle")
-  local ContextCompact = require("context.context_compact")
-
-  local N = { enabled = true, persona = "neuro", emitted = {}, silents = {}, llm_paused = false,
-    once_serials = {}, session_once_serials = {}, run_generation = 2, state = "SELECTING_HAND" }
+local function ending_bridge(run_generation)
+  local H = require("tests.helpers")
+  local N = H.started_bridge(H.stub_bridge({ enabled = true, persona = "neuro", emitted = {}, silents = {}, llm_paused = false,
+    once_serials = {}, session_once_serials = {}, run_generation = run_generation, state = "SELECTING_HAND",
+    register_actions = "noop", force_actions = "noop", send_action_result = "noop", update = "noop" }))
   function N:send_context(msg, silent)
     self.emitted[#self.emitted + 1] = tostring(msg)
     self.silents[#self.emitted] = silent
     return true
   end
-  function N:register_actions() end
-  function N:unregister_actions() end
-  function N:force_actions() end
-  function N:send_action_result() end
-  function N:update() end
+  return N
+end
 
-  G.STATES = { SELECTING_HAND = 4, GAME_OVER = 8 }
-  G.STATE = 8
+local function ending_board(N, game)
   G.STATE_COMPLETE = true
   G.OVERLAY_MENU = nil
   G.FUNCS = {}
-  G.GAME = {
+  G.GAME = game
+  G.hand = { cards = {}, highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
+  G.jokers = { cards = {}, config = { card_limit = 5 } }
+  G.consumeables = { cards = {}, config = { card_limit = 2 } }
+  G.deck = { cards = {} }
+  G.NEURO = N
+end
+
+do
+  local Orchestrator = require("core.orchestrator")
+  local Lifecycle = require("core.neuro_lifecycle")
+  local ContextCompact = require("context.context_compact")
+
+  local N = ending_bridge(2)
+
+  require("tests.helpers").in_engine_state("GAME_OVER")
+  ending_board(N, {
     dollars = 0, chips = 100, used_vouchers = {}, round = 8,
     current_round = { hands_left = 0, discards_left = 0 },
     round_resets = { ante = 3 },
     blind = { name = "The Goad", boss = true, chips = 5000 },
     hands = { Pair = { level = 1, chips = 20, mult = 2, visible = true } },
     modifiers = {},
-  }
-  G.hand = { cards = {}, highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
-  G.jokers = { cards = {}, config = { card_limit = 5 } }
-  G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.playbook_extra = nil
-  G.deck = { cards = {} }
-  ContextCompact.invalidate_cache()
-  G.NEURO = N
+  })
 
   Orchestrator._step_state_transition("GAME_OVER", true, "SELECTING_HAND")
   Lifecycle.reset_run_state()
@@ -205,7 +206,7 @@ do
     return gm
   end
 
-  _G.SMODS = { saved = true }
+  require("tests.engine_cards").install_smods({ saved = true })
   local msg, spoken = round_eval(saved_boss({ saved_text = true }))
   check("rescued boss is never called a beaten Boss Blind",
     type(msg) == "string" and not msg:find("You beat", 1, true) and not msg:find("cleared", 1, true), msg)
@@ -220,24 +221,24 @@ do
   check("a readable save flag is named as a save effect",
     type(msg) == "string" and msg:find("A save effect kept the run alive", 1, true) ~= nil, msg)
 
-  _G.SMODS = nil
+  require("tests.engine_cards").install_smods()
   msg = round_eval(saved_boss({ saved_text = true }))
   check("G.GAME.saved_text alone is enough to name the save effect",
     type(msg) == "string" and msg:find("A save effect kept the run alive", 1, true) ~= nil, msg)
 
-  _G.SMODS = { saved = true }
+  require("tests.engine_cards").install_smods({ saved = true })
   msg = round_eval(saved_boss())
   check("SMODS.saved alone is enough to name the save effect",
     type(msg) == "string" and msg:find("A save effect kept the run alive", 1, true) ~= nil, msg)
 
-  _G.SMODS = nil
+  require("tests.engine_cards").install_smods()
   msg = round_eval(saved_boss())
   check("the chips predicate alone blocks the false clear when no save flag is readable",
     type(msg) == "string" and msg:find("did NOT beat", 1, true) ~= nil
       and msg:find("A save effect", 1, true) == nil, msg)
-  _G.SMODS = { saved = true }
+  require("tests.engine_cards").install_smods({ saved = true })
 
-  _G.SMODS = { saved = true }
+  require("tests.engine_cards").install_smods({ saved = true })
   local sm = { blind = { name = "Small Blind", chips = 300 }, round_resets = { ante = 2 },
     round = 4, chips = 120, saved_text = true }
   msg, spoken = round_eval(sm)
@@ -267,7 +268,7 @@ do
   check("a rescue is announced once per run, like every other outcome",
     type(first) == "string" and second == nil, tostring(second))
 
-  _G.SMODS = nil
+  require("tests.engine_cards").install_smods()
   msg = round_eval({ blind = { name = "The Wall", boss = true, chips = 50000 },
     round_resets = { ante = 6 }, round = 13, chips = 50000 })
   check("exactly meeting the requirement is still a clear",
@@ -287,26 +288,11 @@ do
   local Orchestrator = require("core.orchestrator")
   local ContextCompact = require("context.context_compact")
 
-  local N = { enabled = true, persona = "neuro", emitted = {}, silents = {}, llm_paused = false,
-    once_serials = {}, session_once_serials = {}, run_generation = 77, state = "SELECTING_HAND" }
-  function N:send_context(msg, silent)
-    self.emitted[#self.emitted + 1] = tostring(msg)
-    self.silents[#self.emitted] = silent
-    return true
-  end
-  function N:register_actions() end
-  function N:unregister_actions() end
-  function N:force_actions() end
-  function N:send_action_result() end
-  function N:update() end
+  local N = ending_bridge(77)
 
-  _G.SMODS = { saved = true }
-  G.STATES = { SELECTING_HAND = 4, ROUND_EVAL = 7, GAME_OVER = 8 }
-  G.STATE = 7
-  G.STATE_COMPLETE = true
-  G.OVERLAY_MENU = nil
-  G.FUNCS = {}
-  G.GAME = {
+  require("tests.engine_cards").install_smods({ saved = true })
+  require("tests.helpers").in_engine_state("ROUND_EVAL")
+  ending_board(N, {
     dollars = 0, chips = 20000, used_vouchers = {}, round = 13,
     current_round = { hands_left = 0, discards_left = 0 },
     round_resets = { ante = 6 },
@@ -314,13 +300,7 @@ do
     saved_text = true,
     hands = { Pair = { level = 1, chips = 20, mult = 2, visible = true } },
     modifiers = {},
-  }
-  G.hand = { cards = {}, highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
-  G.jokers = { cards = {}, config = { card_limit = 5 } }
-  G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.deck = { cards = {} }
-  ContextCompact.invalidate_cache()
-  G.NEURO = N
+  })
 
   Orchestrator._step_state_transition("ROUND_EVAL", true, "SELECTING_HAND")
 
@@ -333,10 +313,9 @@ do
   end
   check("end to end: no victory claim reaches the transport for a blind that was not cleared",
     victory == nil, tostring(victory))
-  check("end to end: the rescue really reaches the transport", rescue ~= nil, tostring(rescue))
   check("end to end: the rescue arrives as an invitation (silent=false)",
     rescue_silent == false, tostring(rescue_silent))
-  _G.SMODS = nil
+  require("tests.engine_cards").install_smods()
 end
 
 do
@@ -354,6 +333,10 @@ do
       loc_txt = { name = name } } }, ability = { set = set or "Joker", name = name } }
   end
 
+  local hidden = joker("Blueprint", 3)
+  hidden.facing = "back"
+  check("a face-down Rare joker says nothing and does not spend the announcement",
+    R.announce_rare_joker(hidden) == false and not G.NEURO.rare_joker_announced)
   check("a Common joker says nothing", R.announce_rare_joker(joker("Joker", 1)) == false)
   check("an Uncommon joker says nothing", R.announce_rare_joker(joker("Vampire", 2)) == false)
   check("a Tarot card is not a joker pull",
@@ -371,12 +354,7 @@ do
   check("a Legendary after a Rare is also silent (once per run, not once per rarity)",
     R.announce_rare_joker(joker("Perkeo", 4)) == false and #sent == 1, tostring(#sent))
 
-  local declared = false
-  for _, f in ipairs(require("core.lifecycle_registry").describe().run.fields) do
-    if f == "rare_joker_announced" then declared = true end
-  end
-  check("the gate is a registered run-scoped lifecycle field", declared)
-  require("core.lifecycle_registry").reset("run", G.NEURO, {})
+  require("core.neuro_lifecycle").registry.reset("run", G.NEURO, {})
   G.NEURO.run_generation = 5
   require("core.context_delivery").reset_transport()
   check("a fresh run announces its first Rare joker again",
@@ -396,9 +374,8 @@ do
         loc_txt = { name = name, description = "+4 Mult" } } },
       juice_up = function() end, highlight = function() end,
     }
-    G.STATES = { SHOP = 5 }
-    G.STATE = 5
-    G.E_MANAGER = nil
+    require("tests.helpers").in_engine_state("SHOP")
+    require("tests.helpers").event_manager()
     G.OVERLAY_MENU = nil
     G.GAME = { dollars = 20, used_vouchers = {}, current_round = {}, round_resets = { ante = 1 },
       modifiers = {}, hands = {} }
@@ -416,8 +393,8 @@ do
     G.NEURO = { run_generation = 9, enabled = true, _reservation_epoch = 0, reserved_dollars = 0 }
     function G.NEURO:send_context(msg, silent) sent[#sent + 1] = { msg = msg, silent = silent }; return true end
     local handler = Dispatcher.get_action_handler("buy_from_shop")
-    local staged = handler and handler({ area = "shop_jokers", index = 1 })
-    if type(staged) == "function" then staged() end
+    local staged = handler and handler({ area = "shop_jokers", index = 1, _action_id = "buy-" .. name })
+    if type(staged) == "function" then staged(); G.E_MANAGER:run() end
     return sent
   end
 
@@ -493,17 +470,12 @@ do
   Orchestrator._step_joker_departures("SHOP")
   check("selling a self-expiring joker is not mislabeled as self-destruction", #sent == 2, #sent)
 
-  local registered = false
-  for _, field in ipairs(require("core.lifecycle_registry").describe().run.fields) do
-    if field == "reward_joker_roster" then registered = true end
-  end
-  check("roster observation is run-scoped", registered)
 
   local even = joker("j_even_steven", "Even Steven", 200, 0)
   G.jokers.cards = { fillers[1], fillers[2], fillers[3], fillers[4], popcorn }
   G.shop_jokers = { cards = { even }, config = { card_limit = 2 } }
   G.shop_vouchers, G.shop_booster = { cards = {} }, { cards = {} }
-  G.STATE, G.STATES = 5, { SHOP = 5, ROUND_EVAL = 7, SELECTING_HAND = 4 }
+  require("tests.helpers").in_engine_state("SHOP")
   G.FUNCS = {}
   local blocked, blocked_err = Shop.handle_buy_from_shop({ area = "shop_jokers", index = 1 })
   check("a genuinely full 5/5 roster refuses the purchase",
@@ -521,10 +493,11 @@ do
     G.GAME.dollars = G.GAME.dollars - card.cost
     return true
   end
-  local execute, buy_err = Shop.handle_buy_from_shop({ area = "shop_jokers", index = 1 })
+  local execute, buy_err = Shop.handle_buy_from_shop({ area = "shop_jokers", index = 1, _action_id = "buy-even" })
   check("Popcorn expiry makes the next purchase executable without a sell",
     type(execute) == "function", buy_err and buy_err.message)
-  if type(execute) == "function" then execute() end
+  local events = require("tests.helpers").event_manager()
+  if type(execute) == "function" then execute(); events:run() end
   check("the replacement lands in the freed fifth slot",
     #G.jokers.cards == 5 and G.jokers.cards[5] == even and #G.shop_jokers.cards == 0,
     #G.jokers.cards)

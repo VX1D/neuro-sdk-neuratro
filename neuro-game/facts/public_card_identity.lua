@@ -2,9 +2,11 @@ local M = {}
 
 local Utils = require("util.utils")
 
-local function face_down(card)
-  local ok, hidden = pcall(require("facts.card_util").is_face_down, card)
-  return ok and hidden == true
+local function hidden(card)
+  local ok, concealed = pcall(function()
+    return require("facts.card_util").is_hidden(card)
+  end)
+  return not ok or concealed ~= false
 end
 
 local function clean_label(value, fallback)
@@ -13,19 +15,28 @@ local function clean_label(value, fallback)
 end
 
 function M.is_public(card)
-  return not face_down(card)
+  return not hidden(card)
 end
 
+local SPREAD = {
+  jokers = true, consumables = true, hand = true, play = true,
+  shop_jokers = true, shop_vouchers = true, shop_booster = true, pack_cards = true,
+}
+
 function M.label(card, area, index)
-  if face_down(card) then
-    return string.format("face-down item #%s in %s", tostring(index or "?"), tostring(area or "area"))
+  if hidden(card) then
+    if SPREAD[area] and index ~= nil then
+      return string.format("face-down item #%s in %s", tostring(index), area)
+    end
+    return (type(area) == "string" and area ~= "area") and ("face-down card in the " .. area) or "face-down card"
   end
   return clean_label(Utils.safe_name_or(card), "item")
 end
 
 function M.multiset_key(card, area, index)
-  if face_down(card) then
-    return "hidden:" .. tostring(area or "area") .. ":" .. tostring(index or "?")
+  if hidden(card) then
+    if not SPREAD[area] then return "hidden:" .. tostring(area or "area") end
+    return "hidden:" .. area .. ":" .. tostring(index or "?")
   end
   local center = type(card) == "table" and card.config and card.config.center
   if type(center) == "table" and type(center.key) == "string" and center.key ~= "" then

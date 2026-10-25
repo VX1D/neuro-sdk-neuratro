@@ -1,15 +1,14 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
+require("tests.stubs").setup({ love = "timers" })
 
-local check, done = require("tests.helpers").harness("decision-delta")
+local H = require("tests.helpers")
+local check, done = H.harness("decision-delta")
 
 local DD = require("facts.decision_delta")
 local Orch = require("core.orchestrator")
-local FS = require("core.force_state")
-local Window = require("core.force_window")
+local Window = require("core.window")
 
-local STATES = { HAND_PLAYED = 2, DRAW_TO_HAND = 3, SELECTING_HAND = 4, SHOP = 5,
-  PLAY_TAROT = 6, BLIND_SELECT = 7 }
+local EngineCards = require("tests.engine_cards")
+local STATES = EngineCards.states()
 local CLOCK = 5000
 
 local function board_of(dollars, jokers, consumables, deck)
@@ -86,8 +85,8 @@ do
 end
 do
   local prev, cur = board_of(5, {}, {}, 52), board_of(5, {}, {}, 52)
-  prev.hands = { Pair = { level = 1, name = "Pair" } }
-  cur.hands = { Pair = { level = 3, name = "Pair" } }
+  prev.hands = { Pair = { level = 1 } }
+  cur.hands = { Pair = { level = 3 } }
   check("field: public hand level changed",
     rendered(prev, cur):find("Pair level 1 to 3", 1, true) ~= nil, rendered(prev, cur))
 end
@@ -103,6 +102,7 @@ end
 
 do
   _G.G = {
+    P_CENTERS = require("tests.engine_centers").centers(),
     GAME = { dollars = 10, used_vouchers = {}, hands = {} }, playing_cards = {},
     jokers = { cards = {}, config = { card_limit = 5 } },
     consumeables = { cards = {}, config = { card_limit = 2 } },
@@ -118,70 +118,82 @@ do
       and candidate.journal.through_sequence == 1
       and candidate.journal.rendered_text ~= nil, text)
   DD.commit(candidate)
-  G.GAME.dollars = 999
   local replay, replay_candidate = DD.for_force("SHOP")
   check("same-serial journal replay is byte-identical and mints no candidate",
     replay == text and replay_candidate == nil, replay)
+  G.GAME.dollars = 4
+  local moved, moved_candidate = DD.for_force("SHOP")
+  check("a same-serial change since the delivered board is diffed against it, not replayed",
+    moved:find("money $10 to $4 (-$6)", 1, true) ~= nil and moved:find("current money $4", 1, true) ~= nil
+      and moved_candidate ~= nil, moved)
+  DD.commit(moved_candidate)
+  check("and a same-serial candidate with a newer mint does commit",
+    G.NEURO.decision_snapshot == moved_candidate)
 end
 
-local receipt_mode = "written"
+do
+  local function pc(id, value, suit, enh, facing)
+    return { sort_id = id, facing = facing or "front", base = { value = value, suit = suit },
+      ability = { set = enh and "Enhanced" or "Default" },
+      config = { center = enh and { key = enh, set = "Enhanced" } or {} } }
+  end
+  local ace_s, ace_h = pc(1, "Ace", "Spades"), pc(2, "Ace", "Hearts", "m_glass")
+  local nine = pc(3, "9", "Hearts")
+  local secret = pc(4, "5", "Clubs", nil, "back")
+  _G.G = {
+    P_CENTERS = require("tests.engine_centers").centers(),
+    GAME = { dollars = 51, used_vouchers = {}, hands = {} },
+    jokers = { cards = {}, config = { card_limit = 5 } },
+    consumeables = { cards = {}, config = { card_limit = 2 } },
+    NEURO = { run_generation = 1, shop_visit_epoch = 1, decision_serial = 40 },
+  }
+  G.hand = { cards = { ace_s, ace_h, nine, secret } }
+  G.playing_cards = { ace_s, ace_h, nine, secret }
+  for _, c in ipairs(G.playing_cards) do c.area = G.hand end
+  G.NEURO.decision_snapshot = nil
+  local _, first = DD.for_force("SMODS_BOOSTER_OPENED")
+  DD.commit(first)
+  G.GAME.dollars = 45
+  local bought, cand = DD.for_force("SMODS_BOOSTER_OPENED")
+  DD.commit(cand)
+  check("fixture: the pack purchase is reported", (bought or ""):find("money $51 to $45", 1, true) ~= nil, bought)
+  ace_s.config.center = { key = "m_mult", set = "Enhanced" }
+  ace_s.ability.set = "Enhanced"
+  ace_h.config.center = { key = "m_mult", set = "Enhanced" }
+  nine.base.value = "10"
+  secret.config.center = { key = "m_gold", set = "Enhanced" }
+  local after, after_cand = DD.for_force("SMODS_BOOSTER_OPENED")
+  after = after or ""
+  check("a same-window re-ask after a card changed is not a replay of the stale money line",
+    after:find("money $51", 1, true) == nil and after_cand ~= nil, after)
+  check("enhancement changes are named per card",
+    after:find("Ace of Spades to Ace of Spades (Mult", 1, true) ~= nil
+      and after:find("Ace of Hearts (Glass", 1, true) ~= nil, after)
+  check("a rank change is named", after:find("9 of Hearts to 10 of Hearts", 1, true) ~= nil, after)
+  check("a face-down card's change is never named",
+    after:find("Clubs", 1, true) == nil and after:find("Gold", 1, true) == nil, after)
+end
+
 local captured_context = nil
 
 local play_card = require("tests.helpers").play_card
 
 local function board()
   captured_context = nil
-  _G.G = {
-    STATE = STATES.SELECTING_HAND, STATES = STATES, STATE_COMPLETE = true,
-    TIMERS = { REAL = CLOCK }, SETTINGS = { GAMESPEED = 1 },
-    GAME = {
-      dollars = 10, chips = 0, used_vouchers = {}, modifiers = {}, STOP_USE = 0,
-      blind_on_deck = "Small",
-      current_round = { hands_left = 4, discards_left = 2, reroll_cost = 5 },
-      round_resets = { ante = 1, blind_on_deck = "Small",
-        blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_hook" },
-        blind_states = { Small = "Select", Big = "Upcoming", Boss = "Upcoming" } },
-      blind = { name = "Small Blind" },
-      hands = { Pair = { level = 1, chips = 20, mult = 2, visible = true } },
-    },
-    P_BLINDS = { bl_small = { key = "bl_small", name = "Small Blind" },
-      bl_big = { key = "bl_big", name = "Big Blind" },
-      bl_hook = { key = "bl_hook", name = "The Hook" } },
-    hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-    jokers = { cards = {}, config = { card_limit = 5 } },
-    consumeables = { cards = {}, config = { card_limit = 2 } },
-    deck = { cards = {} }, playing_cards = {},
-    shop_jokers = { cards = {} }, shop_vouchers = { cards = {} }, shop_booster = { cards = {} },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end,
-      select_blind = function() end },
-    CONTROLLER = { locks = {} }, blind_select = {}, E_MANAGER = { queues = {} },
-  }
+  H.orch_board({ clock = CLOCK, states = STATES })
+  G.playing_cards = {}
   for i = 1, 5 do G.hand.cards[i] = play_card(i) end
   for i = 1, 52 do G.playing_cards[i] = play_card(100 + i) end
 
-  G.NEURO = {
-    enabled = true, persona = "neuro", run_generation = 1,
-    _decision_windows = {}, once_serials = {}, decision_serial = 1,
-    state_enter_serial = 1, reserved_dollars = 0, state = "SELECTING_HAND",
-    update = function() end,
-    send_context = function() end,
-    send_action_result = function() end,
-    register_actions = function() return true end,
-    unregister_actions = function() end,
+  G.NEURO = H.orch_neuro({
+    state = "SELECTING_HAND", send_context = "written", send_action_result = "noop", register_actions = "true",
     force_actions = function(_, context)
       captured_context = context
-      if receipt_mode == "written" then return true, { status = "written", written_at = CLOCK } end
-      return true, { status = "buffered" }
+      return true
     end,
-    cancel_force_actions = function() return { status = "written", written_at = CLOCK } end,
-    complete_force_cancellation = function() return true end,
-  }
-  require("core.transition_guard").reset()
-  require("core.enforce").reset_run_state()
-  require("core.action_receipt").reset("decision-delta")
-  require("core.action_registry").reset()
-  require("core.tx_cache").reset()
-  Orch.reset_run_state()
+    withdraw_actions = "true",
+  })
+  H.orch_reset()
 end
 
 local dd_calls = 0
@@ -199,7 +211,7 @@ local function unwatch_dd()
   DD.for_force = dd_real
 end
 
-local function phase() return require("tests.helpers").force_phase(FS) end
+local function phase() return require("tests.helpers").force_phase() end
 
 local function tick_until(pred, max_seconds)
   local budget = math.floor((max_seconds or 30) / 0.1)
@@ -214,16 +226,14 @@ local function tick_until(pred, max_seconds)
 end
 
 local function arm_force()
-  return tick_until(function() return phase() == Window.FORCED end, 20)
+  return tick_until(function() return phase() == "forced" end, 20)
 end
 
 local function next_decision()
-  FS.invalidate("test_next_decision")
+  require("core.window").reset()
   G.NEURO.decision_serial = (G.NEURO.decision_serial or 0) + 1
-  G.NEURO.force_dirty = true
 end
 
-receipt_mode = "written"
 CLOCK = 5000
 board()
 check("fixture: the first force is armed and written", arm_force(), phase())
@@ -247,65 +257,56 @@ local reask_expected = G.NEURO.decision_snapshot.rendered_delta
 check("precondition: the text being re-asked is non-empty",
   type(reask_expected) == "string" and reask_expected ~= "",
   tostring(reask_expected))
-G.GAME.dollars = 999
 local text_again = DD.for_force()
-check("a re-ask on the same serial reproduces the same text, not a fresh diff",
+check("a re-ask on an unchanged board reproduces the same text, not an empty diff",
   text_again == reask_expected, tostring(text_again))
 local _, cand_again = DD.for_force()
 check("and a re-ask mints no candidate, so nothing can be promoted twice", cand_again == nil)
+require("core.validate").note_accepted({ name = "resolve_play" })
+local after_answer = DD.for_force() or ""
+check("after an answered decision that changed nothing, the replay says nothing changed since it",
+  after_answer:find("Since your last decision: nothing changed. Most recent change, from before it: "
+    .. "money $10 to $17 (+$7).", 1, true) == 1, after_answer)
+check("and still mints no candidate", select(2, DD.for_force()) == nil)
+G.GAME.dollars = 11
+local after_buy = DD.for_force() or ""
+check("a same-window change is reported against the board she last saw, ending at the current bank",
+  after_buy:find("money $17 to $11 (-$6)", 1, true) ~= nil and after_buy:find("$10 to", 1, true) == nil,
+  after_buy)
+require("core.window").reset()
+check("fixture: a same-window force is armed after the change", arm_force(), phase())
+check("the delivered same-window force carries the fresh diff",
+  (captured_context or ""):find("money $17 to $11 (-$6)", 1, true) ~= nil,
+  (captured_context or ""):match("Since your last decision[^\n]*") or "(no delta line)")
+check("and its board becomes the new baseline",
+  G.NEURO.decision_snapshot.window == 2 and G.NEURO.decision_snapshot.board.dollars == 11,
+  tostring(G.NEURO.decision_snapshot.board.dollars))
 G.GAME.dollars = 17
 
-receipt_mode = "buffered"
-CLOCK = 6000
-board()
-check("fixture: the buffered force is armed", arm_force(), phase())
-check("a buffered force does not commit an anchor",
-  G.NEURO.decision_snapshot == nil, tostring(G.NEURO.decision_snapshot))
-
-CLOCK = 7000
-board()
-local pending_receipt = { status = "buffered" }
-G.NEURO.force_actions = function(_, context)
-  captured_context = context
-  return true, pending_receipt
+do
+  local glass = { base = { value = "5", suit = "Diamonds" }, facing = "front", shattered = true,
+    seal = "Purple", ability = { set = "Enhanced" }, config = { center = { key = "m_glass", set = "Enhanced" } } }
+  require("core.destruction_log").record(glass)
+  next_decision()
+  check("fixture: a force after a destruction is armed", arm_force(), phase())
+  local line = (captured_context or ""):match("Since your last decision[^\n]*") or "(no delta line)"
+  check("the written force names the destroyed card and how it went",
+    line:find("5 of Diamonds (", 1, true) ~= nil and line:find("Purple Seal) shattered", 1, true) ~= nil, line)
 end
-check("fixture: armed while buffered", arm_force(), phase())
-check("still uncommitted while only buffered", G.NEURO.decision_snapshot == nil)
-G.GAME.dollars = 999
-pending_receipt.status = "written"
-pending_receipt.written_at = CLOCK
-tick_until(function() return G.NEURO.decision_snapshot ~= nil end, 10)
-check("once the frame is written the anchor commits",
-  type(G.NEURO.decision_snapshot) == "table", tostring(G.NEURO.decision_snapshot))
-check("and it commits the board that was rendered, not one re-sampled at commit time",
-  G.NEURO.decision_snapshot.board ~= nil and G.NEURO.decision_snapshot.board.dollars == 10,
-  tostring(G.NEURO.decision_snapshot.board and G.NEURO.decision_snapshot.board.dollars))
 
-CLOCK = 8000
-board()
-local rejected_receipt = { status = "buffered" }
-G.NEURO.force_actions = function(_, context)
-  captured_context = context
-  return true, rejected_receipt
+do
+  local Utils = require("util.utils")
+  local real_begin, real_build = Utils.begin_text_build, Window.build_payload
+  local order = {}
+  Utils.begin_text_build = function() order[#order + 1] = "begin"; return real_begin() end
+  Window.build_payload = function(...) order[#order + 1] = "build"; return real_build(...) end
+  next_decision()
+  local armed = arm_force()
+  Utils.begin_text_build, Window.build_payload = real_begin, real_build
+  local seq = table.concat(order, ",")
+  check("the arming pass starts a fresh text build before building the payload",
+    armed and seq:find("begin,build", 1, true) ~= nil and seq:find("^build") == nil, seq)
 end
-check("fixture: armed while buffered (rejection case)", arm_force(), phase())
-rejected_receipt.status = "rejected"
-tick_until(function() return phase() ~= Window.FORCED end, 10)
-check("a rejected delivery never commits an anchor",
-  G.NEURO.decision_snapshot == nil, tostring(G.NEURO.decision_snapshot))
-
-CLOCK = 9000
-board()
-G.NEURO.force_actions = function(_, context)
-  captured_context = context
-  return true, { status = "buffered" }
-end
-check("fixture: armed while buffered (timeout case)", arm_force(), phase())
-tick_until(function() return phase() ~= Window.FORCED end, FS.FORCE_LIVENESS_TIMEOUT + 30)
-check("a delivery that timed out never commits an anchor",
-  G.NEURO.decision_snapshot == nil, tostring(G.NEURO.decision_snapshot))
-
-receipt_mode = "written"
 
 CLOCK = 9500
 board()
@@ -324,7 +325,7 @@ do
   local real_get = NeuroState.get_state_name
   watch_dd()
   NeuroState.get_state_name = function() return "SHOP" end
-  local ok = pcall(Orch._step_force_arming, "SELECTING_HAND", CLOCK)
+  local ok = pcall(Window._test.arm, "SELECTING_HAND")
   NeuroState.get_state_name = real_get
   unwatch_dd()
   check("fixture: the stale arming pass ran and actually built a payload", ok and dd_calls >= 1,
@@ -336,13 +337,12 @@ check("a payload discarded as stale never commits an anchor",
 CLOCK = 9800
 board()
 do
-  watch_dd(function() G.NEURO.force_inflight = true end)
-  local ok = pcall(Orch._step_force_arming, "SELECTING_HAND", CLOCK)
+  watch_dd(function() G.NEURO.register_actions = function() return false end end)
+  local ok = pcall(Window._test.arm, "SELECTING_HAND")
   unwatch_dd()
-  G.NEURO.force_inflight = nil
   check("fixture: the candidate was built and then arming refused it", ok and dd_calls >= 1,
     tostring(ok) .. "/" .. tostring(dd_calls))
-  check("fixture: nothing is armed", phase() ~= Window.FORCED, phase())
+  check("fixture: nothing is armed", phase() ~= "forced", phase())
 end
 check("a payload that failed to arm never commits an anchor",
   G.NEURO.decision_snapshot == nil, tostring(G.NEURO.decision_snapshot))
@@ -369,13 +369,13 @@ require("core.neuro_lifecycle").reset_run_state()
 check("a run reset clears the committed anchor",
   G.NEURO.decision_snapshot == nil, tostring(G.NEURO.decision_snapshot))
 
-receipt_mode = "written"
 CLOCK = 12000
 board()
 check("fixture: first force delivered before the hand", arm_force(), phase())
 check("fixture: anchored at the pre-play board",
   G.NEURO.decision_snapshot and G.NEURO.decision_snapshot.board.dollars == 10)
 G.GAME.dollars = 25
+require("core.window").reset()
 for _, st in ipairs({ STATES.HAND_PLAYED, STATES.DRAW_TO_HAND, STATES.SELECTING_HAND }) do
   G.STATE = st
   CLOCK = CLOCK + 0.5
@@ -388,59 +388,19 @@ check("the force after a played hand reports the whole play, not an empty diff",
   arm_force() and (captured_context or ""):find("money $10 to $25", 1, true) ~= nil,
   (captured_context or ""):match("Since your last decision[^\n]*") or "(no delta line)")
 
-CLOCK = 13000
-board()
-local late_receipt = { status = "buffered" }
-G.NEURO.force_actions = function(_, context)
-  captured_context = context
-  return true, late_receipt
-end
-check("fixture: armed and buffered", arm_force(), phase())
-G.STATE = STATES.BLIND_SELECT
-CLOCK = CLOCK + 0.5
-G.TIMERS.REAL = CLOCK
-pcall(Orch.update, 0.5)
-G.NEURO.force_actions = function() return false end
-local superseded_dollars = G.GAME.dollars
-late_receipt.status = "written"
-late_receipt.written_at = CLOCK
-tick_until(function() return G.NEURO.decision_snapshot ~= nil end, 3)
-check("a superseded window written late still anchors, because that frame did reach the outbox",
-  type(G.NEURO.decision_snapshot) == "table"
-    and G.NEURO.decision_snapshot.board.dollars == superseded_dollars,
-  tostring(G.NEURO.decision_snapshot))
-
-CLOCK = 13500
-board()
-local orphan = { status = "buffered" }
-G.NEURO.force_actions = function(_, context)
-  captured_context = context
-  return true, orphan
-end
-check("fixture: armed and buffered (orphan case)", arm_force(), phase())
-local orphan_window = FS.window()
-FS.invalidate("test_replace_window")
-G.NEURO.force_window = { phase = "successor", state = "SELECTING_HAND" }
-check("fixture: a different window object now owns the slot", FS.window() ~= orphan_window)
-G.NEURO.force_actions = function() return false end
-orphan.status = "written"
-orphan.written_at = CLOCK
-tick_until(function() return false end, 3)
-check("a frame whose window was replaced does not commit its stale candidate",
-  G.NEURO.decision_snapshot == nil, tostring(G.NEURO.decision_snapshot))
-
--- T: using a consumable in the shop parks the shop in PLAY_TAROT and restores it
--- (core/state_kinds.lua:16-20). The interlude must not swallow the change.
+-- Using a consumable in the shop temporarily enters PLAY_TAROT, then restores the shop state.
 CLOCK = 14000
 board()
 G.STATE = STATES.SHOP
 G.NEURO.state = "SHOP"
-G.consumeables.cards = { { sort_id = 900, ability = { set = "Tarot", name = "The Fool" },
-  config = { center = { key = "c_fool", set = "Tarot", name = "The Fool" } } } }
+G.shop = {}
+G.GAME.last_tarot_planet = "c_pluto"
+G.consumeables.cards = { EngineCards.consumable("c_fool", { sort_id = 900 }) }
 check("fixture: a shop force is delivered with the consumable held", arm_force(), phase())
 check("fixture: anchored with one consumable",
   G.NEURO.decision_snapshot ~= nil and next(G.NEURO.decision_snapshot.board.consumables) ~= nil)
 G.consumeables.cards = {}
+require("core.window").reset()
 for _, st in ipairs({ STATES.PLAY_TAROT, STATES.SHOP }) do
   G.STATE = st
   CLOCK = CLOCK + 0.5

@@ -4,7 +4,7 @@ local set_col = gfx.set_col
 local lg = love.graphics
 local clamp01 = Prims.clamp01
 
-local RAD = 9 -- panel corner inset
+local RAD = 9
 
 local M = {
   TL = { ANOINT = 0.22, GLIDE = 0.44, CROWN = 0.30, SHRINK = 0.26, HOLD = 0.14, EXIT = 0.45, FOLD = 0.18 },
@@ -12,30 +12,20 @@ local M = {
   GLIDE_OVER = 0.16,
   ENTRY = { 2.7, 1.7, 44 },
   DISSOLVE = { { 1.00, 0.78, 0.86, 1 }, { 1.00, 0.30, 0.58, 1 } },
-  MARK_HEAD_UNITS = 28, -- clears the slot_mark bow above the title band
-  TITLE_RIGHT_RESERVE_UNITS = 14, -- clears the title-corner bow drawn in M.frame
+  MARK_HEAD_UNITS = 28,
+  TITLE_RIGHT_RESERVE_UNITS = 14,
 }
-
 
 function M.frame(h, g)
   local cn = h.cn
   local a = g.a
-  local sr, sg2, sb = g.shimr, g.shimg, g.shimb
-  local rad = cn(RAD)
-  lg.setLineWidth(1)
-  lg.setColor(sr, sg2, sb, 0.16 * a)
-  lg.rectangle("line", g.x - 1, g.y - 1, g.w + 2, g.h + 2, rad + 1, rad + 1)
-  lg.setColor(1, 1, 1, 0.07 * a)
-  lg.rectangle("fill", g.x + rad, g.y + 1, g.w - rad * 2, 1)
   Prims.draw_bow(g.x + g.w - cn(24), g.y + cn(14), cn(2), h.ACC, 0.95 * a, h.pg)
-  do
-    for si = 1, 3 do
-      local sxr = 0.5 + 0.5 * math.sin(si * 78.233 + 0.9)
-      local tw = Prims.twinkle01(h.now, si)
-      Prims.draw_sparkle(g.x + g.w * 0.38 + sxr * g.w * 0.33,
-        g.y + cn(7) + (0.5 + 0.5 * math.sin(si * 39.425)) * cn(9),
-        cn(2) + tw * cn(2), (si % 2 == 0) and h.pg or h.ACC, 0.5 * tw * a)
-    end
+  for si = 1, 3 do
+    local sxr = 0.5 + 0.5 * math.sin(si * 78.233 + 0.9)
+    local tw = Prims.twinkle01(h.now, si)
+    Prims.draw_sparkle(g.x + g.w * 0.38 + sxr * g.w * 0.33,
+      g.y + cn(7) + (0.5 + 0.5 * math.sin(si * 39.425)) * cn(9),
+      cn(2) + tw * cn(2), (si % 2 == 0) and h.pg or h.ACC, 0.5 * tw * a)
   end
   if g.flare < 1 then
     Prims.confetti_burst(g.cx, g.y + g.title_h, g.flare, cn(18), cn(3), 0.4, h.pg, h.ACC, a)
@@ -155,10 +145,8 @@ function M.crown(h, hg, cw01)
   end
   if hg.cf > 0 then
     for k = 1, 3 do
-      local ang = h.now * 1.6 + k * 2.0944
-      local px = hg.cx + math.cos(ang) * hg.w * 0.60
-      local py = hg.cy + math.sin(ang) * hg.h * 0.45
-      local tw = (0.35 + 0.4 * Prims.twinkle01(h.now, k)) * hg.cf * a
+      local px, py, tw = h.orbit(hg, h.now, k)
+      tw = tw * a
       if k == 2 then Prims.draw_heart(px, py, cn(4), h.pg, tw)
       else Prims.draw_sparkle(px, py, cn(2), h.pg, tw) end
     end

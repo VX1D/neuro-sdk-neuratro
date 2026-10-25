@@ -11,15 +11,15 @@ local function frame_fit(nominal, measured)
   if measured and measured > 0 and measured < nominal then return measured end
   return nominal
 end
-local frame_w = frame_fit
 local layout_modifier_badges, draw_modifier_badges = H.layout_modifier_badges, H.draw_modifier_badges
 local Cards = require("hud.cards")
 local art_prefers_mini = Cards.art_prefers_mini
 local Episode = require("hud.episode")
 local PACK_CARD_APPEAR_D = H.PACK_CARD_APPEAR_D
-local is_face_down = require("facts.card_util").is_face_down
+local is_hidden = require("facts.card_util").is_hidden
+local is_pack_state = require("core.state_kinds").is_pack_state
 
-local SIZING = {   -- cn units
+local SIZING = {
   SP_MAX = 118, SP_MIN = 70, SLOT_PAD = 12,
   PANEL_PAD = 10, SLOT_GAP = 6,
   HERO_SCALE = 1.42, HERO_GAP = 18, ENV_PAD = 16,
@@ -44,18 +44,24 @@ local CROWN_LEAD = 0.85
 local REFREEZE_D = 0.20
 local PLUNGE_D = 0.15
 
+local NEUTRAL = { TL = TIMELINES.soft, HEAD_UNITS = 9, MARK_HEAD_UNITS = 0, CAP_EXTRA_UNITS = 0,
+  TITLE_RIGHT_RESERVE_UNITS = 0, GLIDE_ANT = 0, GLIDE_OVER = 0.10 }
+local NEUTRAL_MT = { __index = NEUTRAL }
 local _hooks = {}
 local function persona_hooks(pk)
-  if pk == nil then return nil end
+  if pk == nil then return NEUTRAL end
   local h = _hooks[pk]
   if h == nil then
-    local ok, mod = pcall(require, "render.panels.pack_" .. tostring(pk))
-    h = (ok and type(mod) == "table") and mod or false
-    if h and h.TL and not h.TL.TOTAL then beats(h.TL) end
-    if h and h.TL then TIMELINES[pk] = h.TL end
+    h = H.persona_decorator("pack", pk)
+    if h then
+      if h.TL and not h.TL.TOTAL then beats(h.TL) end
+      if h.TL then TIMELINES[pk] = h.TL end
+      setmetatable(h, NEUTRAL_MT)
+    end
+    h = h or NEUTRAL
     _hooks[pk] = h
   end
-  return h or nil
+  return h
 end
 persona_hooks("evil")
 
@@ -78,35 +84,8 @@ end
 
 local HCTX, GG, SG, HG = {}, {}, {}, {}
 local FRAME_OPTS = { skip_body = true, quiet = true }
-local DISSOLVE_A, DISSOLVE_B = { 0.95, 0.82, 0.35, 1 }, { 0.85, 0.60, 0.20, 1 }
 
-local function reset_pack_state()
-  S.pack_last_sn = nil
-  S.pack_appear_t = 0
-  S.pack_card_indices = {}
-  S.pack_hidden_indices = {}
-  S.pack_initial_count = 0
-  S.pack_hl = false
-  S.pack_hl_t = 0
-  S.pack_leave_t = nil
-  S.pack_leave_snap = nil
-  S.pack_leave_n = 0
-  S.pack_w_hi = nil
-  S.pack_claim_at = nil
-  S.pack_winners = {}
-  S.pack_collapse_t = nil
-  S.pack_collapse_snap = nil
-  S.pack_collapse_req = nil
-  S.pack_collapse_done = nil
-  S.pack_losers = nil
-  S.pack_exit_last = nil
-  S.pack_env_last = nil
-  S.pack_h_last = nil
-  S.pack_settle_t = nil
-  S.pack_settle_env = nil
-  S.pack_settle_h = nil
-  S.pack_disp = nil
-end
+local reset_pack_state = require("hud.showcase").reset_pack_state
 
 local function neutral_slot(h, sg, st, scan)
   local cn = h.cn
@@ -118,9 +97,9 @@ local function neutral_slot(h, sg, st, scan)
     love.graphics.setLineWidth(cn(2))
     love.graphics.rectangle("line", sg.x, sg.y, sg.w, sg.h)
   elseif st == "highlighted" then
-    love.graphics.setColor(CYAN[1], CYAN[2], CYAN[3], (0.12 + 0.05 * scan) * sg.a)
+    set_col(CYAN, (0.12 + 0.05 * scan) * sg.a)
     love.graphics.rectangle("fill", sg.x, sg.y, sg.w, sg.h)
-    love.graphics.setColor(CYAN[1], CYAN[2], CYAN[3], (0.75 + 0.15 * scan) * sg.a)
+    set_col(CYAN, (0.75 + 0.15 * scan) * sg.a)
     love.graphics.setLineWidth(cn(2))
     love.graphics.rectangle("line", sg.x, sg.y, sg.w, sg.h)
     set_col(h.WHITE, (0.18 + 0.10 * scan) * sg.a)
@@ -159,6 +138,13 @@ local function neutral_claim(h, sg, pe)
   end
 end
 
+local function crown_orbit(hg, now, k)
+  local ang = now * 1.6 + k * 2.0944
+  return hg.cx + math.cos(ang) * hg.w * 0.60, hg.cy + math.sin(ang) * hg.h * 0.45,
+    (0.35 + 0.4 * Prims.twinkle01(now, k)) * hg.cf
+end
+HCTX.orbit = crown_orbit
+
 local function neutral_crown(h, hg, cw01)
   local cn, now, GOLD = h.cn, h.now, h.GOLD
   local dy0 = hg.cy - math.floor(hg.h / 2) - cn(7)
@@ -170,10 +156,8 @@ local function neutral_crown(h, hg, cw01)
   Prims.draw_diamond(hg.cx + cn(9), dyy, cn(3), GOLD, 0.85 * salpha)
   if hg.cf > 0 then
     for k = 1, 3 do
-      local ang = now * 1.6 + k * 2.0944
-      local px = hg.cx + math.cos(ang) * hg.w * 0.60
-      local py = hg.cy + math.sin(ang) * hg.h * 0.45
-      Prims.draw_sparkle(px, py, cn(2), GOLD, (0.35 + 0.4 * Prims.twinkle01(now, k)) * hg.cf * hg.a)
+      local px, py, tw = crown_orbit(hg, now, k)
+      Prims.draw_sparkle(px, py, cn(2), GOLD, tw * hg.a)
     end
   end
 end
@@ -235,6 +219,14 @@ local function hero_xform(ocx, tx, cy0, cy1, hero_sc, gg2)
   return ocx + (tx - ocx) * gg2, cy0 + (cy1 - cy0) * gg2, 1 + (hero_sc - 1) * gg2
 end
 
+NEUTRAL.slot, NEUTRAL.slot_mark, NEUTRAL.claim, NEUTRAL.crown =
+  neutral_slot, neutral_mark, neutral_claim, neutral_crown
+NEUTRAL.DISSOLVE = { { 0.95, 0.82, 0.35, 1 }, { 0.85, 0.60, 0.20, 1 } }
+function NEUTRAL.title_deco(h, g)
+  set_col(g.title_col, (0.85 + 0.10 * h.pulse) * g.a)
+  love.graphics.rectangle("fill", g.x, g.y + g.title_h - 2, g.w, 2)
+end
+
 local function picks_owed()
   local claim = S.pack_winners[#S.pack_winners]
   if claim and claim.owed then return claim.owed end
@@ -242,6 +234,303 @@ local function picks_owed()
 end
 
 local _hero_dims = {}
+
+local F = {}
+
+local function safe_mini(card, x, y, h, a, role, fw, fh)
+  if pcall(draw_card_mini, card, x, y, h, a) then return end
+  Cards._pack_mini_fail = (Cards._pack_mini_fail or 0) + 1
+  Cards.diag_once("pack_mini_" .. role, "draw_card_mini failed for pack " .. role)
+  Cards.draw_mini_fallback(card, x, y, fw, fh, a)
+end
+
+local function draw_pack_slot(dc, slot_x, sy_slot, ca, appear_ef, scan, no_sprite, sw_o, sh_o, spw_o, sph_o)
+  local hidden = dc.hidden
+  if hidden == nil then hidden = (dc.card and is_hidden(dc.card)) or false end
+  local sww = sw_o or F.slot_w
+  local shh = sh_o or F.slot_h
+  local sph = sph_o or F.sp_h
+  local spw = spw_o or F.sp_w
+  local sphc = sph
+  if dc.card and not no_sprite and not hidden then
+    local cw, ch = card_dimensions(dc.card, sph)
+    spw = frame_fit(spw, cw)
+    sphc = frame_fit(sph, ch)
+  end
+  local st = dc.state
+  local pe = dc.pick_elapsed or 0
+  if st == "normal" and F.hl_dim < 1 then ca = ca * F.hl_dim end
+
+  local sg = SG
+  sg.x, sg.y, sg.w, sg.h, sg.u = slot_x, sy_slot, sww, shh, F.cn(2)
+  sg.cx, sg.cy = slot_x + math.floor(sww / 2), sy_slot + math.floor(shh / 2)
+  sg.a, sg.scan, sg.appear = ca, scan, appear_ef
+  sg.shimr, sg.shimg, sg.shimb = F.mo.shimr, F.mo.shimg, F.mo.shimb
+  sg.rc = hidden and F.FRD or dc.rc
+  sg.sp_x = slot_x + math.floor((sww - spw) / 2)
+  sg.sp_y = sy_slot + F.sp_dy
+  sg.sp_w, sg.sp_h = spw, sphc
+  sg.burst_r = math.min(math.floor(sww * 0.5) + F.pk_pad, math.floor(shh * 0.5))
+
+  F.hk.slot(F.hctx, sg, st, scan)
+
+  if dc.card then
+    local sprite_x2, sprite_y2 = sg.sp_x, sg.sp_y
+
+    love.graphics.setColor(0, 0, 0, 0.30 * ca)
+    love.graphics.ellipse("fill", sprite_x2 + spw / 2, sprite_y2 + sphc + 3, spw * 0.48, 3)
+    love.graphics.setColor(0, 0, 0, 0.55 * ca)
+    love.graphics.rectangle("fill", sprite_x2 - 1, sprite_y2 - 1, spw + 2, sphc + 2)
+    local sb_col = hidden and F.FRD or dc.rc
+    if st == "picked" then sb_col = F.GOLD
+    elseif st == "highlighted" then sb_col = F.hk.HL_GOLD and F.GOLD or F.CYAN end
+    set_col(sb_col, (0.45 + 0.15 * (st == "normal" and F.pulse or scan)) * ca)
+    love.graphics.setLineWidth(F.cn(1))
+    love.graphics.rectangle("line", sprite_x2 - 1, sprite_y2 - 1, spw + 2, sphc + 2)
+
+    if not no_sprite and not hidden then
+      safe_mini(dc.card, sprite_x2, sprite_y2, sph, ca,
+        dc.rank and (dc.winner and "winner" or "loser") or "slot", spw, sph)
+      love.graphics.setColor(1, 1, 1, 0.06 * ca)
+      love.graphics.rectangle("fill", sprite_x2, sprite_y2, spw, math.max(2, sphc * 0.10))
+    end
+
+    if st == "picked" then
+      F.hk.claim(F.hctx, sg, pe)
+    end
+
+    local name_y = sprite_y2 + sph + F.cn(4)
+    local dy = name_y + F.text_h + F.cn(2)
+    local rc2 = hidden and F.WHITE or ((st == "picked" and F.GOLD) or (st == "highlighted" and F.CYAN) or dc.rc)
+    local name_str = F.trunc(hidden and "hidden" or dc.name, sww - F.cn(8))
+    local name_x = slot_x + math.floor((sww - F.font:getWidth(name_str)) / 2)
+    shadow_text(name_str, name_x, name_y, rc2, 0.97 * ca, 0.35 * ca, F.cn(1))
+
+    if not hidden and dc.badge_layout and dc.badge_layout.height > 0 then
+      draw_modifier_badges(dc.badge_layout, slot_x + F.cn(4), dy, ca, F.th, F.mo)
+      dy = dy + dc.badge_layout.height
+    end
+    if not hidden and dc.desc and dc.desc ~= "" then
+      if F.panel_font_small then love.graphics.setFont(F.panel_font_small) end
+      local desc_lines = F.wrapped_lines(dc.desc, sww - F.cn(8), F.small_f)
+      F.draw_desc_lines(desc_lines, math.min(#desc_lines, 2),
+        slot_x + F.cn(4), dy, F.small_line_h, ca, F.small_f)
+      if F.panel_font_small then love.graphics.setFont(F.font) end
+    end
+  elseif not (F.hk.COVERS_PICKED and st == "picked") then
+    local name_str = F.trunc(hidden and "hidden" or dc.name, sww - F.cn(16))
+    local name_x = slot_x + math.floor((sww - F.font:getWidth(name_str)) / 2)
+    local badge_h = dc.badge_layout and dc.badge_layout.height or 0
+    local group_h = F.text_h + (badge_h > 0 and (F.cn(2) + badge_h) or 0)
+    local name_y = sy_slot + math.floor((shh - group_h) / 2)
+    shadow_text(name_str, name_x, name_y, F.GOLD, 0.97 * ca, 0.35 * ca, F.cn(1))
+    if not hidden and badge_h > 0 then
+      draw_modifier_badges(dc.badge_layout, slot_x + F.cn(4), name_y + F.text_h + F.cn(2), ca, F.th, F.mo)
+    end
+  end
+
+  if st == "highlighted" then
+    local mk_bob = math.sin(F.now * 2.2) * 2
+    F.hk.slot_mark(F.hctx, sg, st, mk_bob)
+  end
+
+end
+
+local function loser_d01(sn2, sl)
+  if F.pending_picks then return 0 end
+  return Motion.anim01(F.col_ct - F.TL.ANOINT, loser_span(sn2, sl))
+end
+local function fold01_of(sn2, sl)
+  local TL = F.TL
+  if F.pending_picks or not F.collapsing then return 1 end
+  if sl.winner then return F.col_fold01 end
+  return 1 - Motion.anim01(F.col_ct - TL.ANOINT, math.max(TL.FOLD, loser_span(sn2, sl)))
+end
+
+local function draw_collapse(sn2)
+  local sw2 = sn2.slot_w
+  local xp = F.col_exit
+  local a = 1 - xp
+  local b1, b2 = F.hk.DISSOLVE[1], F.hk.DISSOLVE[2]
+
+  for _, sl in ipairs(sn2.slots) do
+    if not sl.winner and sl.card then
+      local d = loser_d01(sn2, sl)
+      if d > 0 and d < 1 then
+        local lw, lh, lsx, lsy = card_dimensions(sl.card, sn2.sp_h)
+        local lx = sn2.sx0 + (sl.rank - 1) * (sw2 + sn2.slot_gap) + math.floor((sw2 - lw) / 2)
+        local l_ef, l_dy = entry_rise(F.now, F.cn, F.hk.ENTRY, sl.entry_t0)
+        local ly = F.slot_y + sn2.sp_dy + l_dy
+        local la = F.col_dim * F.hl_dim * (1 - d) * a * l_ef
+        local lak, lpos = sl.ak, sl.pos
+        if not (lak and lpos) then
+          local sak, spos = Cards.card_sprite(sl.card)
+          lak, lpos = lak or sak, lpos or spos
+        end
+        if (sl.hidden == nil and is_hidden(sl.card)) or sl.hidden then
+          love.graphics.setColor(0, 0, 0, 0.55 * la)
+          love.graphics.rectangle("fill", lx - 1, ly - 1, lw + 2, sn2.sp_h + 2)
+          set_col(F.FRD, 0.45 * la)
+          love.graphics.setLineWidth(F.cn(1))
+          love.graphics.rectangle("line", lx - 1, ly - 1, lw + 2, sn2.sp_h + 2)
+        elseif lak and lpos and not sl.mini then
+          Cards.draw_sprite_shaded(lak, lpos, lx, ly, lsx, lsy, la, d, b1, b2, 0)
+        else
+          safe_mini(sl.card, lx, ly, sn2.sp_h, la, "loser", lw, lh)
+        end
+        if d > 0.05 then
+          love.graphics.setBlendMode("add")
+          local mcx, mcy = lx + math.floor(lw / 2), ly + math.floor(sn2.sp_h * d)
+          Prims.ember_bloom(mcx, mcy, sw2 * 0.42, F.cn(2), d, F.GOLD, 1 - d)
+          love.graphics.setBlendMode("alpha")
+        end
+      end
+    end
+  end
+
+  local n = math.min(#S.pack_winners, sn2.n_win)
+  local hsc_n = F.hero_hsc
+  local ccx = sn2.center_cx or F.center_cx
+  local split_sp, split_hsc0
+  if sn2.split_at and sn2.prev_n and sn2.prev_n < n then
+    split_sp = Motion.anim01(F.now - sn2.split_at, REFREEZE_D)
+    if split_sp < 1 then
+      split_hsc0 = hero_cap_for(sn2, sn2.prev_n, F.HERO_SCALE, F.HERO_GAP, F.env_pad, F.hero_dims)
+    end
+  end
+  for i, w in ipairs(S.pack_winners) do
+    if i > n then break end
+    if w.card and not w.hidden then
+      local t0 = w.t0 or S.pack_collapse_t
+      local aw = F.now - t0 - (w._anoint or F.TL.ANOINT)
+      if aw >= 0 or F.col_fold01 <= 0 then
+        local dcache = F.hero_dims[i]
+        local w_lw, w_lh, wsx, wsy = dcache.w, dcache.h, dcache.sx, dcache.sy
+        local rank = w._rank or w.slot or i
+        local ocx = sn2.sx0 + (rank - 1) * (sw2 + sn2.slot_gap) + math.floor(sw2 / 2)
+        local w_ef, w_dy = entry_rise(F.now, F.cn, F.hk.ENTRY, w._entry_t0)
+        local w_sp_cy = F.slot_y + w_dy + sn2.sp_dy + math.floor(w_lh / 2)
+        local hero_sc = hsc_n
+        local tx = hero_tx(ccx, n, i, w_lw, hero_sc, F.HERO_GAP)
+        if split_hsc0 and i <= sn2.prev_n then
+          local tx0 = hero_tx(ccx, sn2.prev_n, i, w_lw, split_hsc0, F.HERO_GAP)
+          tx = tx0 + (tx - tx0) * split_sp
+          hero_sc = split_hsc0 + (hero_sc - split_hsc0) * split_sp
+        end
+        local hero_cy = F.slot_y + F.HERO_HEAD + math.floor(w_lh * hero_sc / 2)
+        local g01 = clamp01(aw / F.TL.GLIDE)
+        local cw01 = clamp01((aw - F.TL.GLIDE * CROWN_LEAD) / F.TL.CROWN)
+        local cf = clamp01((aw - F.TL.GLIDE - F.TL.CROWN * 0.5) / 0.25)
+        local cx, cy, sc = hero_xform(ocx, tx, w_sp_cy, hero_cy, hero_sc,
+          glide_ease(F.hk.GLIDE_ANT, F.hk.GLIDE_OVER, g01))
+        local fade = w_ef
+        cy = cy + math.sin(F.now * 2.4) * F.cn(2) * cf * a
+        if F.hk.CROWN_JOLT and cw01 > 0 then
+          local imp = (cw01 - 0.30) / 0.16
+          if imp > 0 and imp < 1 then cy = cy + round(F.cn(2) * (1 - imp)) end
+        end
+        local squash = 0.05 * math.sin(math.pi * clamp01(aw / (F.TL.GLIDE * 0.5)))
+        sc = sc * (1 - squash) * (1 + 0.012 * math.sin(F.now * 2.4 + 1) * cf)
+        local hw, hh = w_lw * sc, w_lh * sc
+        local glow = F.GOLD
+
+        love.graphics.setBlendMode("add")
+        for k = 1, 3 do
+          local pad = F.cn(4) * k
+          love.graphics.setColor(glow[1], glow[2], glow[3],
+            (0.11 / k) * a * fade * (0.7 + 0.3 * F.pulse))
+          love.graphics.rectangle("fill", cx - hw / 2 - pad, cy - hh / 2 - pad,
+            hw + pad * 2, hh + pad * 2, F.cn(6), F.cn(6))
+        end
+        love.graphics.setBlendMode("alpha")
+
+        local wak = (not w.mini) and w.ak or nil
+        local wpos = (not w.mini) and w.pos or nil
+
+        if aw > 0 and aw < F.TL.GLIDE then
+          local tr = 1 - aw / F.TL.GLIDE
+          for k = 2, 1, -1 do
+            local tk = aw - k * 0.035
+            if tk > 0 then
+              local gx, gy, gs = hero_xform(ocx, tx, w_sp_cy, hero_cy, hero_sc,
+                glide_ease(F.hk.GLIDE_ANT, F.hk.GLIDE_OVER, clamp01(tk / F.TL.GLIDE)))
+              love.graphics.push()
+              love.graphics.translate(gx, gy)
+              love.graphics.scale(gs, gs)
+              love.graphics.translate(-w_lw / 2, -w_lh / 2)
+              if wak and wpos then
+                Cards.draw_sprite_shaded(wak, wpos, 0, 0, wsx, wsy, 0.05 * (3 - k) * tr, 0, nil, nil, 0)
+              else
+                pcall(draw_card_mini, w.card, 0, 0, sn2.sp_h, 0.05 * (3 - k) * tr)
+              end
+              love.graphics.pop()
+            end
+          end
+        end
+
+        love.graphics.push()
+        love.graphics.translate(cx, cy)
+        love.graphics.scale(sc, sc)
+        love.graphics.translate(-w_lw / 2, -w_lh / 2)
+        if not (wak and wpos and Cards.draw_sprite_shaded(wak, wpos, 0, 0, wsx, wsy, a * fade, xp, b1, b2, 0)) then
+          safe_mini(w.card, 0, 0, sn2.sp_h, a * fade, "winner", w_lw, w_lh)
+        end
+        love.graphics.pop()
+
+        do
+          local land = (aw - F.TL.GLIDE) / 0.18
+          if land > 0 and land < 1 then
+            love.graphics.setBlendMode("add")
+            local pad = F.cn(4) + land * F.cn(10)
+            set_col(glow, 0.5 * (1 - land))
+            love.graphics.setLineWidth(F.cn(2))
+            love.graphics.rectangle("line", cx - hw / 2 - pad, cy - hh / 2 - pad, hw + pad * 2, hh + pad * 2, F.cn(6), F.cn(6))
+            love.graphics.setColor(1, 1, 1, 0.18 * (1 - land))
+            love.graphics.rectangle("fill", cx - hw / 2, cy - hh / 2, hw, hh, F.cn(4), F.cn(4))
+            love.graphics.setBlendMode("alpha")
+          end
+        end
+
+        love.graphics.setBlendMode("add")
+        set_col(glow, (0.35 + 0.25 * F.pulse) * a * fade)
+        love.graphics.setLineWidth(F.cn(2))
+        love.graphics.rectangle("line", cx - hw / 2, cy - hh / 2, hw, hh, F.cn(4), F.cn(4))
+        love.graphics.setBlendMode("alpha")
+
+        if cw01 > 0 then
+          local hg = HG
+          hg.cx, hg.cy, hg.w, hg.h = cx, cy, hw, hh
+          hg.a, hg.cf, hg.u = a * fade, cf, F.U
+          F.hk.crown(F.hctx, hg, cw01)
+        end
+
+        if w.name and w.name ~= "" then
+          local nm = clamp01(aw / (F.TL.GLIDE * 0.5))
+          local hero_text_w = math.min(math.floor(w_lw * hero_sc * 1.4), F.env_w - F.cn(8))
+          if n > 1 then
+            hero_text_w = math.min(hero_text_w, math.floor((F.env_w - F.HERO_GAP) / 2) - F.cn(4))
+          end
+          local nms = F.trunc(w.name, hero_text_w)
+          local name_y = cy + math.floor(hh / 2) + F.cn(4) + F.cn(F.hk.CAP_EXTRA_UNITS)
+            + math.floor((1 - nm) * F.cn(6))
+          shadow_text(nms, cx - math.floor(F.font:getWidth(nms) / 2), name_y,
+            glow, nm * a, 0.35 * nm * a, F.cn(1))
+          if w.badges and #w.badges > 0 then
+            if not w.badge_layout or w.badge_layout_width ~= hero_text_w then
+              w.badge_layout = center_badge_rows(
+                layout_modifier_badges(w.badges, F.small_f, hero_text_w, F.cn(1), 1),
+                hero_text_w)
+              w.badge_layout_width = hero_text_w
+            end
+            draw_modifier_badges(w.badge_layout, cx - math.floor(hero_text_w / 2),
+              name_y + F.text_h + F.cn(2), nm * a, F.th, F.mo)
+          end
+        end
+      end
+    end
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
 
 local function draw_pack_panel(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
@@ -252,7 +541,7 @@ local function draw_pack_panel(ctx)
     reset_pack_state()
   end
   local hk = persona_hooks(th.pk)
-  local TL = (hk and hk.TL) or TIMELINES.soft
+  local TL = hk.TL
   local font, panel_font_small = th.cfont or th.font, th.cfont_small or th.panel_font_small
   local cn, sw, U, GUT = me.cn, me.sw, me.U, me.GUT
   local text_h = me.c_text_h
@@ -262,13 +551,10 @@ local function draw_pack_panel(ctx)
   local trunc, wrapped_lines = dr.trunc, dr.wrapped_lines
   local draw_desc_lines = dr.draw_desc_lines
   local pack_has_cards = pack_rows.cards and #pack_rows.cards > 0
-  local is_pack_state = sn:find("_PACK") or sn == "SMODS_BOOSTER_OPENED"
+  local pack_state = is_pack_state(sn)
   local PACK_LEAVE_DUR = 0.40
 
-  -- The engine destroys the pack CardArea >= 0.4 game-seconds before G.STATE leaves the pack state
-  -- (dump functions/button_callbacks.lua:2620 vs :2656), so the episode ends at whichever of the two
-  -- observables fires first; reading them as independent facts leaves the panel undrawn for the gap.
-  local episode_live = (is_pack_state and pack_has_cards) and true or false
+  local episode_live = (pack_state and pack_has_cards) and true or false
 
   if episode_live and S.pack_last_sn ~= sn then
     reset_pack_state()
@@ -280,8 +566,8 @@ local function draw_pack_panel(ctx)
 
   local HERO_SCALE = SIZING.HERO_SCALE
   local HERO_GAP = cn(SIZING.HERO_GAP)
-  local HERO_HEAD = cn((hk and hk.HEAD_UNITS) or 9)
-  local mark_head = cn((hk and hk.MARK_HEAD_UNITS) or 0)
+  local HERO_HEAD = cn(hk.HEAD_UNITS)
+  local mark_head = cn(hk.MARK_HEAD_UNITS)
 
   local any_highlighted = false
   if pack_has_cards then
@@ -302,9 +588,9 @@ local function draw_pack_panel(ctx)
   local hl_dim = any_highlighted and (1.0 - 0.5 * hl_p) or (0.5 + 0.5 * hl_p)
 
   local picks_left = picks_owed()
-  local pending_picks = is_pack_state and pack_has_cards and picks_left > 0
+  local pending_picks = pack_state and pack_has_cards and picks_left > 0
 
-  if #S.pack_winners > 0 and (S.pack_collapse_req or picks_left <= 0 or not is_pack_state) and not S.pack_collapse_t then
+  if #S.pack_winners > 0 and (S.pack_collapse_req or picks_left <= 0 or not pack_state) and not S.pack_collapse_t then
     S.pack_collapse_t = now
     S.pack_leave_t = nil
   end
@@ -313,7 +599,7 @@ local function draw_pack_panel(ctx)
   if S.pack_collapse_t then shrink_at, collapse_end = collapse_deadline(TL) end
   local collapsing = S.pack_collapse_t and now < collapse_end
   if S.pack_collapse_t and now >= collapse_end then
-    local more = is_pack_state and pack_has_cards and picks_left > 0
+    local more = pack_state and pack_has_cards and picks_left > 0
     if S.pack_hl_t then S.pack_hl_t = S.pack_hl_t + (now - S.pack_collapse_t) end
     S.pack_collapse_t, S.pack_winners, S.pack_collapse_snap = nil, {}, nil
     S.pack_collapse_req, S.pack_losers, S.pack_exit_last = nil, nil, nil
@@ -341,7 +627,7 @@ local function draw_pack_panel(ctx)
     local pk_pad = cn(SIZING.PANEL_PAD)
     local env_pad = cn(SIZING.ENV_PAD)
     local small_f = panel_font_small or font
-    local center_cx = ctx.center_cx or math.floor(sw / 2)
+    local center_cx = ctx.center_cx
     local latch = leaving and S.pack_leave_snap or nil
 
     local display_cards, n_cards
@@ -369,7 +655,7 @@ local function draw_pack_panel(ctx)
           dn = dn + 1
           local t = pooled(_disp_pool, dn)
           t.card, t.name, t.badges, t.desc, t.rc, t.index = cd.card, cd.name, cd.badges, cd.desc, cd.rc, cd.index
-          t.hidden = is_face_down(cd.card)
+          t.hidden = is_hidden(cd.card)
           S.pack_hidden_indices = S.pack_hidden_indices or {}
           S.pack_hidden_indices[cd.index] = t.hidden
           t.state, t.alpha, t.pick_elapsed = is_hl and "highlighted" or "normal", 1.0, nil
@@ -385,7 +671,7 @@ local function draw_pack_panel(ctx)
       end
       n_cards = math.max(#display_cards, S.pack_initial_count)
 
-      local center_max = math.min(ctx.center_max_w or (sw - 40), sw - 40)
+      local center_max = math.min(ctx.center_max_w, sw - 40)
       local n_eff = math.max(1, n_cards)
       sp_w = clamp(
         math.floor((center_max - 2 * pk_pad - (n_eff - 1) * slot_gap) / n_eff) - 2 * slot_pad,
@@ -436,13 +722,7 @@ local function draw_pack_panel(ctx)
     hctx.GOLD, hctx.ACC, hctx.pg, hctx.bg, hctx.WHITE, hctx.CYAN, hctx.FRD =
       th.GOLD, th.ACC, th.pg, th.bg, th.WHITE, th.CYAN, th.FRD
     hctx.now, hctx.pulse, hctx.cn, hctx.U = now, pulse, cn, U
-    local slot_fn = (hk and hk.slot) or neutral_slot
-    local mark_fn = (hk and hk.slot_mark) or neutral_mark
-    local claim_fn = (hk and hk.claim) or neutral_claim
-    local crown_fn = (hk and hk.crown) or neutral_crown
-    local ENTRY = hk and hk.ENTRY
-    local GLIDE_ANT = (hk and hk.GLIDE_ANT) or 0
-    local GLIDE_OVER = (hk and hk.GLIDE_OVER) or 0.10
+    local ENTRY = hk.ENTRY
 
     local prev_n_win, refroze_at, prev_exit, prev_env, prev_h
     if collapsing and S.pack_collapse_snap and S.pack_collapse_snap.n_win ~= #S.pack_winners then
@@ -458,7 +738,7 @@ local function draw_pack_panel(ctx)
         local sl = {
           entry_t0 = S.pack_appear_t + (di - 1) * Motion.STAGGER_WIDE,
           card = dc.card, name = dc.name, badges = dc.badges, desc = dc.desc, rc = dc.rc,
-          index = dc.index, hidden = dc.hidden, badge_layout = dc.badge_layout,
+          index = dc.index, hidden = dc.hidden or is_hidden(dc.card), badge_layout = dc.badge_layout,
           state = "normal", alpha = 1,
         }
         if dc.card then
@@ -472,7 +752,8 @@ local function draw_pack_panel(ctx)
       for _, ls in ipairs(S.pack_losers or {}) do
         if ls.card and not by_card[ls.card] and not won[ls.card] then
           local sl = { card = ls.card, name = ls.name, index = ls.index,
-            hidden = (S.pack_hidden_indices or {})[ls.index] or false,
+            hidden = ls.hidden or is_hidden(ls.card)
+              or (S.pack_hidden_indices or {})[ls.index] or false,
             mini = art_prefers_mini(ls.card), rc = ls.rc or WHITE,
             badges = ls.badges, desc = ls.desc,
             ak = ls.ak, pos = ls.pos, state = "normal", alpha = 1 }
@@ -485,6 +766,7 @@ local function draw_pack_panel(ctx)
         local sl = w.card and by_card[w.card]
         if not sl and w.card then
           sl = { card = w.card, name = w.name, index = w.slot or (#slots + 1),
+            -- Claimed cards flip face down before redraw, so the overlay uses their captured state.
             hidden = w.hidden or false, mini = w.mini or false, rc = WHITE,
             ak = w.ak, pos = w.pos, alpha = 1 }
           slots[#slots + 1] = sl
@@ -518,7 +800,7 @@ local function draw_pack_panel(ctx)
         slot_w = slot_w, slot_gap = slot_gap, pk_pad = pk_pad, slot_h = slot_h, slots = slots,
         n_win = #S.pack_winners, primary_rank = primary_rank, loser_max = loser_max,
         prev_n = prev_n_win, split_at = refroze_at, exit0 = prev_exit, env0 = prev_env, h0 = prev_h,
-        cap_h = text_h + cn(6) + badge_max_h + cn((hk and hk.CAP_EXTRA_UNITS) or 0),
+        cap_h = text_h + cn(6) + badge_max_h + cn(hk.CAP_EXTRA_UNITS),
         sp_w = sp_w, sp_h = sp_h, sp_dy = sp_dy }
       shrink_at, collapse_end = collapse_deadline(TL)
       collapsing = S.pack_collapse_t and now < collapse_end
@@ -529,7 +811,7 @@ local function draw_pack_panel(ctx)
     local col_ct = collapsing and (now - S.pack_collapse_t) or 0
     local grow01 = 0
     if collapsing then
-      grow01 = clamp01(glide_ease(GLIDE_ANT, GLIDE_OVER, clamp01((col_ct - TL.ANOINT) / TL.GLIDE)))
+      grow01 = clamp01(glide_ease(hk.GLIDE_ANT, hk.GLIDE_OVER, clamp01((col_ct - TL.ANOINT) / TL.GLIDE)))
     end
     local col_exit = collapsing and Motion.anim01(now - (collapse_end - TL.EXIT), TL.EXIT) or 0
     if collapsing and snap and snap.exit0 and snap.split_at then
@@ -632,12 +914,14 @@ local function draw_pack_panel(ctx)
     local top_y = ctx.center_top_y
     local exit_ty = -round(cn(SIZING.EXIT_LIFT) * panel_exit)
 
-    local c0_on, c0_x, c0_y, c0_w, c0_h = push_clip(env_x - cn(SIZING.CLIP_PAD), top_y + exit_ty - cn(SIZING.CLIP_PAD),
-      env_w + 2 * cn(SIZING.CLIP_PAD), env_h + cn(SIZING.CLIP_TAIL))
+    local clip_pad = cn(SIZING.CLIP_PAD)
+    if th.persona_neuro then clip_pad = math.max(clip_pad, Prims.HEART_FRAME.out * cn(1)) end
+    local c0_on, c0_x, c0_y, c0_w, c0_h = push_clip(env_x - clip_pad, top_y + exit_ty - clip_pad,
+      env_w + 2 * clip_pad, env_h + cn(SIZING.CLIP_TAIL))
     love.graphics.push()
     love.graphics.translate(0, exit_ty)
 
-    FRAME_OPTS.a, FRAME_OPTS.rad, FRAME_OPTS.title_h = pk_in, cn(9), title_h2
+    FRAME_OPTS.a, FRAME_OPTS.title_h = pk_in, title_h2
     H.persona_frame(th, mo, env_x, top_y, env_w, env_h, cn(1), FRAME_OPTS)
 
     local pk_title_color = (pack_rows.pg or ACC)
@@ -647,18 +931,13 @@ local function draw_pack_panel(ctx)
     g.title_col = pk_title_color
     g.shimr, g.shimg, g.shimb = mo.shimr, mo.shimg, mo.shimb
     g.flare = clamp01((now - S.pack_appear_t) / 0.45)
-    if hk and hk.frame then hk.frame(hctx, g) end
-    if hk and hk.title_deco then
-      hk.title_deco(hctx, g)
-    else
-      set_col(pk_title_color, (0.85 + 0.10 * pulse) * pk_in)
-      love.graphics.rectangle("fill", env_x, top_y + title_h2 - 2, env_w, 2)
-    end
+    if hk.frame then hk.frame(hctx, g) end
+    hk.title_deco(hctx, g)
 
     love.graphics.setFont(font)
     local pk_title_ty = top_y + math.floor((title_h2 - text_h) / 2)
     local pk_title_tx = env_x + GUT
-    local title_right_reserve = cn(22 + ((hk and hk.TITLE_RIGHT_RESERVE_UNITS) or 0))
+    local title_right_reserve = cn(22 + hk.TITLE_RIGHT_RESERVE_UNITS)
     local title_str = trunc(title_str_full, env_content_w - title_right_reserve)
     local title_a = pk_in
     if collapsing then
@@ -671,316 +950,18 @@ local function draw_pack_panel(ctx)
     local scan01 = 0.5 + 0.5 * math.sin(now * 2.4)
     local slot_y = top_y + title_h2 + cn(4) + mark_head
 
-    local function draw_pack_slot(dc, slot_x, sy_slot, ca, appear_ef, scan, no_sprite, sw_o, sh_o, spw_o, sph_o)
-      local sww = sw_o or slot_w
-      local shh = sh_o or slot_h
-      local sph = sph_o or sp_h
-      local spw = spw_o or sp_w
-      local sphc = sph
-      if dc.card and not no_sprite and not dc.hidden then
-        local cw, ch = card_dimensions(dc.card, sph)
-        spw = frame_fit(spw, cw)
-        sphc = frame_fit(sph, ch)
-      end
-      local st = dc.state
-      local pe = dc.pick_elapsed or 0
-      if st == "normal" and hl_dim < 1 then ca = ca * hl_dim end
-
-      local sg = SG
-      sg.x, sg.y, sg.w, sg.h, sg.u = slot_x, sy_slot, sww, shh, cn(2)
-      sg.cx, sg.cy = slot_x + math.floor(sww / 2), sy_slot + math.floor(shh / 2)
-      sg.a, sg.scan, sg.appear = ca, scan, appear_ef
-      sg.shimr, sg.shimg, sg.shimb = mo.shimr, mo.shimg, mo.shimb
-      sg.rc = dc.hidden and FRD or dc.rc
-      sg.sp_x = slot_x + math.floor((sww - spw) / 2)
-      sg.sp_y = sy_slot + sp_dy
-      sg.sp_w, sg.sp_h = spw, sphc
-      sg.burst_r = math.min(math.floor(sww * 0.5) + pk_pad, math.floor(shh * 0.5))
-
-      slot_fn(hctx, sg, st, scan)
-
-      if dc.card then
-        local sprite_x2, sprite_y2 = sg.sp_x, sg.sp_y
-
-        love.graphics.setColor(0, 0, 0, 0.30 * ca)
-        love.graphics.ellipse("fill", sprite_x2 + spw / 2, sprite_y2 + sphc + 3, spw * 0.48, 3)
-        love.graphics.setColor(0, 0, 0, 0.55 * ca)
-        love.graphics.rectangle("fill", sprite_x2 - 1, sprite_y2 - 1, spw + 2, sphc + 2)
-        local sb_col = dc.hidden and FRD or dc.rc
-        if st == "picked" then sb_col = GOLD
-        elseif st == "highlighted" then sb_col = (hk and hk.HL_GOLD) and GOLD or CYAN end
-        set_col(sb_col, (0.45 + 0.15 * (st == "normal" and pulse or scan)) * ca)
-        love.graphics.setLineWidth(cn(1))
-        love.graphics.rectangle("line", sprite_x2 - 1, sprite_y2 - 1, spw + 2, sphc + 2)
-
-        if not no_sprite and not dc.hidden then
-          local ok_mini = pcall(draw_card_mini, dc.card, sprite_x2, sprite_y2, sph, ca)
-          if not ok_mini then
-            local role = dc.rank and (dc.winner and "winner" or "loser") or "slot"
-            Cards._pack_mini_fail = (Cards._pack_mini_fail or 0) + 1
-            Cards.diag_once("pack_mini_" .. role, "draw_card_mini failed for pack " .. role)
-            Cards.draw_mini_fallback(dc.card, sprite_x2, sprite_y2, spw, sph, ca)
-          end
-          love.graphics.setColor(1, 1, 1, 0.06 * ca)
-          love.graphics.rectangle("fill", sprite_x2, sprite_y2, spw, math.max(2, sphc * 0.10))
-        end
-
-        if st == "picked" then
-          claim_fn(hctx, sg, pe)
-        end
-
-        local name_y = sprite_y2 + sph + cn(4)
-        local rc2 = dc.hidden and WHITE or ((st == "picked" and GOLD) or (st == "highlighted" and CYAN) or dc.rc)
-        local name_str = trunc(dc.hidden and "face-down (hidden)" or dc.name, sww - cn(8))
-        local name_x = slot_x + math.floor((sww - font:getWidth(name_str)) / 2)
-        shadow_text(name_str, name_x, name_y, rc2, 0.97 * ca, 0.35 * ca, cn(1))
-
-        local dy = name_y + text_h + cn(2)
-        if dc.badge_layout and dc.badge_layout.height > 0 then
-          draw_modifier_badges(dc.badge_layout, slot_x + cn(4), dy, ca, th, mo)
-          dy = dy + dc.badge_layout.height
-        end
-        if not dc.hidden and dc.desc and dc.desc ~= "" then
-          if panel_font_small then love.graphics.setFont(panel_font_small) end
-          local desc_lines = wrapped_lines(dc.desc, sww - cn(8), small_f)
-          draw_desc_lines(desc_lines, math.min(#desc_lines, 2),
-            slot_x + cn(4), dy, small_line_h, ca, small_f)
-          if panel_font_small then love.graphics.setFont(font) end
-        end
-      elseif not (hk and hk.COVERS_PICKED and st == "picked") then
-        local name_str = trunc(dc.hidden and "face-down (hidden)" or dc.name, sww - cn(16))
-        local name_x = slot_x + math.floor((sww - font:getWidth(name_str)) / 2)
-        local badge_h = dc.badge_layout and dc.badge_layout.height or 0
-        local group_h = text_h + (badge_h > 0 and (cn(2) + badge_h) or 0)
-        local name_y = sy_slot + math.floor((shh - group_h) / 2)
-        shadow_text(name_str, name_x, name_y, GOLD, 0.97 * ca, 0.35 * ca, cn(1))
-        if badge_h > 0 then
-          draw_modifier_badges(dc.badge_layout, slot_x + cn(4), name_y + text_h + cn(2), ca, th, mo)
-        end
-      end
-
-      if st == "highlighted" then
-        local mk_bob = math.sin(now * 2.2) * 2
-        mark_fn(hctx, sg, st, mk_bob)
-      end
-
-    end
+    local f = F
+    f.th, f.mo, f.hk, f.hctx, f.cn, f.U, f.now, f.pulse = th, mo, hk, hctx, cn, U, now, pulse
+    f.FRD, f.GOLD, f.CYAN, f.WHITE, f.TL = FRD, GOLD, CYAN, WHITE, TL
+    f.slot_w, f.slot_h, f.sp_w, f.sp_h, f.sp_dy, f.pk_pad, f.hl_dim = slot_w, slot_h, sp_w, sp_h, sp_dy, pk_pad, hl_dim
+    f.font, f.panel_font_small, f.small_f, f.text_h, f.small_line_h = font, panel_font_small, small_f, text_h, small_line_h
+    f.trunc, f.wrapped_lines, f.draw_desc_lines = trunc, wrapped_lines, draw_desc_lines
+    f.pending_picks, f.collapsing, f.col_ct, f.col_exit, f.col_dim, f.col_fold01 =
+      pending_picks, collapsing, col_ct, col_exit, col_dim, col_fold01
+    f.slot_y, f.hero_hsc, f.hero_dims, f.HERO_SCALE, f.HERO_GAP, f.HERO_HEAD = slot_y, hero_hsc, hero_dims, HERO_SCALE, HERO_GAP, HERO_HEAD
+    f.env_pad, f.env_w, f.center_cx = env_pad, env_w, center_cx
 
     local exit_dist = cn((ENTRY and ENTRY[3]) or 40)
-
-    local function loser_d01(sn2, sl)
-      if pending_picks then return 0 end
-      return Motion.anim01(col_ct - TL.ANOINT, loser_span(sn2, sl))
-    end
-    local function fold01_of(sn2, sl)
-      if pending_picks or not collapsing then return 1 end
-      if sl.winner then return col_fold01 end
-      return 1 - Motion.anim01(col_ct - TL.ANOINT, math.max(TL.FOLD, loser_span(sn2, sl)))
-    end
-
-    local function draw_collapse(sn2)
-      local sw2 = sn2.slot_w
-      local xp = col_exit
-      local a = 1 - xp
-      local b1 = (hk and hk.DISSOLVE and hk.DISSOLVE[1]) or DISSOLVE_A
-      local b2 = (hk and hk.DISSOLVE and hk.DISSOLVE[2]) or DISSOLVE_B
-
-      for _, sl in ipairs(sn2.slots) do
-        if not sl.winner and sl.card then
-          local d = loser_d01(sn2, sl)
-          if d > 0 and d < 1 then
-            local lw, lh, lsx, lsy = card_dimensions(sl.card, sn2.sp_h)
-            local lx = sn2.sx0 + (sl.rank - 1) * (sw2 + sn2.slot_gap) + math.floor((sw2 - lw) / 2)
-            local l_ef, l_dy = entry_rise(now, cn, ENTRY, sl.entry_t0)
-            local ly = slot_y + sn2.sp_dy + l_dy
-            local la = col_dim * hl_dim * (1 - d) * a * l_ef
-            local lak, lpos = sl.ak, sl.pos
-            if not (lak and lpos) then
-              local sak, spos = Cards.card_sprite(sl.card)
-              lak, lpos = lak or sak, lpos or spos
-            end
-            if sl.hidden then
-              love.graphics.setColor(0, 0, 0, 0.55 * la)
-              love.graphics.rectangle("fill", lx - 1, ly - 1, lw + 2, sn2.sp_h + 2)
-              set_col(FRD, 0.45 * la)
-              love.graphics.setLineWidth(cn(1))
-              love.graphics.rectangle("line", lx - 1, ly - 1, lw + 2, sn2.sp_h + 2)
-            elseif lak and lpos and not sl.mini then
-              Cards.draw_sprite_shaded(lak, lpos, lx, ly, lsx, lsy, la, d, b1, b2, 0)
-            else
-              local ok_loser = pcall(draw_card_mini, sl.card, lx, ly, sn2.sp_h, la)
-              if not ok_loser then
-                Cards._pack_mini_fail = (Cards._pack_mini_fail or 0) + 1
-                Cards.diag_once("pack_mini_loser", "draw_card_mini failed for pack loser")
-                Cards.draw_mini_fallback(sl.card, lx, ly, lw, lh, la)
-              end
-            end
-            if d > 0.05 then
-              love.graphics.setBlendMode("add")
-              local mcx, mcy = lx + math.floor(lw / 2), ly + math.floor(sn2.sp_h * d)
-              Prims.ember_bloom(mcx, mcy, sw2 * 0.42, cn(2), d, GOLD, 1 - d)
-              love.graphics.setBlendMode("alpha")
-            end
-          end
-        end
-      end
-
-      local n = math.min(#S.pack_winners, sn2.n_win)
-      local hsc_n = hero_hsc or hero_cap_for(sn2, n, HERO_SCALE, HERO_GAP, env_pad, hero_dims)
-      local ccx = sn2.center_cx or center_cx
-      local split_sp, split_hsc0
-      if sn2.split_at and sn2.prev_n and sn2.prev_n < n then
-        split_sp = Motion.anim01(now - sn2.split_at, REFREEZE_D)
-        if split_sp < 1 then
-          split_hsc0 = hero_cap_for(sn2, sn2.prev_n, HERO_SCALE, HERO_GAP, env_pad, hero_dims)
-        end
-      end
-      for i, w in ipairs(S.pack_winners) do
-        if i > n then break end
-        if w.card and not w.hidden then
-          local t0 = w.t0 or S.pack_collapse_t
-          local aw = now - t0 - (w._anoint or TL.ANOINT)
-          if aw >= 0 or col_fold01 <= 0 then
-            local w_lw, w_lh, wsx, wsy
-            local dcache = hero_dims and hero_dims[i]
-            if dcache then
-              w_lw, w_lh, wsx, wsy = dcache.w, dcache.h, dcache.sx, dcache.sy
-            else
-              w_lw, w_lh, wsx, wsy = card_dimensions(w.card, sn2.sp_h)
-            end
-            local rank = w._rank or w.slot or i
-            local ocx = sn2.sx0 + (rank - 1) * (sw2 + sn2.slot_gap) + math.floor(sw2 / 2)
-            local w_ef, w_dy = entry_rise(now, cn, ENTRY, w._entry_t0)
-            local w_sp_cy = slot_y + w_dy + sn2.sp_dy + math.floor(w_lh / 2)
-            local hero_sc = hsc_n
-            local tx = hero_tx(ccx, n, i, w_lw, hero_sc, HERO_GAP)
-            if split_hsc0 and i <= sn2.prev_n then
-              local tx0 = hero_tx(ccx, sn2.prev_n, i, w_lw, split_hsc0, HERO_GAP)
-              tx = tx0 + (tx - tx0) * split_sp
-              hero_sc = split_hsc0 + (hero_sc - split_hsc0) * split_sp
-            end
-            local hero_cy = slot_y + HERO_HEAD + math.floor(w_lh * hero_sc / 2)
-            local g01 = clamp01(aw / TL.GLIDE)
-            local cw01 = clamp01((aw - TL.GLIDE * CROWN_LEAD) / TL.CROWN)
-            local cf = clamp01((aw - TL.GLIDE - TL.CROWN * 0.5) / 0.25)
-            local cx, cy, sc, fade
-            cx, cy, sc = hero_xform(ocx, tx, w_sp_cy, hero_cy, hero_sc, glide_ease(GLIDE_ANT, GLIDE_OVER, g01))
-            fade = 1
-            fade = fade * w_ef
-            cy = cy + math.sin(now * 2.4) * cn(2) * cf * a
-            if hk and hk.CROWN_JOLT and cw01 > 0 then
-              local imp = (cw01 - 0.30) / 0.16
-              if imp > 0 and imp < 1 then cy = cy + round(cn(2) * (1 - imp)) end
-            end
-            local squash = 0.05 * math.sin(math.pi * clamp01(aw / (TL.GLIDE * 0.5)))
-            sc = sc * (1 - squash) * (1 + 0.012 * math.sin(now * 2.4 + 1) * cf)
-            local hw, hh = w_lw * sc, w_lh * sc
-            local glow = GOLD
-
-            love.graphics.setBlendMode("add")
-            do
-              for k = 1, 3 do
-                local pad = cn(4) * k
-                love.graphics.setColor(glow[1], glow[2], glow[3],
-                  (0.11 / k) * a * fade * (0.7 + 0.3 * pulse))
-                love.graphics.rectangle("fill", cx - hw / 2 - pad, cy - hh / 2 - pad,
-                  hw + pad * 2, hh + pad * 2, cn(6), cn(6))
-              end
-            end
-            love.graphics.setBlendMode("alpha")
-
-            local wak = (not w.mini) and w.ak or nil
-            local wpos = (not w.mini) and w.pos or nil
-
-            if aw > 0 and aw < TL.GLIDE then
-              local tr = 1 - aw / TL.GLIDE
-              for k = 2, 1, -1 do
-                local tk = aw - k * 0.035
-                if tk > 0 then
-                  local gx, gy, gs = hero_xform(ocx, tx, w_sp_cy, hero_cy, hero_sc,
-                    glide_ease(GLIDE_ANT, GLIDE_OVER, clamp01(tk / TL.GLIDE)))
-                  love.graphics.push()
-                  love.graphics.translate(gx, gy)
-                  love.graphics.scale(gs, gs)
-                  love.graphics.translate(-w_lw / 2, -w_lh / 2)
-                  if wak and wpos then
-                    Cards.draw_sprite_shaded(wak, wpos, 0, 0, wsx, wsy, 0.05 * (3 - k) * tr, 0, nil, nil, 0)
-                  else
-                    pcall(draw_card_mini, w.card, 0, 0, sn2.sp_h, 0.05 * (3 - k) * tr)
-                  end
-                  love.graphics.pop()
-                end
-              end
-            end
-
-            love.graphics.push()
-            love.graphics.translate(cx, cy)
-            love.graphics.scale(sc, sc)
-            love.graphics.translate(-w_lw / 2, -w_lh / 2)
-            if not (wak and wpos and Cards.draw_sprite_shaded(wak, wpos, 0, 0, wsx, wsy, a * fade, xp, b1, b2, 0)) then
-              local ok_win = pcall(draw_card_mini, w.card, 0, 0, sn2.sp_h, a * fade)
-              if not ok_win then
-                Cards._pack_mini_fail = (Cards._pack_mini_fail or 0) + 1
-                Cards.diag_once("pack_mini_winner", "draw_card_mini failed for pack winner")
-                Cards.draw_mini_fallback(w.card, 0, 0, w_lw, w_lh, a * fade)
-              end
-            end
-            love.graphics.pop()
-
-            do
-              local land = (aw - TL.GLIDE) / 0.18
-              if land > 0 and land < 1 then
-                love.graphics.setBlendMode("add")
-                local pad = cn(4) + land * cn(10)
-                love.graphics.setColor(glow[1], glow[2], glow[3], 0.5 * (1 - land))
-                love.graphics.setLineWidth(cn(2))
-                love.graphics.rectangle("line", cx - hw / 2 - pad, cy - hh / 2 - pad, hw + pad * 2, hh + pad * 2, cn(6), cn(6))
-                love.graphics.setColor(1, 1, 1, 0.18 * (1 - land))
-                love.graphics.rectangle("fill", cx - hw / 2, cy - hh / 2, hw, hh, cn(4), cn(4))
-                love.graphics.setBlendMode("alpha")
-              end
-            end
-
-            love.graphics.setBlendMode("add")
-            love.graphics.setColor(glow[1], glow[2], glow[3], (0.35 + 0.25 * pulse) * a * fade)
-            love.graphics.setLineWidth(cn(2))
-            love.graphics.rectangle("line", cx - hw / 2, cy - hh / 2, hw, hh, cn(4), cn(4))
-            love.graphics.setBlendMode("alpha")
-
-            if cw01 > 0 then
-              local hg = HG
-              hg.cx, hg.cy, hg.w, hg.h = cx, cy, hw, hh
-              hg.a, hg.cf, hg.u = a * fade, cf, U
-              crown_fn(hctx, hg, cw01)
-            end
-
-            if w.name and w.name ~= "" then
-              local nm = clamp01(aw / (TL.GLIDE * 0.5))
-              local hero_text_w = math.min(math.floor(w_lw * hero_sc * 1.4), env_w - cn(8))
-              if n > 1 then
-                hero_text_w = math.min(hero_text_w, math.floor((env_w - HERO_GAP) / 2) - cn(4))
-              end
-              local nms = trunc(w.name, hero_text_w)
-              local name_y = cy + math.floor(hh / 2) + cn(4) + cn((hk and hk.CAP_EXTRA_UNITS) or 0)
-                + math.floor((1 - nm) * cn(6))
-              shadow_text(nms, cx - math.floor(font:getWidth(nms) / 2), name_y,
-                glow, nm * a, 0.35 * nm * a, cn(1))
-              if w.badges and #w.badges > 0 then
-                if not w.badge_layout or w.badge_layout_width ~= hero_text_w then
-                  w.badge_layout = center_badge_rows(
-                    layout_modifier_badges(w.badges, small_f, hero_text_w, cn(1), 1),
-                    hero_text_w)
-                  w.badge_layout_width = hero_text_w
-                end
-                draw_modifier_badges(w.badge_layout, cx - math.floor(hero_text_w / 2),
-                  name_y + text_h + cn(2), nm * a, th, mo)
-              end
-            end
-          end
-        end
-      end
-      love.graphics.setColor(1, 1, 1, 1)
-    end
 
     if collapsing and snap then
       if col_fold_max > 0 then
@@ -1022,7 +1003,7 @@ local function draw_pack_panel(ctx)
       pop_clip(cl_on, cl_x, cl_y, cl_w, cl_h)
     end
 
-    if hk and hk.exit and panel_exit > 0 then hk.exit(hctx, g, panel_exit) end
+    if hk.exit and panel_exit > 0 then hk.exit(hctx, g, panel_exit) end
 
     love.graphics.pop()
     pop_clip(c0_on, c0_x, c0_y, c0_w, c0_h)
@@ -1031,5 +1012,9 @@ local function draw_pack_panel(ctx)
   end
 end
 
-return { draw = draw_pack_panel, TIMELINES = TIMELINES, SIZING = SIZING, frame_w = frame_w,
+local M = { draw = draw_pack_panel, TIMELINES = TIMELINES, SIZING = SIZING,
   LOSER_D = LOSER_D, LOSER_SPREAD = LOSER_SPREAD, picks_owed = picks_owed }
+if _G.NEURO_TEST then
+  M.frame_w = frame_fit
+end
+return M

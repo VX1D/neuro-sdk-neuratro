@@ -1,44 +1,57 @@
 local M = {}
 
 local CACHE_MAX = 256
-local cache, keys = {}, {}
-local next_slot, cache_n = 1, 0
 
-local function classify_uncached(word)
-  local wu = word:upper()
-  if wu:find("MULT") then return "D_RED"
-  elseif wu:find("CHIP") then return "D_CYAN"
-  elseif word:match("^%$") then return "D_MONEY"
+local function classify_rest(word)
+  if word:match("^%$") then return "D_MONEY"
   elseif word:match("^[Xx]%d") then return "D_MAROON"
   elseif word:match("^%+%d") then return "D_GREEN"
   else return "D_WHITE" end
 end
 
-function M.classify(word)
-  local result = cache[word]
-  if result ~= nil then return result end
-  result = classify_uncached(word)
-  local old = keys[next_slot]
-  if old ~= nil then
-    cache[old] = nil
-  else
-    cache_n = cache_n + 1
-  end
-  keys[next_slot], cache[word] = word, result
-  next_slot = next_slot % CACHE_MAX + 1
-  return result
+local function classify_uncached(word)
+  local wu = word:upper()
+  if wu:find("MULT") then return "D_RED"
+  elseif wu:find("CHIP") then return "D_CYAN"
+  else return classify_rest(word) end
 end
+
+local function classify_whole_uncached(word)
+  local core = word:upper():match("^%p*(.-)%p*$")
+  if core == "MULT" then return "D_RED"
+  elseif core == "CHIP" or core == "CHIPS" then return "D_CYAN"
+  else return classify_rest(word) end
+end
+
+local function new_ring(classify)
+  local map, keys, slot = {}, {}, 1
+  return {
+    lookup = function(word)
+      local result = map[word]
+      if result ~= nil then return result end
+      result = classify(word)
+      local old = keys[slot]
+      if old ~= nil then map[old] = nil end
+      keys[slot], map[word] = word, result
+      slot = slot % CACHE_MAX + 1
+      return result
+    end,
+  }
+end
+
+local sub_ring, word_ring
 
 function M.invalidate()
-  cache, keys = {}, {}
-  next_slot, cache_n = 1, 0
+  sub_ring, word_ring = new_ring(classify_uncached), new_ring(classify_whole_uncached)
+end
+M.invalidate()
+
+function M.classify(word)
+  return sub_ring.lookup(word)
 end
 
-if rawget(_G, "NEURO_TEST") then
-  M._test = {
-    cache_size = function() return cache_n end,
-    cache_max = CACHE_MAX,
-  }
+function M.classify_word(word)
+  return word_ring.lookup(word)
 end
 
 return M

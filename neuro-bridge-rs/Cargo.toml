@@ -1,17 +1,23 @@
 [package]
 name = "neuro-bridge"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
 futures-util = "0.3"
-serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time", "fs", "sync"] }
-tokio-tungstenite = "0.21"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "time", "fs", "sync", "signal"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 notify = "8"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry"] }
+
 [profile.release]
-opt-level = 3
+opt-level = "s"
+codegen-units = 1
 lto = true
 strip = true

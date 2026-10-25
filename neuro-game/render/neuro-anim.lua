@@ -4,7 +4,8 @@ local set_col = gfx.set_col
 local Utils = require("util.utils")
 local GameActions = require("core.game_actions")
 local RectMesh = require("render.rect_mesh")
-
+local Assets = require("hud.assets")
+local CardUtil = require("facts.card_util")
 local NeuroAnim = {}
 
 local _anim_fails = {}
@@ -50,14 +51,25 @@ function Motion.pulse(now, hz, phase)
   return 0.5 + 0.5 * math.sin(now * (hz or 1) + (phase or 0))
 end
 
+local _keys = {}
+local function keys_for(prefix)
+  local k = _keys[prefix]
+  if not k then
+    k = { cur = prefix .. "_current", from = prefix .. "_from", tgt = prefix .. "_target",
+      at = prefix .. "_at", run = prefix .. "_run" }
+    _keys[prefix] = k
+  end
+  return k
+end
+
 function Motion.snap(state, prefix, value)
-  state[prefix .. "_current"] = value
+  state[keys_for(prefix).cur] = value
   return value
 end
 
 function Motion.tween(state, prefix, target, now, dur)
-  local k_cur, k_from = prefix .. "_current", prefix .. "_from"
-  local k_tgt, k_at, k_run = prefix .. "_target", prefix .. "_at", prefix .. "_run"
+  local k = keys_for(prefix)
+  local k_cur, k_from, k_tgt, k_at, k_run = k.cur, k.from, k.tgt, k.at, k.run
   if state[k_cur] == nil then
     state[k_cur], state[k_from], state[k_tgt], state[k_at] = target, target, target, now
     state[k_run] = 0
@@ -79,7 +91,7 @@ function Motion.tween(state, prefix, target, now, dur)
 end
 
 function Motion.approach(state, prefix, target, dt, rate)
-  local k_cur = prefix .. "_current"
+  local k_cur = keys_for(prefix).cur
   local cur = state[k_cur]
   if cur == nil or not (rate and rate > 0) then
     state[k_cur] = target
@@ -98,59 +110,55 @@ NeuroAnim.Motion = Motion
 
 local _pack_gen = 0
 
-local function after(gate_id, delay, fn)
+local function queue(gate_id, delay, fn)
+  local site = delay and "after" or "immediate"
+  local function run()
+    local ok = pcall(fn)
+    if not ok then anim_fail(site) end
+    return true
+  end
   if G and G.E_MANAGER and Event then
     G.E_MANAGER:add_event(Event({
-      trigger   = "after",
+      trigger   = delay and "after" or nil,
       delay     = delay,
       timer     = Utils.gate_clock(gate_id),
       blockable = false,
       blocking  = false,
-      func      = function()
-        local ok = pcall(fn)
-        if not ok then anim_fail("after") end
-        return true
-      end,
+      func      = run,
     }))
-  end
-end
-
-local function immediate(gate_id, fn)
-  if G and G.E_MANAGER and Event then
-    G.E_MANAGER:add_event(Event({
-      timer     = Utils.gate_clock(gate_id),
-      blockable = false,
-      blocking  = false,
-      func      = function()
-        local ok = pcall(fn)
-        if not ok then anim_fail("immediate") end
-        return true
-      end,
-    }))
-  else
-    local ok = pcall(fn)
-    if not ok then anim_fail("immediate") end
+  elseif not delay then
+    run()
   end
 end
 
 local SETTLE_POLL = 0.03
 local CARD_SETTLE_BUDGET = 1.0
--- The cashout chain holds the queue for seconds of game time: up to seven eval rows at delay(0.2)
--- plus a 0.5 `before` each, a 0.6 divider, a defeat event up to 1.18 and one event per dollar
--- (dump functions/common_events.lua:1126-1300, functions/state_events.lua:980-1000).
 local ENGINE_SETTLE_BUDGET = 12.0
--- The engine fills the shop areas from an event gated on the shop panel settling (dump game.lua:3265-3351).
 local SHOP_FILL_BUDGET = 4.0
+
+local function poll(gate_id, deadline, site, msg, retry, a, b, c)
+  if Utils.gate_now(gate_id) >= deadline then
+    anim_diag(site, msg)
+    return
+  end
+  queue(gate_id, SETTLE_POLL, function() retry(a, b, c) end)
+end
+
+-- STATIONARY can lag visible motion until scale lands; fallback checks position, rotation, and velocity.
+local function at_rest(o)
+  local T, VT, v = o.T, o.VT, o.velocity
+  if type(T) ~= "table" or type(VT) ~= "table" or type(v) ~= "table" then return false end
+  local function near(a, b, tol) return math.abs((tonumber(a) or 0) - (tonumber(b) or 0)) < tol end
+  return near(VT.x, T.x, 0.01) and near(VT.y, T.y, 0.01) and near(v.x, 0, 0.01) and near(v.y, 0, 0.01)
+    and near(VT.r, T.r, 0.001) and near(v.r, 0, 0.001) and near(v.scale, 0, 0.001)
+end
 
 local function card_settled(o)
   if not o then return false end
   if o.juice then return false end
-  return o.STATIONARY == true
+  return o.STATIONARY == true or at_rest(o)
 end
 
--- Two waits, not one: a card stops moving on REAL because Moveable:move runs on real_dt (dump
--- game.lua:2757-2766), while the queue it also waits on drains on TOTAL. Exhaustion is reported --
--- this is the only place that can say the flourish did not happen.
 local function when_settled(o, fn, dl)
   if not dl then
     dl = {
@@ -158,26 +166,19 @@ local function when_settled(o, fn, dl)
       engine = Utils.gate_now("anim_engine_settle") + ENGINE_SETTLE_BUDGET,
     }
   end
+  if o and o.REMOVED then return end
   local card_ok = card_settled(o)
   if card_ok and Utils.engine_settled() then
     fn()
     return
   end
   if not card_ok then
-    if Utils.gate_now("anim_card_beat") >= dl.card then
-      anim_diag("settle_card_expired",
-        "neuro-anim gave up waiting for a card to stop moving; its flourish did not play")
-      return
-    end
-    after("anim_card_beat", SETTLE_POLL, function() when_settled(o, fn, dl) end)
+    poll("anim_card_beat", dl.card, "settle_card_expired",
+      "neuro-anim gave up waiting for a card to stop moving; its flourish did not play", when_settled, o, fn, dl)
     return
   end
-  if Utils.gate_now("anim_engine_settle") >= dl.engine then
-    anim_diag("settle_engine_expired",
-      "neuro-anim gave up waiting for the engine queue to drain; its flourish did not play")
-    return
-  end
-  after("anim_engine_settle", SETTLE_POLL, function() when_settled(o, fn, dl) end)
+  poll("anim_engine_settle", dl.engine, "settle_engine_expired",
+    "neuro-anim gave up waiting for the engine queue to drain; its flourish did not play", when_settled, o, fn, dl)
 end
 
 local function juice(gate_id, card, sc, rot, lead)
@@ -187,7 +188,7 @@ local function juice(gate_id, card, sc, rot, lead)
       local ok = pcall(function() card:juice_up(sc or 0.3, rot or 0.2) end)
       if not ok then anim_fail("juice") end
     end
-    if lead and lead > 0 then after(gate_id, lead, fire) else fire() end
+    if lead and lead > 0 then queue(gate_id, lead, fire) else fire() end
   end)
 end
 
@@ -209,7 +210,7 @@ function NeuroAnim.hover_pack_card(card, bp)
   local total = (bp and bp.cards and #bp.cards) or 0
   local is_last = (total <= 1)
 
-  immediate("anim_card_beat", function()
+  queue("anim_card_beat", nil, function()
     juice("anim_card_beat", card, is_last and 0.7 or 0.45, is_last and 0.32 or 0.24)
     if bp and bp.add_to_highlighted then
       local ok_hl = pcall(function() bp:add_to_highlighted(card, true) end)
@@ -219,7 +220,7 @@ function NeuroAnim.hover_pack_card(card, bp)
     end
   end)
 
-  after("anim_card_beat", Motion.FAST, function()
+  queue("anim_card_beat", Motion.FAST, function()
     if gen ~= _pack_gen then return end
     if bp and bp.cards then
       for _, c in ipairs(bp.cards) do
@@ -244,18 +245,14 @@ function NeuroAnim.pick_pack_card(card, bp)
     end
     local winner = {
       slot = slot or (#S.pack_winners + 1), card = card, t0 = Utils.now(),
-      name = Cards.card_display_name and Cards.card_display_name(card) or "",
+      name = Cards.card_display_name(card) or "",
       badges = require("render.modifier_badges").collect(card),
-      -- A Standard pick lands in G.deck, which flips it face down mid-cinematic (dump
-      -- functions/button_callbacks.lua:2266 -> cardarea.lua:451 -> card.lua:4461).
-      hidden = require("facts.card_util").is_face_down(card),
+      hidden = CardUtil.is_hidden(card),
       mini = Cards.art_prefers_mini(card),
     }
     if ak then
       winner.ak, winner.pos = ak, pos
     end
-    -- The engine only decrements G.GAME.pack_choices past the first claim of a mega pack
-    -- (button_callbacks.lua:2318-2328), so the final pick must not be read off that field.
     local prior = S.pack_winners[#S.pack_winners]
     winner.owed = math.max(0, ((prior and prior.owed)
       or (tonumber(G and G.GAME and G.GAME.pack_choices) or 1)) - 1)
@@ -268,9 +265,10 @@ function NeuroAnim.pick_pack_card(card, bp)
           local loser = {
             index = (S.pack_card_indices and S.pack_card_indices[c]) or i,
             card = c,
-            name = Cards.card_display_name and Cards.card_display_name(c) or "",
-            rc = Cards.rarity_color and Cards.rarity_color(c) or nil,
-            desc = Cards.card_description and Cards.card_description(c) or nil,
+            hidden = CardUtil.is_hidden(c),
+            name = Cards.card_display_name(c) or "",
+            rc = Cards.rarity_color(c),
+            desc = Cards.card_description(c),
             badges = require("render.modifier_badges").collect(c),
           }
           if lak then
@@ -303,10 +301,10 @@ function NeuroAnim.pick_pack_card(card, bp)
   end
   if not unhighlighted then GameActions.set_highlight(card, false) end
 
-  after("anim_card_beat", Motion.TICK, function()
+  queue("anim_card_beat", Motion.TICK, function()
     if gen ~= _pack_gen then return end
     if is_last then
-      after("anim_card_beat", Motion.FAST,
+      queue("anim_card_beat", Motion.FAST,
         function() if gen ~= _pack_gen then return end juice("anim_card_beat", card, 0.5, 0.28) end)
     end
   end)
@@ -352,6 +350,16 @@ end
 
 local SHOP_AREAS = { "shop_jokers", "shop_vouchers", "shop_booster" }
 local _shop_flourished = setmetatable({}, { __mode = "k" })
+local _shop_visited = setmetatable({}, { __mode = "k" })
+
+-- A pack or voucher bought in the shop returns to the same shop areas.
+local function revisited_shop()
+  for _, name in ipairs(SHOP_AREAS) do
+    local area = G and G[name]
+    if area and _shop_visited[area] then return true end
+  end
+  return false
+end
 
 local function undecorated_shop_cards()
   local out = nil
@@ -373,20 +381,20 @@ local function shop_flourish(dl)
   local cards = undecorated_shop_cards()
   if cards then
     for _, c in ipairs(cards) do _shop_flourished[c] = true end
+    for _, name in ipairs(SHOP_AREAS) do
+      if G[name] then _shop_visited[G[name]] = true end
+    end
     ripple("anim_card_beat", cards, 0, Motion.STAGGER, 0.22, 0.14)
     return
   end
-  if Utils.gate_now("anim_engine_settle") >= dl then
-    anim_diag("shop_fill_expired",
-      "neuro-anim never saw the shop fill; its entry flourish did not play")
-    return
-  end
-  after("anim_engine_settle", SETTLE_POLL, function() shop_flourish(dl) end)
+  if revisited_shop() then return end
+  poll("anim_engine_settle", dl, "shop_fill_expired",
+    "neuro-anim never saw the shop fill; its entry flourish did not play", shop_flourish, dl)
 end
 
 function NeuroAnim.on_shop_enter()
   local dl = Utils.gate_now("anim_engine_settle") + SHOP_FILL_BUDGET
-  after("anim_card_beat", Motion.MED, function() shop_flourish(dl) end)
+  queue("anim_card_beat", Motion.MED, function() shop_flourish(dl) end)
 end
 
 local _pack_opened = setmetatable({}, { __mode = "k" })
@@ -396,19 +404,22 @@ function NeuroAnim.on_pack_open()
   if not (bp and bp.cards and #bp.cards > 0) or _pack_opened[bp] then return end
   _pack_opened[bp] = true
   local gen = _pack_gen
-  after("anim_card_beat", Motion.MED, function()
+  queue("anim_card_beat", Motion.MED, function()
     if gen ~= _pack_gen then return end
     ripple("anim_card_beat", bp.cards, 0, Motion.STAGGER, 0.22, 0.14)
   end)
 end
 
+-- The engine juices bought packs and vouchers before consuming them.
+local ENGINE_ANIMATED_BUY = { Booster = true, Voucher = true }
+
 function NeuroAnim.on_buy(card)
-  if not card then return end
-  immediate("anim_card_beat", function() juice("anim_card_beat", card, 0.6, 0.35) end)
+  if not card or (card.ability and ENGINE_ANIMATED_BUY[card.ability.set]) then return end
+  queue("anim_card_beat", nil, function() juice("anim_card_beat", card, 0.6, 0.35) end)
 end
 
 function NeuroAnim.on_round_eval()
-  after("anim_card_beat", Motion.SLOW, function()
+  queue("anim_card_beat", Motion.SLOW, function()
     if G and G.jokers and G.jokers.cards then
       ripple("anim_card_beat", G.jokers.cards, 0, Motion.STAGGER_WIDE, 0.45, 0.28)
     end
@@ -455,31 +466,14 @@ local NEURO_LINES = {
   term_line("uplink",               "ESTABLISHED", nil,  0.70),
 }
 
-local EVIL_LINES = {
-  term_line("> neuro.exe --login --force", nil,      nil,  0.00),
-  term_line("bios check",           "OK",            nil,  0.06),
-  term_line("consciousness.dll",    "HIJACKED",      true, 0.15),
-  term_line("tony",                 "ON DUTY",       nil,  0.24),
-  term_line("speech synthesis",     "READY",         nil,  0.33),
-  term_line("Nere",                 "FILTERED",      nil,  0.42),
-  term_line("vedal oversight",      "DISABLED",      true, 0.51),
-  term_line("heart",                "<3 <3 <3",      true, 0.60),
-  term_line("uplink",               "ESTABLISHED",   nil,  0.70),
-}
-
-local _login_font = nil
-local _login_font_big = nil
-local _login_font_sz = 0
-local _login_font_sz_big = 0
+local EVIL_LINES = { unpack(NEURO_LINES) }
+EVIL_LINES[1] = term_line("> neuro.exe --login --force", nil, nil, 0.00)
+EVIL_LINES[3] = term_line("consciousness.dll", "HIJACKED", true, 0.15)
+EVIL_LINES[7] = term_line("vedal oversight", "DISABLED", true, 0.51)
+EVIL_LINES[8] = term_line("heart", "<3 <3 <3", true, 0.60)
 
 local function get_login_fonts(sh)
-  local sz = math.max(14, math.floor(sh / 40))
-  local sz_big = math.max(24, math.floor(sh / 15))
-  if _login_font and _login_font_sz == sz and _login_font_sz_big == sz_big then return _login_font, _login_font_big end
-  _login_font, _login_font_big = Utils.load_font_pair("resources/fonts/m6x11plus.ttf", sz, sz_big)
-  _login_font_sz = sz
-  _login_font_sz_big = sz_big
-  return _login_font, _login_font_big
+  return Assets.font_px(math.max(14, math.floor(sh / 40))), Assets.font_px(math.max(24, math.floor(sh / 15)))
 end
 
 local function typed_str(tc, text, now2)
@@ -493,6 +487,12 @@ local function typed_str(tc, text, now2)
     tc.str = text:sub(1, n)
   end
   return tc.str or ""
+end
+
+local function scan_rects(w, h)
+  local list = {}
+  for oy = 0, h - 4, 3 do RectMesh.rect(list, 0, oy, w - 2, 1, 1, 1, 1, 1) end
+  return list
 end
 
 local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_t, ma)
@@ -633,36 +633,20 @@ local function draw_terminal_content(anim, sw, sh, now2, phase, phase_t, reveal_
     love.graphics.rectangle("fill", inner_x, bar_y, fill_w, 3)
   end
 
-  love.graphics.setColor(0, 0, 0, 0.08 * ma)
-  local scan = RectMesh.get("login_scan", panel_w, panel_h)
-  if not scan and RectMesh.available() then
-    local v, i = {}, {}
-    for oy = 0, panel_h - 4, 3 do
-      RectMesh.add(v, i, 0, oy, panel_w - 2, 1, 1, 1, 1, 1)
-    end
-    scan = RectMesh.build(v, i)
-    if scan then RectMesh.put("login_scan", panel_w, panel_h, nil, nil, nil, nil, scan) end
-  end
-  if scan then
-    love.graphics.draw(scan, px + 1, py + 2)
-  else
-    for yy = py + 2, py + panel_h - 2, 3 do
-      love.graphics.rectangle("fill", px + 1, yy, panel_w - 2, 1)
-    end
-  end
+  local scan = RectMesh.cached(RectMesh.shared, "login_scan", panel_w, panel_h, nil, nil, nil, nil,
+    nil, nil, scan_rects, panel_w, panel_h)
+  RectMesh.fill(scan, px + 1, py + 2, 0, 0, 0, 0.08 * ma, scan_rects, panel_w, panel_h)
 end
+
+local PHASES = { { "BOOT", 0.35 }, { "LOADING", 2.00 }, { "CONNECTED", 1.75 }, { "FADE_OUT", 0.60 } }
+local BOOT, LOADING = PHASES[1][2], PHASES[2][2]
+local TOTAL = BOOT + LOADING + PHASES[3][2] + PHASES[4][2]
 
 function NeuroAnim.draw_login_anim()
   if not G or not G.NEURO or not G.NEURO.login_anim then return end
   local anim = G.NEURO.login_anim
   local now2 = Utils.now()
   local elapsed = now2 - anim.start
-
-  local BOOT      = 0.35
-  local LOADING   = 2.00
-  local CONNECTED = 1.75
-  local FADE_OUT  = 0.60
-  local TOTAL = BOOT + LOADING + CONNECTED + FADE_OUT
 
   if elapsed > TOTAL then
     G.NEURO.login_anim = nil
@@ -673,19 +657,12 @@ function NeuroAnim.draw_login_anim()
     anim.palette_ready = true
   end
 
-  local phase, phase_t
-  if elapsed < BOOT then
-    phase = "BOOT"
-    phase_t = elapsed / BOOT
-  elseif elapsed < BOOT + LOADING then
-    phase = "LOADING"
-    phase_t = (elapsed - BOOT) / LOADING
-  elseif elapsed < BOOT + LOADING + CONNECTED then
-    phase = "CONNECTED"
-    phase_t = (elapsed - BOOT - LOADING) / CONNECTED
-  else
-    phase = "FADE_OUT"
-    phase_t = (elapsed - BOOT - LOADING - CONNECTED) / FADE_OUT
+  local phase, phase_t, edge = nil, elapsed, 0
+  for i = 1, #PHASES do
+    local name, d = PHASES[i][1], PHASES[i][2]
+    edge = edge + d
+    if elapsed < edge or i == #PHASES then phase, phase_t = name, phase_t / d; break end
+    phase_t = phase_t - d
   end
 
   local master_alpha = 1.0
@@ -713,9 +690,9 @@ function NeuroAnim.draw_login_anim()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
-NeuroAnim.settle_poll = SETTLE_POLL
-NeuroAnim.card_settle_budget = CARD_SETTLE_BUDGET
-NeuroAnim.engine_settle_budget = ENGINE_SETTLE_BUDGET
-NeuroAnim.shop_fill_budget = SHOP_FILL_BUDGET
+if _G.NEURO_TEST then
+  NeuroAnim.settle_poll = SETTLE_POLL
+  NeuroAnim.engine_settle_budget = ENGINE_SETTLE_BUDGET
+end
 
 return NeuroAnim

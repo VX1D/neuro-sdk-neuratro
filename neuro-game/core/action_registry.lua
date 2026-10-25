@@ -1,9 +1,12 @@
 local M = {}
 local Metrics = require("util.metrics")
+local json = require("util.neuro_json")
+local ActionSchema = require("core.action_schema")
 
 local contracts = {}
-local narrowers = {}
+local prompt_narrowers = {}
 local preflights = {}
+local payload_guards = {}
 local availability = {}
 local candidate_providers = {}
 local provider_errors = {}
@@ -24,33 +27,6 @@ local function sorted_keys(t)
   return out
 end
 
-local DEFAULT_FAILURE_CODES = sorted_keys(require("core.action_result").CODES)
-M.DEFAULT_FAILURE_CODES = DEFAULT_FAILURE_CODES
-
-local SCALAR_NOUN = { integer = "int", number = "number", string = "text", boolean = "true|false" }
-
-local function value_range(spec)
-  if spec.minimum ~= nil and spec.maximum ~= nil then
-    return " " .. tostring(spec.minimum) .. "-" .. tostring(spec.maximum)
-  end
-  if spec.minimum ~= nil then return " " .. tostring(spec.minimum) .. "+" end
-  if spec.maximum ~= nil then return " up to " .. tostring(spec.maximum) end
-  return ""
-end
-
-local function count_phrase(spec, noun, unique)
-  local lo, hi = spec.minItems, spec.maxItems
-  local many = (unique and " different " or " ") .. (noun or "values")
-  if lo and hi and lo == 1 and hi == 1 then
-    return "pick 1 " .. ((noun or "value"):gsub("s$", ""))
-  end
-  if lo and hi and lo == hi then return "pick exactly " .. tostring(lo) .. many end
-  if lo and hi then return "pick " .. tostring(lo) .. " to " .. tostring(hi) .. many end
-  if lo then return "pick " .. tostring(lo) .. " or more" .. many end
-  if hi then return "pick up to " .. tostring(hi) .. many end
-  return "pick one or more" .. many
-end
-
 local function count_noun(spec, singular)
   local lo, hi = spec.minItems, spec.maxItems
   local plural = singular .. "s"
@@ -64,52 +40,7 @@ local function count_noun(spec, singular)
   return "any number of " .. plural
 end
 
-local function render_description(description, schema)
-  if type(description) ~= "string" or not description:find("{count:", 1, true) then
-    return description
-  end
-  local properties = (schema or {}).properties or {}
-  return (description:gsub("{count:([%w_]+):([^}]+)}", function(field, singular)
-    return count_noun(properties[field] or {}, singular)
-  end))
-end
-
-local ordered_field_names, object_hint
-
-local function value_hint(spec, optional, noun, depth)
-  spec = spec or {}
-  local opt = optional and ", optional" or ""
-  if spec.enum then
-    local choices = {}
-    for _, v in ipairs(spec.enum) do choices[#choices + 1] = '"' .. tostring(v) .. '"' end
-    return "<" .. table.concat(choices, "|") .. opt .. ">"
-  end
-  if spec.type == "array" then
-    local items = spec.items or {}
-    if items.type == "object" and items.properties and depth < 2 then
-      return "[" .. object_hint(items, depth + 1) .. "]" .. (optional and " (optional)" or "")
-    end
-    return "[<" .. count_phrase(spec, noun, spec.uniqueItems) .. opt .. ">]"
-  end
-  if spec.type == "object" then return "<object" .. opt .. ">" end
-  local base = SCALAR_NOUN[spec.type] or "value"
-  if spec.type == "integer" or spec.type == "number" then base = base .. value_range(spec) end
-  return "<" .. base .. opt .. ">"
-end
-
-function object_hint(schema, depth, hints)
-  local properties = schema.properties or {}
-  local required = {}
-  for _, name in ipairs(schema.required or {}) do required[name] = true end
-  local fields = {}
-  for _, name in ipairs(ordered_field_names(schema)) do
-    fields[#fields + 1] = '"' .. name .. '":'
-      .. value_hint(properties[name], not required[name], (hints or {})[name], depth)
-  end
-  return "{" .. table.concat(fields, ",") .. "}"
-end
-
-function ordered_field_names(schema)
+local function ordered_field_names(schema)
   local properties = schema.properties or {}
   local out, seen = {}, {}
   for _, name in ipairs(schema.required or {}) do
@@ -121,71 +52,211 @@ function ordered_field_names(schema)
   return out
 end
 
-local function default_prompt(contract)
-  return contract.name .. "|" .. object_hint(contract.schema or {}, 0, contract.arg_hints)
+local ARRAY_FIELD_NOUNS = {
+  indices = "hand position",
+  intents = "joker intent",
+  action_names = "action name",
+  hand_indices = "hand position",
+}
+
+local function same_spec(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+  for k, v in pairs(a) do if not same_spec(v, b[k]) then return false end end
+  for k in pairs(b) do if a[k] == nil then return false end end
+  return true
 end
 
+local function narrows(spec, base, field)
+  local base_spec = type(base) == "table" and type(base.properties) == "table" and base.properties[field] or nil
+  return not same_spec(spec, base_spec)
+end
+
+local function render_schema_count_hint(schema, base)
+  local properties = (schema or {}).properties or {}
+  for _, field in ipairs(ordered_field_names(schema or {})) do
+    local spec = properties[field]
+    if type(spec) == "table" and spec.type == "array" and narrows(spec, base, field)
+        and (spec.minItems ~= nil or spec.maxItems ~= nil) then
+      local singular = ARRAY_FIELD_NOUNS[field] or field:gsub("_", " ")
+      return "Select " .. count_noun(spec, singular), field
+    end
+  end
+  return nil
+end
+
+local function display_value(value, depth)
+  local kind = type(value)
+  if kind == "string" then
+    if not json.is_valid_utf8(value) then return '"<invalid utf-8>"' end
+    return json.encode(value)
+  end
+  if kind ~= "table" then return tostring(value) end
+  depth = depth or 0
+  if depth >= 2 then return "object" end
+  local parts = {}
+  if #value > 0 then
+    for _, item in ipairs(value) do parts[#parts + 1] = display_value(item, depth + 1) end
+    return "[" .. table.concat(parts, ", ") .. "]"
+  end
+  local keys = {}
+  for key in pairs(value) do keys[#keys + 1] = key end
+  table.sort(keys, function(a, b)
+    local ak, bk = type(a), type(b)
+    if ak ~= bk then return ak < bk end
+    return tostring(a) < tostring(b)
+  end)
+  for _, key in ipairs(keys) do
+    parts[#parts + 1] = tostring(key) .. "=" .. display_value(value[key], depth + 1)
+  end
+  return "{" .. table.concat(parts, ", ") .. "}"
+end
+
+local function field_hint(spec, field)
+  if type(spec) ~= "table" then return nil end
+  if type(spec.enum) == "table" and #spec.enum > 0 then
+    local shown = {}
+    for i = 1, math.min(#spec.enum, 6) do shown[#shown + 1] = tostring(spec.enum[i]) end
+    if #spec.enum > 6 then shown[#shown + 1] = "..." end
+    return "one of " .. table.concat(shown, "/")
+  end
+  if spec.type == "array" then
+    local items = type(spec.items) == "table" and spec.items or {}
+    local singular = ARRAY_FIELD_NOUNS[field or ""]
+      or (field and field:gsub("_", " "):gsub("e?s$", "")) or "entry"
+    local noun = count_noun(spec, singular)
+    local bound_note = ""
+    if items.maximum then bound_note = " 1-" .. tostring(items.maximum) end
+    return noun .. bound_note
+  end
+  if spec.type == "integer" or spec.type == "number" then
+    if spec.minimum and spec.maximum then
+      return tostring(spec.minimum) .. "-" .. tostring(spec.maximum)
+    end
+    if spec.maximum then return "at most " .. tostring(spec.maximum) end
+    return nil
+  end
+  if spec.type == "boolean" then return "true/false" end
+  return nil
+end
+
+local function field_details(bound, selected, schema, base)
+  local details, counted = {}, {}
+  for _, key in ipairs(selected or {}) do
+    local value = bound and bound[key]
+    if type(value) == "table" and #value == 0 and next(value) ~= nil then
+      local subkeys = {}
+      for sub in pairs(value) do subkeys[#subkeys + 1] = tostring(sub) end
+      table.sort(subkeys)
+      for _, sub in ipairs(subkeys) do
+        details[#details + 1] = key .. "." .. sub .. " " .. display_value(value[sub], 1)
+      end
+    elseif value ~= nil then
+      details[#details + 1] = key .. " " .. display_value(value)
+    else
+      local spec = (schema.properties or {})[key]
+      local hint = narrows(spec, base, key) and field_hint(spec, key) or nil
+      details[#details + 1] = hint and (key .. " (" .. hint .. ")") or key
+      if hint and type(spec) == "table" and spec.type == "array"
+        and (spec.minItems ~= nil or spec.maxItems ~= nil) then
+        counted[key] = true
+      end
+    end
+  end
+  return details, counted
+end
+
+local PHRASES = require("core.action_phrases")
+
+local function action_head(name)
+  return assert(PHRASES[name], "no prose phrase for action " .. tostring(name))
+end
+M.phrase = action_head
+
+local function action_context(name, bound, fields, schema)
+  schema = schema or (M.get and M.get(name) or {}).schema or {}
+  local selected = fields
+  if not selected then
+    selected = {}
+    for _, key in ipairs(ordered_field_names(schema)) do
+      if bound and bound[key] ~= nil then selected[#selected + 1] = key end
+    end
+  end
+  if bound and type(bound.name) == "string" then
+    local reordered = { "name" }
+    for _, key in ipairs(selected) do
+      if key ~= "name" then reordered[#reordered + 1] = key end
+    end
+    if #reordered == #selected then selected = reordered end
+  end
+  local details, counted = field_details(bound, selected, schema, (contracts[name] or {}).schema)
+  local out = action_head(name)
+  if #details > 0 then out = out .. " with " .. table.concat(details, ", ") end
+  return out, counted
+end
 function M.register(definition, states)
-  assert(type(definition) == "table" and type(definition.name) == "string",
-    "action definition requires a name")
+  if not ActionSchema.valid_definition(definition) then
+    Metrics.incr("action_definition_rejected")
+    print("[neuro-game] Skipping invalid action definition ("
+      .. tostring(type(definition) == "table" and definition.name or definition) .. ")")
+    return false
+  end
   local existing = contracts[definition.name] or {}
   existing.name = definition.name
   existing.description = definition.description
   existing.schema = definition.schema
-  existing.arg_hints = definition.arg_hints or existing.arg_hints
   existing.states = states or existing.states or {}
-  existing.failure_codes = definition.failure_codes or existing.failure_codes or DEFAULT_FAILURE_CODES
-  existing.idempotency = definition.idempotency or existing.idempotency or "session_scoped_action_id"
   contracts[definition.name] = existing
   return existing
 end
 
-function M.bind_schema_narrower(name, narrower)
-  assert(contracts[name], "cannot bind a schema narrower for unknown action: " .. tostring(name))
-  assert(type(narrower) == "function", "action schema narrower must be a function")
-  narrowers[name] = narrower
+
+function M.bind_prompt_narrower(name, narrower)
+  assert(contracts[name], "cannot bind a prompt narrower for unknown action: " .. tostring(name))
+  assert(type(narrower) == "function", "action prompt narrower must be a function")
+  prompt_narrowers[name] = narrower
 end
 
-local function resolve(name)
+local function resolve(name, for_display)
   local contract = contracts[name]
   if not contract then return nil end
   local schema = contract.schema
-  local narrower = narrowers[name]
+  local narrower = for_display and prompt_narrowers[name]
   if narrower then
     local ok, narrowed = pcall(narrower, schema)
     if not ok then
-      provider_failed("schema narrower", name, narrowed)
+      provider_failed("prompt narrower", name, narrowed)
     elseif type(narrowed) == "table" then
       schema = narrowed
     end
   end
-  local description = render_description(contract.description, schema)
-  if schema == contract.schema and description == contract.description then return contract end
   local out = {}
   for key, value in pairs(contract) do out[key] = value end
   out.schema = schema
-  out.description = description
   return out
 end
 
-function M.get(name)
-  local contract = resolve(name)
+local function always_available() return true end
+
+local function bound(name, for_display)
+  local contract = resolve(name, for_display)
   if not contract then return nil end
   contract.preflight = preflights[name]
-  contract.available = availability[name] or function() return true end
+  contract.available = availability[name] or always_available
   return contract
 end
 
-function M.all()
-  local out = {}
-  for _, name in ipairs(sorted_keys(contracts)) do out[#out + 1] = M.get(name) end
-  return out
+function M.get(name)
+  return bound(name, false)
+end
+
+function M.display(name)
+  return bound(name, true)
 end
 
 function M.definitions()
   local out = {}
   for _, name in ipairs(M.names()) do
-    local contract = resolve(name)
+    local contract = contracts[name]
     out[#out + 1] = {
       name = contract.name,
       description = contract.description,
@@ -194,6 +265,8 @@ function M.definitions()
   end
   return out
 end
+
+
 function M.names()
   return sorted_keys(contracts)
 end
@@ -202,6 +275,11 @@ function M.bind_preflight(name, preflight)
   assert(contracts[name], "cannot bind preflight for unknown action: " .. tostring(name))
   assert(type(preflight) == "function", "action preflight must be a function")
   preflights[name] = preflight
+end
+function M.bind_payload_guard(name, guard)
+  assert(contracts[name], "cannot bind payload guard for unknown action: " .. tostring(name))
+  assert(type(guard) == "function", "action payload guard must be a function")
+  payload_guards[name] = guard
 end
 
 function M.bind_availability(name, predicate)
@@ -219,18 +297,26 @@ function M.bind_candidates(name, provider)
   candidate_providers[name] = provider
 end
 
-function M.available(name)
-  if not contracts[name] then return false end
-  local predicate = availability[name]
-  if not predicate then
-    pcall(require, "core.dispatcher")
-    predicate = availability[name]
-  end
-  if not predicate then return true end
-  local ok, result = pcall(predicate)
-  if not ok then provider_failed("availability", name, result) end
-  return ok and result ~= false
+local function provider(tbl, name)
+  if not tbl[name] then pcall(require, "core.dispatcher") end
+  return tbl[name]
 end
+
+local function availability_check(name)
+  if not contracts[name] then return false, "There is no action named '" .. tostring(name) .. "'." end
+  local predicate = provider(availability, name)
+  if not predicate then return true end
+  local ok, result, reason = pcall(predicate)
+  if not ok then
+    provider_failed("availability", name, result)
+    return false, "The game could not check whether that move is possible right now; choose another."
+  end
+  if result ~= false then return true end
+  return false, reason
+end
+
+function M.unavailable_reason(name) return (select(2, availability_check(name))) end
+function M.available(name) return (availability_check(name)) end
 
 function M.preflight(name, data)
   local preflight = preflights[name]
@@ -238,139 +324,100 @@ function M.preflight(name, data)
     return nil, require("core.action_result").error(
       "ACTION_UNAVAILABLE", "No preflight is registered for action '" .. tostring(name) .. "'.")
   end
-  return preflight(data or {})
+  data = data or {}
+  local guard = payload_guards[name]
+  if guard then
+    local ok, allowed, rejection = pcall(guard, data)
+    if not ok then
+      provider_failed("payload guard", name, allowed)
+      return nil, require("core.action_result").internal_error()
+    end
+    if allowed == false then
+      return nil, require("core.action_result").normalize(
+        rejection or "Action payload is not allowed here.", "ACTION_REJECTED")
+    end
+  end
+  local exec, err, event = preflight(data)
+  if exec and type(exec) ~= "function" then
+    provider_failed("preflight", name, "returned a " .. type(exec) .. " instead of an execution function")
+    return nil, require("core.action_result").internal_error()
+  end
+  return exec, err, event
 end
 
 function M.candidates(name)
-  local provider = candidate_providers[name]
-  if not provider then
-    pcall(require, "core.dispatcher")
-    provider = candidate_providers[name]
-  end
-  if not provider then return {} end
-  local ok, result = pcall(provider)
+  local candidates = provider(candidate_providers, name)
+  if not candidates then return {} end
+  local ok, result = pcall(candidates)
   if not ok then provider_failed("candidate", name, result) end
   return (ok and type(result) == "table") and result or {}
 end
 
-function M.prompt(name)
-  local contract = M.get(name)
-  if not contract then return nil end
-  return default_prompt(contract)
-end
-
-function M.example(name, bound, fields)
-  local contract = M.get(name)
+function M.prompt(name, tail)
+  local contract = M.display(name)
   if not contract then return nil end
   local schema = contract.schema or {}
+  local base = contracts[name].schema
   local properties = schema.properties or {}
-  local hints = contract.arg_hints or {}
+  local narrowed = {}
+  for _, key in ipairs(ordered_field_names(schema)) do
+    if narrows(properties[key], base, key) then narrowed[#narrowed + 1] = key end
+  end
+  local details, counted = field_details(nil, narrowed, schema, base)
+  local prompt = action_head(contract.name)
+  if #details > 0 then prompt = prompt .. " with " .. table.concat(details, ", ") end
+  local hint, counted_field = render_schema_count_hint(schema, base)
+  if hint and not counted[counted_field] then prompt = prompt .. ". " .. hint end
+  if type(tail) == "string" and tail ~= "" then
+    prompt = prompt .. ". " .. tail:sub(1, 1):upper() .. tail:sub(2)
+  end
+  return prompt
+end
+
+local function contract_schema(name)
+  local contract = M.display(name)
+  if not contract then return nil end
+  local schema = contract.schema or {}
+  return schema, schema.properties or {}
+end
+
+function M.example(name, bound_values, fields)
+  local schema, properties = contract_schema(name)
+  if not schema then return nil end
   local required = {}
   for _, key in ipairs(schema.required or {}) do required[key] = true end
-  bound = bound or {}
+  bound_values = bound_values or {}
   local names = fields
   if not names then
     names = {}
     for _, key in ipairs(ordered_field_names(schema)) do
-      if required[key] or bound[key] ~= nil then names[#names + 1] = key end
+      if required[key] or bound_values[key] ~= nil then names[#names + 1] = key end
     end
   end
-  local out = {}
   for _, key in ipairs(names) do
     assert(properties[key] ~= nil,
       string.format("field '%s' is not in the %s contract", tostring(key), name))
-    local rendered
-    if bound[key] ~= nil then
-      rendered = M.encode_ordered(bound[key], properties[key])
-    else
-      rendered = value_hint(properties[key], false, hints[key], 0)
-    end
-    out[#out + 1] = '"' .. key .. '":' .. rendered
   end
-  return name .. "|{" .. table.concat(out, ",") .. "}"
+  return (action_context(name, bound_values, names, schema))
 end
 
 function M.render(name, payload)
-  local contract = M.get(name)
-  if not contract then return nil end
-  local schema = contract.schema or {}
-  local properties = schema.properties or {}
-  local fields = {}
-  for field, value in pairs(payload or {}) do
+  local schema, properties = contract_schema(name)
+  if not schema then return nil end
+  for field in pairs(payload or {}) do
     assert(field:sub(1, 1) == "_" or properties[field] ~= nil,
       string.format("field '%s' is not in the %s contract", tostring(field), name))
-    fields[field] = value
   end
-  return name .. "|" .. M.encode_ordered(fields, schema)
+  return (action_context(name, payload or {}, nil, schema))
 end
 
-function M.encode_ordered(value, schema)
-  local NeuroJson = require("util.neuro_json")
-  if type(value) ~= "table" then return NeuroJson.encode(value) end
-  if NeuroJson.is_array(value) or (#value > 0 and not NeuroJson.is_object(value)) then
-    local out = {}
-    for i = 1, #value do out[#out + 1] = M.encode_ordered(value[i], (schema or {}).items) end
-    return "[" .. table.concat(out, ",") .. "]"
-  end
-  schema = schema or {}
-  local properties = schema.properties or {}
-  local order, seen = {}, {}
-  for _, key in ipairs(ordered_field_names(schema)) do
-    if value[key] ~= nil then order[#order + 1] = key; seen[key] = true end
-  end
-  for _, key in ipairs(sorted_keys(value)) do
-    if not seen[key] then order[#order + 1] = key end
-  end
-  local out = {}
-  for _, key in ipairs(order) do
-    out[#out + 1] = NeuroJson.encode(tostring(key)) .. ":" .. M.encode_ordered(value[key], properties[key])
-  end
-  return "{" .. table.concat(out, ",") .. "}"
-end
-
-function M.validate(opts)
-  opts = opts or {}
-  local errors = {}
-  for _, contract in ipairs(M.all()) do
-    if type(contract.description) ~= "string" or contract.description == "" then
-      errors[#errors + 1] = contract.name .. ": missing description"
-    end
-    if type(contract.schema) ~= "table" or contract.schema.type ~= "object" then
-      errors[#errors + 1] = contract.name .. ": missing object schema"
-    end
-    if type(contract.states) ~= "table" or next(contract.states) == nil then
-      errors[#errors + 1] = contract.name .. ": no states"
-    end
-    if type(contract.failure_codes) ~= "table" or #contract.failure_codes == 0 then
-      errors[#errors + 1] = contract.name .. ": no failure code contract"
-    else
-      local codes = require("core.action_result").CODES
-      for _, code in ipairs(contract.failure_codes) do
-        if not codes[code] then errors[#errors + 1] = contract.name .. ": unknown failure code " .. tostring(code) end
-      end
-    end
-    if contract.idempotency ~= "session_scoped_action_id" then
-      errors[#errors + 1] = contract.name .. ": invalid idempotency contract"
-    end
-    if type(M.prompt(contract.name)) ~= "string" then
-      errors[#errors + 1] = contract.name .. ": no prompt"
-    end
-    if opts.require_preflights and not preflights[contract.name] then
-      errors[#errors + 1] = contract.name .. ": no preflight"
-    end
-  end
-  return #errors == 0, errors
-end
 
 M.DYING_GRACE = 10
 
 local function clock()
   return require("util.utils").gate_now("action_dying_grace")
 end
-
-function M.now()
-  return clock()
-end
+M.now = clock
 
 local live_registered = {}
 local dying = {}

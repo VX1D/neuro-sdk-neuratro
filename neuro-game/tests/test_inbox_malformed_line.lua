@@ -1,5 +1,4 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return 0 end } }
+require("tests.stubs").setup({ love = "zero" })
 _G.G = { NEURO = {}, TIMERS = { REAL = 0 } }
 
 local Bridge = require("core.bridge")
@@ -81,6 +80,84 @@ do
   b:poll_inbox()
   check("multiple malformed lines in one chunk are all skipped, good line still delivered",
     calls() == 1 and seen[1] == "context", table.concat(seen, ","))
+end
+
+local function capture_poll(fn)
+  local captured = {}
+  local original_print = print
+  print = function(...)
+    local args = { ... }
+    for i = 1, #args do args[i] = tostring(args[i]) end
+    captured[#captured + 1] = table.concat(args, " ")
+  end
+  local ok, err = pcall(fn)
+  print = original_print
+  return ok, err, captured
+end
+
+do
+  local marker = "IPC_REDACTION_SECRET_NOT_MESSAGE_2c81"
+  local b = fresh_bridge()
+  append('{"data":{"marker":"' .. marker .. '"}}' .. "\n")
+  local ok, err, captured = capture_poll(function() b:poll_inbox() end)
+  local diagnostics = table.concat(captured, "\n")
+  check("a captured malformed object does not throw", ok, tostring(err))
+  check("a malformed object emits the not-a-message diagnostic",
+    diagnostics:find("not a message", 1, true) ~= nil, diagnostics)
+  check("a malformed object diagnostic omits its payload marker",
+    diagnostics:find(marker, 1, true) == nil, diagnostics)
+end
+
+do
+  local inbox_cap = 10 * 1024 * 1024
+  local marker = "IPC_REDACTION_SECRET_COMPLETE_7f3a"
+  local b, seen, calls = fresh_bridge()
+  append(marker .. string.rep("c", inbox_cap) .. "\n" .. GOOD_LINE .. "\n")
+
+  local ok, err, captured = capture_poll(function()
+    for _ = 1, 256 do
+      b:poll_inbox()
+      if calls() == 1 then break end
+    end
+  end)
+  local diagnostics = table.concat(captured, "\n")
+  check("an oversized complete line does not throw", ok, tostring(err))
+  check("an oversized complete line never prints its payload marker",
+    diagnostics:find(marker, 1, true) == nil, #captured)
+  check("an oversized complete line emits a bounded diagnostic",
+    diagnostics:find("line discarded", 1, true) ~= nil, diagnostics)
+  check("a good line after an oversized complete line is delivered",
+    ok and calls() == 1 and seen[1] == "context", table.concat(seen, ","))
+end
+
+do
+  local inbox_cap = 10 * 1024 * 1024
+  local marker = "IPC_REDACTION_SECRET_UNTERMINATED_b91c"
+  local b, seen, calls = fresh_bridge()
+  append(marker .. string.rep("u", inbox_cap))
+
+  local ok_partial, err_partial, partial_captured =
+    capture_poll(function()
+      for _ = 1, 161 do b:poll_inbox() end
+    end)
+  check("an oversized unterminated remainder does not throw", ok_partial, tostring(err_partial))
+  check("an oversized unterminated remainder emits a bounded diagnostic",
+    ok_partial and table.concat(partial_captured, "\n"):find("line discarded", 1, true) ~= nil,
+    #partial_captured)
+
+  append("\n" .. GOOD_LINE .. "\n")
+  local ok_finish, err_finish, finish_captured = capture_poll(function()
+    for _ = 1, 256 do
+      b:poll_inbox()
+      if calls() == 1 then break end
+    end
+  end)
+  local diagnostics = table.concat(partial_captured, "\n") .. "\n"
+    .. table.concat(finish_captured, "\n")
+  check("an oversized unterminated remainder never prints its payload marker",
+    diagnostics:find(marker, 1, true) == nil, #partial_captured + #finish_captured)
+  check("a good line after the discarded remainder is delivered",
+    ok_finish and calls() == 1 and seen[1] == "context", tostring(err_finish))
 end
 
 TmpWork.close()

@@ -9,21 +9,14 @@ local set_col = H.set_col
 local shadow_text = H.shadow_text
 local caps_label, tracked_width = H.caps_label, H.tracked_width
 local draw_card_mini, card_dimensions, card_sprite = H.draw_card_mini, H.card_dimensions, H.card_sprite
-local rarity_color, card_display_name, card_description =
-  H.rarity_color, H.card_display_name, H.card_description
+local rarity_color, card_display_name = H.rarity_color, H.card_display_name
 local modifier_badges, layout_modifier_badges, draw_modifier_badges =
   H.modifier_badges, H.layout_modifier_badges, H.draw_modifier_badges
 local Showcase = require("hud.showcase")
-local CardUtil = require("facts.card_util")
 local StateKinds = require("core.state_kinds")
 local Vouchers = require("hud.vouchers")
-local Utils = H.Utils
 
-local PIN_MO = { pulse = 0.5 }
-local function pin_mo(mo)
-  PIN_MO.pulse = (mo and mo.pulse) or 0.5
-  return PIN_MO
-end
+local pin_mo = H.pin_motion()
 
 local function voucher_key(card)
   local c = card and card.config and card.config.center
@@ -39,16 +32,8 @@ local TL = {
   OUT_FADE = Showcase.JOKER_SHOWCASE_FADE_OUT,
 }
 
--- A verb morph-pairs only when the same card table survives from buy_showcase into joker_showcase.
--- shop_use/use route through use_card (button_callbacks.lua:2238 removes, :2262 consumes) and
--- booster_pick's card never reaches the acquire screen (pack cinematic owns that beat instead,
--- see PACK_CINEMATIC_AREAS) -- none of the three ever pair.
 local MORPH_AREAS = {
   shop_jokers = true, shop_vouchers = true,
-}
-local RECEIPT_ONLY = {
-  refused = true, lost = true, sell = true, shop_booster = true, shop = true,
-  shop_use = true, use = true, booster_pick = true,
 }
 
 local AREA_LABEL = {
@@ -75,19 +60,13 @@ local function receipt_label(sc, area_tag)
   return AREA_LABEL[area_tag] or "BOUGHT"
 end
 
-local _deco = {}
+local NEUTRAL = { TL = TL.soft, ease = smoothstep01 }
+local NEUTRAL_MT = { __index = NEUTRAL }
 local function deco_for(pk)
-  local d = _deco[tostring(pk)]
-  if d == nil then
-    local ok, mod = pcall(require, "render.panels.acquire_" .. tostring(pk))
-    d = (ok and type(mod) == "table") and mod or false
-    _deco[tostring(pk)] = d
-  end
-  return d or nil
-end
-
-local function timeline(deco)
-  return (deco and deco.TL) or TL.soft
+  local d = H.persona_decorator("acquire", pk)
+  if not d then return NEUTRAL end
+  if not getmetatable(d) then setmetatable(d, NEUTRAL_MT) end
+  return d
 end
 
 local MORPH_INK_OUT = 0.4
@@ -169,8 +148,8 @@ local function receipt_fonts(th)
     th.cfont_small or th.panel_font_small or font
 end
 
-local function stage_cx(ctx, sw)
-  return S.ov.stage_cx or ctx.center_cx or math.floor(sw / 2)
+local function stage_cx(ctx)
+  return S.ov.stage_cx or ctx.center_cx
 end
 
 local function merged_money(sc)
@@ -185,9 +164,9 @@ end
 local function measure_receipt(ctx, sc)
   local th, _, me = H.bind(ctx)
   local font, nfont, efont = receipt_fonts(th)
-  local cn = me.cn or function(v) return v end
+  local cn = me.cn
   local sw = me.sw
-  local TRACK = me.TRACK or 2
+  local TRACK = me.TRACK
   local GUT = cn(me.GUT)
   local nfh, efh, pfh = nfont:getHeight(), efont:getHeight(), font:getHeight()
   local L = layout_receipt(cn, nfh, efh)
@@ -215,8 +194,8 @@ local function measure_receipt(ctx, sc)
   local fixed_l = L.accent_w + L.pad_l + (has_thumb and (thumb_w + L.gap) or 0)
   local fixed_r = (price_str and (GUT + price_w) or 0) + L.pad_r
   local content_w = math.max(eyebrow_w, nfont:getWidth(value))
-  local max_w = math.min(L.max_w, ctx.center_max_w or (sw - 40))
-  max_w = math.max(80, math.min(max_w, sw - 16))
+  local max_w = math.min(L.max_w, ctx.center_max_w)
+  max_w = math.min(math.max(80, max_w), math.max(0, sw - 16))
   local min_w = math.min(L.min_w, max_w)
   local w = math.min(max_w,
     math.max(min_w, math.ceil((fixed_l + content_w + fixed_r) / L.quant) * L.quant))
@@ -245,57 +224,33 @@ local function measure_receipt(ctx, sc)
   }
 end
 
-local function receipt_key_stale(sc, sw, font, nfont, efont)
-  local k = sc._Lr_key
-  return k == nil
-    or k[1] ~= sc.area or k[2] ~= sc.name or k[3] ~= sc.cost or k[4] ~= sc.merged
-    or k[5] ~= sc.merged_spend or k[6] ~= sc.merged_gain
-    or k[7] ~= sc.effect or k[8] ~= sc.card or k[9] ~= sc.code
-    or k[10] ~= sw or k[11] ~= font or k[12] ~= nfont or k[13] ~= efont
-end
-
-local function receipt_key_store(sc, sw, font, nfont, efont)
-  local k = sc._Lr_key
-  if not k then k = {}; sc._Lr_key = k end
-  k[1], k[2], k[3], k[4] = sc.area, sc.name, sc.cost, sc.merged
-  k[5], k[6] = sc.merged_spend, sc.merged_gain
-  k[7], k[8], k[9] = sc.effect, sc.card, sc.code
-  k[10], k[11], k[12], k[13] = sw, font, nfont, efont
-end
-
--- layout_full reads center_max_w, which eases in 16px buckets while a side panel slides in.
-local function full_key_stale(js, sw, center_max_w, font, nfont, efont)
-  local k = js._Lf_key
-  return k == nil
-    or k[1] ~= sw or k[2] ~= center_max_w
-    or k[3] ~= font or k[4] ~= nfont or k[5] ~= efont
-    or k[6] ~= js.card or k[7] ~= js.label or k[8] ~= js.merged
-end
-
-local function full_key_store(js, sw, center_max_w, font, nfont, efont)
-  local k = js._Lf_key
-  if not k then k = {}; js._Lf_key = k end
-  k[1], k[2] = sw, center_max_w
-  k[3], k[4], k[5] = font, nfont, efont
-  k[6], k[7], k[8] = js.card, js.label, js.merged
-end
-
-local function build_desc(card)
-  if not card then return "" end
-  local badges = modifier_badges(card)
-  if (Utils.is_playing_card(card) or CardUtil.enhancement_key(card)) and #badges > 0 then
-    return ""
+local function key_stale(k, ...)
+  if k == nil then return true end
+  for i = 1, select("#", ...) do
+    if k[i] ~= select(i, ...) then return true end
   end
-  if Utils.is_playing_card(card) or CardUtil.enhancement_key(card) then
-    return CardUtil.card_modifier_desc(card) or ""
-  end
-  local d = card_description(card)
-  if (not d or d == "") and card.config and card.config.center then
-    local ok, sd = pcall(Utils.safe_description, card.config.center.loc_txt, card)
-    if ok and type(sd) == "string" then d = sd end
-  end
-  return d or ""
+  return false
 end
+
+local function key_store(owner, field, ...)
+  local k = owner[field]
+  if not k then k = {}; owner[field] = k end
+  for i = 1, select("#", ...) do k[i] = select(i, ...) end
+end
+
+local function receipt_key(sc, sw, font, nfont, efont)
+  return sc.area, sc.name, sc.cost, sc.merged, sc.merged_spend, sc.merged_gain,
+    sc.effect, sc.card, sc.code, sw, font, nfont, efont
+end
+local function receipt_key_stale(sc, ...) return key_stale(sc._Lr_key, receipt_key(sc, ...)) end
+local function receipt_key_store(sc, ...) key_store(sc, "_Lr_key", receipt_key(sc, ...)) end
+
+local function full_key(js, sw, center_max_w, font, nfont, efont)
+  return sw, center_max_w, font, nfont, efont, js.card, js.label, js.merged
+end
+local function full_key_stale(js, ...) return key_stale(js._Lf_key, full_key(js, ...)) end
+local function full_key_store(js, ...) key_store(js, "_Lf_key", full_key(js, ...)) end
+
 
 local MAX_DESC = 6
 
@@ -303,17 +258,17 @@ local function layout_full(ctx, sc)
   local th, _, me, _, dr = H.bind(ctx)
   local font, nfont, efont, small_f = receipt_fonts(th)
   small_f = small_f or font
-  local cn = me.cn or function(v) return v end
+  local cn = me.cn
   local sw = me.sw
-  local TRACK_SM = me.TRACK_SM or 1
+  local TRACK_SM = me.TRACK_SM
   local U = cn(me.U)
   local wrapped_lines = dr.wrapped_lines
   local card = sc.card
   local label = sc.label or Showcase.card_set_label(card)
   local sfh, nfh, efh = small_f:getHeight(), nfont:getHeight(), efont:getHeight()
-  local lead = cn(4)   -- EYEBROW_LEAD
+  local lead = cn(4)
 
-  local max_w = math.min(sw, math.max(140, math.min(ctx.center_max_w or (sw - 40), cn(500))))
+  local max_w = math.min(sw - 16, math.max(140, math.min(ctx.center_max_w, cn(500))))
   local mini_h = cn(110)
   local mw3, mh3 = 0, 0
   if card then mw3, mh3 = card_dimensions(card, mini_h) end
@@ -323,7 +278,7 @@ local function layout_full(ctx, sc)
   local tw_max = max_w - text_off - 8
 
   local name = card and card_display_name(card) or "Card"
-  local desc = build_desc(card)
+  local desc = H.panel_card_desc(card)
   local desc_lines = {}
   if desc and desc ~= "" then desc_lines = wrapped_lines(desc, tw_max, small_f) end
   local badge_layout = layout_modifier_badges(modifier_badges(card), small_f, tw_max, cn(1), 2)
@@ -382,7 +337,6 @@ local function geom_at(Lr, Lf, m, cx, top_y, out, w_override)
   local y = top_y
   local g = out or {}
   g.x, g.y, g.w, g.h, g.m, g.a = x, y, w, h, m, 1
-  g.rad = 0
   g.card_x = x + round(lp(a.card_dx, b.card_dx, m))
   g.card_y = y + round(lp((a.h - a.card_h) / 2, (b.h - b.card_h) / 2, m))
   g.card_w = round(lp(a.card_w, b.card_w, m))
@@ -405,13 +359,7 @@ end
 
 local _geom_out = {}
 
-local function premix(dst, base, wash, aw)
-  local inv = 1 - aw
-  dst[1] = base[1] * inv + wash[1] * aw
-  dst[2] = base[2] * inv + wash[2] * aw
-  dst[3] = base[3] * inv + wash[3] * aw
-  return dst
-end
+local premix = require("render.gfx").premix
 
 local function wash_plate(dst, plate, wash, aw, a)
   local plate_a = 0.97 * a * (1 - aw)
@@ -424,7 +372,7 @@ local function wash_plate(dst, plate, wash, aw, a)
 end
 
 local _neutral_bands, _neutral_frame_col = { { 0, 0, false, 0 } }, { 0, 0, 0 }
-local _neutral_wash_plate, _neutral_outline = { 0, 0, 0 }, { 0, 0, 0 }
+local _neutral_outline = { 0, 0, 0 }
 local _eyebrow_col = { 0, 0, 0 }
 local _flight, _flight_probe = {}, {}
 
@@ -432,33 +380,17 @@ local function neutral_frame(ctx, g)
   local th, mo = H.bind(ctx)
   local wash_a = g.wash and g.content_a_full > 0 and (0.16 * g.a * g.content_a_full) or 0
   local bands, frame = nil, th.FR
-  if wash_a > 0 and g.rad == 0 then
+  -- Only the undecorated persona reaches this branch, with rad == 0.
+  if wash_a > 0 then
     local band = _neutral_bands[1]
     band[2], band[3], band[4] = g.h, g.wash, wash_a
     bands = _neutral_bands
     frame = premix(_neutral_frame_col, th.FR, g.wash, wash_a)
   end
-  local bg, bg_a
-  if wash_a > 0 and g.rad ~= 0 then
-    bg, bg_a = wash_plate(_neutral_wash_plate, th.bg, g.wash, wash_a, g.a)
-    frame = premix(_neutral_frame_col, th.FR, g.wash, wash_a)
-    Prims.panel_shell(g.x, g.y, g.w, g.h, g.rad, 1, 1, 0.55 * g.a, bg, bg_a, g.a)
-    love.graphics.setColor(frame[1], frame[2], frame[3], 0.90 * g.a)
-    love.graphics.setLineWidth(1)
-    love.graphics.rectangle("line", g.x, g.y, g.w, g.h, g.rad, g.rad)
-    wash_a = 0
-  else
-    Prims.panel_base(g.x, g.y, g.w, g.h, g.rad, 1, g.a, th.bg, frame, bands)
-  end
+  Prims.panel_base(g.x, g.y, g.w, g.h, g.rad, 1, g.a, th.bg, frame, bands)
   local rc, fc = g._col_receipt or th.pg, g._col_full or th.pg
   local col = _neutral_outline
-  col[1] = rc[1] + (fc[1] - rc[1]) * g.m
-  col[2] = rc[2] + (fc[2] - rc[2]) * g.m
-  col[3] = rc[3] + (fc[3] - rc[3]) * g.m
-  if wash_a > 0 and not bands then
-    set_col(g.wash, wash_a)
-    love.graphics.rectangle("fill", g.x, g.y, g.w, g.h, g.rad, g.rad)
-  end
+  col[1], col[2], col[3] = H.mix(rc, fc, g.m)
   set_col(col, (0.66 + 0.10 * mo.pulse) * g.a)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", g.x, g.y, g.w, g.h, g.rad, g.rad)
@@ -480,6 +412,8 @@ local function neutral_timer(ctx, g, _frac)
   love.graphics.rectangle("fill", g.x + g.rad, g.timer_y, g.timer_w, 2)
 end
 
+NEUTRAL.frame, NEUTRAL.accent, NEUTRAL.timer = neutral_frame, neutral_accent, neutral_timer
+
 local function showcase_queued(card)
   if not card then return false end
   for _, it in ipairs(S.joker_showcase_q or {}) do
@@ -492,13 +426,13 @@ local function draw_acquire(ctx)
   local th, mo, me, da, dr = H.bind(ctx)
   local now = mo.now
   local persona_evil = th.persona_evil
-  local cn = me.cn or function(v) return v end
+  local cn = me.cn
   local sw = me.sw
   local deco = deco_for(th.pk)
-  local tl = timeline(deco)
+  local tl = deco.TL
   local trunc = dr.trunc
 
-  local sn = tostring(da.sn or "")
+  local sn = da.sn
 
   local sc = S.buy_showcase
   local js = S.joker_showcase
@@ -507,14 +441,14 @@ local function draw_acquire(ctx)
     S.ov.stage_cx, S.ov.stage_max_w = nil, nil
     S.ov.stage_sw, S.ov.stage_sh = nil, nil
   elseif S.ov.stage_cx == nil or S.ov.stage_sw ~= sw or S.ov.stage_sh ~= me.sh then
-    S.ov.stage_cx = ctx.center_cx or math.floor(sw / 2)
-    S.ov.stage_max_w = ctx.center_max_w or (sw - 40)
+    S.ov.stage_cx = ctx.center_cx
+    S.ov.stage_max_w = ctx.center_max_w
     S.ov.stage_sw, S.ov.stage_sh = sw, me.sh
   else
-    local live_max = ctx.center_max_w or (sw - 40)
+    local live_max = ctx.center_max_w
     if live_max < (S.ov.stage_max_w or live_max) then
       S.ov.stage_max_w = live_max
-      S.ov.stage_cx = ctx.center_cx or S.ov.stage_cx
+      S.ov.stage_cx = ctx.center_cx
     end
   end
 
@@ -522,7 +456,6 @@ local function draw_acquire(ctx)
   if paired and sc and js and not sc._morph_at and morph_at and now >= morph_at then
     sc._morph_at = morph_at
     sc._morph_d = tl.MORPH
-    -- Carries merged, or this layout omits the chip the keyed rebuild below includes.
     sc._Lf = layout_full(ctx, { card = sc.card, label = js.label, merged = js.merged })
     js._Lf = sc._Lf
     js._morphed = true
@@ -553,7 +486,7 @@ local function draw_acquire(ctx)
   end
 
   if js and js.card and not morphing
-    and StateKinds.is_pack_state(tostring((G and G.NEURO and G.NEURO.force_state) or sn))
+    and StateKinds.is_pack_state(tostring(require("core.window").state_name() or sn))
     and da.pack_rows and da.pack_rows.cards and #da.pack_rows.cards > 0 then
     Showcase.note_stage_frozen(now)
   end
@@ -610,8 +543,7 @@ local function draw_acquire(ctx)
     sc._w_draw = w_override or Lr.w
   end
 
-  local ease = (deco and deco.ease) or smoothstep01
-  local m = (mode == "morph") and ease(m01) or m01
+  local m = (mode == "morph") and deco.ease(m01) or m01
 
   local a
   local slide_y = 0
@@ -659,11 +591,11 @@ local function draw_acquire(ctx)
   end
   if a <= 0 and not flight then return end
 
-  local cx = stage_cx(ctx, sw)
+  local cx = stage_cx(ctx)
   local top_y = ctx.center_top_y + slide_y
   local g = geom_at(Lr, Lf, m, cx, top_y, _geom_out, w_override)
   g.a = a
-  g.rad = (deco and deco.rad) and deco.rad(cn) or 0
+  g.rad = deco.rad and deco.rad(cn) or 0
   g.content_a_receipt = (mode == "receipt") and 1
     or ((mode == "morph") and (1 - clamp01(m01 / MORPH_INK_OUT)) or 0)
   g.content_a_full = (mode == "full") and 1 or clamp01((m01 - 0.5) / 0.5)
@@ -691,35 +623,31 @@ local function draw_acquire(ctx)
   g.pulse = mo.pulse
   g.flight = flight
 
-  da.showcase_alpha = math.max(da.showcase_alpha or 0, a * m01)
+  da.showcase_alpha = math.max(da.showcase_alpha, a * m01)
 
   local prev_font = love.graphics.getFont()
   love.graphics.setFont(font)
 
-  local frame_fn = (deco and deco.frame) or neutral_frame
-  frame_fn(ctx, g)
-  local accent_fn = (deco and deco.accent) or neutral_accent
-  accent_fn(ctx, g)
+  deco.frame(ctx, g)
+  deco.accent(ctx, g)
 
-  if deco and deco.burst then
+  if deco.burst then
     if mode == "receipt" and elapsed_r >= 0 and elapsed_r < 0.35 then
       deco.burst(ctx, g, "in", clamp01(elapsed_r / 0.35))
     end
+    local fx_at
     if sc and sc._morph_at then
-      local fx_at = sc._morph_at + (sc._morph_d or tl.MORPH) - (tl.FX_LEAD or 0)
-      if now >= fx_at and now < fx_at + 0.45 then
-        deco.burst(ctx, g, "morph_end", clamp01((now - fx_at) / 0.45))
-      end
+      fx_at = sc._morph_at + (sc._morph_d or tl.MORPH) - (tl.FX_LEAD or 0)
     elseif mode == "full" then
       local elapsed = now - (js.started or now)
       if js._morphed then
-        local fx_at = (js.started or now) - (tl.FX_LEAD or 0)
-        if now >= fx_at and now < fx_at + 0.45 then
-          deco.burst(ctx, g, "morph_end", clamp01((now - fx_at) / 0.45))
-        end
+        fx_at = (js.started or now) - (tl.FX_LEAD or 0)
       elseif elapsed >= 0 and elapsed < 0.35 then
         deco.burst(ctx, g, "in", clamp01(elapsed / 0.35))
       end
+    end
+    if fx_at and now >= fx_at and now < fx_at + 0.45 then
+      deco.burst(ctx, g, "morph_end", clamp01((now - fx_at) / 0.45))
     end
   end
 
@@ -756,7 +684,7 @@ local function draw_acquire(ctx)
       print("[neuro-game] acquire panel: draw_card_mini failed for " ..
         tostring(card and card.ability and card.ability.name))
     end
-    if deco and deco.card_frame then deco.card_frame(ctx, g) end
+    if deco.card_frame then deco.card_frame(ctx, g) end
   end
 
   local car = g.content_a_receipt
@@ -768,13 +696,11 @@ local function draw_acquire(ctx)
   if Lr then
     local WHITE = th.WHITE
     eyebrow_col = _eyebrow_col
-    eyebrow_col[1] = accent[1] + (WHITE[1] - accent[1]) * 0.55
-    eyebrow_col[2] = accent[2] + (WHITE[2] - accent[2]) * 0.55
-    eyebrow_col[3] = accent[3] + (WHITE[3] - accent[3]) * 0.55
+    eyebrow_col[1], eyebrow_col[2], eyebrow_col[3] = H.mix(accent, WHITE, 0.55)
   end
 
   love.graphics.setFont(efont)
-  local TRACK = (mode == "full" or mode == "morph") and (me.TRACK_SM or 1) or (me.TRACK or 2)
+  local TRACK = (mode == "full" or mode == "morph") and me.TRACK_SM or me.TRACK
   local lbl_end
   if Lr and cf_out > 0 then
     local eb_a = content_a * cf_out
@@ -793,7 +719,7 @@ local function draw_acquire(ctx)
   if Lf and cf_in > 0 then
     local fw_a = content_a * cf_in
     local e2 = caps_label(Lf.label, g.text_x, g.eyebrow_y, sc_pg or th.pg,
-      0.92 + 0.08 * quant_alpha(mo.pulse), me.TRACK_SM or 1, efont,
+      0.92 + 0.08 * quant_alpha(mo.pulse), me.TRACK_SM, efont,
       0.30, nil, nil, S, "acq_forward_eyebrow", fw_a)
     if Lf.chip_str then
       shadow_text(Lf.chip_str, e2 + cn(6), g.eyebrow_y, th.WHITE,
@@ -801,7 +727,7 @@ local function draw_acquire(ctx)
     end
     lbl_end = math.max(lbl_end or 0, e2)
   end
-  if deco and deco.label_deco and lbl_end then
+  if deco.label_deco and lbl_end then
     deco.label_deco(ctx, g, math.min(lbl_end, g.x + g.w - cn(4)))
   end
 
@@ -835,11 +761,10 @@ local function draw_acquire(ctx)
   if sc and car > 0 then
     local frac = timer_frac(sc, now, receipt_ends_at(sc, tl, morph_at))
     g.timer_w = round(math.max(2, (g.w - g.rad * 2) * frac))
-    local timer_fn = (deco and deco.timer) or neutral_timer
-    timer_fn(ctx, g, frac)
+    deco.timer(ctx, g, frac)
   end
 
-  if deco and deco.crest then deco.crest(ctx, g) end
+  if deco.crest then deco.crest(ctx, g) end
 
   if prev_font then love.graphics.setFont(prev_font) end
   ctx.center_top_y = ctx.center_top_y + round((g.h + cn(10)) * a)
@@ -849,15 +774,7 @@ local M = {}
 M.draw = draw_acquire
 M.pair = pair
 M.TL = TL
-M.MORPH_AREAS = MORPH_AREAS
-M.RECEIPT_ONLY = RECEIPT_ONLY
 M.premix = premix
 M.wash_plate = wash_plate
-
-if _G.NEURO_TEST then
-  M._layout_receipt = layout_receipt
-  M._layout_full = layout_full
-  M._geom = geom_at
-end
 
 return M

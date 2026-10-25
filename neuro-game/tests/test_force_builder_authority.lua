@@ -1,11 +1,7 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
+require("tests.stubs").setup({ love = "lazy" })
 _G.G = { NEURO = {}, FUNCS = {}, GAME = {} }
 
--- One authority decides whether a state asks anything: force_router.lua:248, which runs after
--- TransitionGuard pruning, after absorb_fallback and after the settling failsafe. A state builder
--- that answers the same question from a narrower predicate shadows it and drops every action the
--- builder's predicate does not know about.
+-- force_router alone decides whether to ask, after pruning, fallback absorption, and the settling failsafe.
 
 local check, done = require("tests.helpers").harness("force-builder-authority")
 
@@ -34,17 +30,15 @@ local function stage(sc, mutate)
   G.OVERLAY_MENU = nil
   G.NEURO.consumed_actions = nil
   TD.apply_mock(mock)
+  G.STATES = require("tests.engine_cards").states()
+  G.STATE = G.STATES[sc.state]
   G.NEURO.state_entry_hints = nil
   G.NEURO.blind_info_sig = nil
   G.NEURO.blind_info_seen = nil
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
 end
 
-local function offered(force)
-  local set = {}
-  for _, name in ipairs(force and force.actions or {}) do set[name] = true end
-  return set
-end
+local offered = require("tests.helpers").offered_set
 
 local function has_progress(names)
   for _, name in ipairs(names or {}) do
@@ -59,8 +53,7 @@ local function progression_overlay(mock)
   }
 end
 
--- A: force_router.lua:99 deliberately stands down for a progression overlay, so the state handler
--- is the only path that can carry exit_overlay_menu there.
+-- A progression overlay is handled here because force_router deliberately stands down.
 do
   stage(EMPTY_HAND_CONSUMABLE, function(mock)
     mock.consumeables = { cards = {}, config = { card_limit = 2 } }
@@ -73,20 +66,19 @@ do
     Actions.is_action_valid("exit_overlay_menu") == true
       and Actions.is_action_valid("play_hand") == false
       and Actions.is_action_valid("discard_hand") == false)
-  local force = Dispatcher.get_force_for_state("SELECTING_HAND")
+  local force = require("force.force_router").get_force_for_state("SELECTING_HAND")
   check("the escape hatch is offered", offered(force)["exit_overlay_menu"] == true,
     force and table.concat(force.actions, ",") or "NO FORCE")
 end
 
--- B: dump game.lua:2678-2685 -- an empty hand leaves SELECTING_HAND only while G.deck still holds
--- cards, so empty hand plus empty deck is a board the engine never exits on its own. A Planet needs
+-- An empty hand is not forced to use a held consumable; it draws if cards remain, otherwise the round ends.
 do
   stage(EMPTY_HAND_CONSUMABLE, function(mock) mock.deck = { cards = {} } end)
   check("the registry accepts use_consumable on the empty hand",
     Actions.is_action_valid("use_consumable") == true)
-  local force = Dispatcher.get_force_for_state("SELECTING_HAND")
-  check("the model is asked for the one move that leaves the state",
-    offered(force)["use_consumable"] == true,
+  local force = require("force.force_router").get_force_for_state("SELECTING_HAND")
+  check("the router forces no tool on a board the engine leaves by itself",
+    force == nil or offered(force)["use_consumable"] ~= true,
     force and table.concat(force.actions, ",") or "NO FORCE")
 end
 
@@ -122,12 +114,12 @@ do
     else
       seen_empty = true
     end
-    if Dispatcher.get_force_for_state("SELECTING_HAND") then asked = asked + 1 end
+    if require("force.force_router").get_force_for_state("SELECTING_HAND") then asked = asked + 1 end
   end
   check("the matrix covers both a populated and an empty action set", seen_valid and seen_empty)
   check("the builder never answers nothing while the registry accepts an action",
     #silent == 0, table.concat(silent, "; "))
-  check("the matrix is not vacuous -- most of it reaches the wire", asked >= 4, tostring(asked))
+  check("the matrix is not vacuous -- the dealt boards and the overlay reach the wire", asked >= 2, tostring(asked))
 end
 
 do
@@ -139,7 +131,7 @@ do
   check("no SELECTING_HAND action is accepted on this board", not has_progress(valid),
     table.concat(valid, ","))
   check("the router answers nothing, and it is the router that does it",
-    Dispatcher.get_force_for_state("SELECTING_HAND") == nil)
+    require("force.force_router").get_force_for_state("SELECTING_HAND") == nil)
   check("the builder still built -- it offered what it had and left the verdict to the router",
     type(Builder.build()) == "table")
 end

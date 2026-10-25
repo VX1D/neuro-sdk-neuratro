@@ -44,7 +44,7 @@ Palette.PALETTES = {
     D_SKYBLUE  = { 0.529, 0.729, 0.788 },
     D_GREEN    = { 0.376, 0.686, 0.412 },
     D_RED      = { 0.899, 0.205, 0.261 },
-    D_MAROON   = { 0.917, 0.437, 0.827 },  -- rose-magenta despite the MAROON name; distinct from BOOSTER pink for CVD separation
+    D_MAROON   = { 0.917, 0.437, 0.827 },
     D_WHITE    = { 0.965, 0.975, 0.992 },
     D_DIM      = { 0.780, 0.830, 0.850 },
     D_ORANGE   = { 0.929, 0.443, 0.204 },
@@ -93,44 +93,26 @@ end
 local KEY_ORDER = {
   "ACCENT", "PANEL_BG", "ROW_BG", "SEL_BG", "FRAME", "FRAME_DIM", "GLOW", "FLASH_L", "FLASH_D",
   "D_RED", "D_MAROON", "D_SKYBLUE", "D_CYAN", "D_GREEN", "D_YELLOW",
-  "D_ORANGE", "D_PURPLE", "D_GOLD", "D_MONEY", "D_DIM", "D_WHITE",
+  "D_ORANGE", "D_PURPLE", "D_GOLD", "D_MONEY", "D_DIM", "D_WHITE", "BG", "DEEP", "PRIMARY",
 }
 
 local _color_keys = {}
 local _defaults = {}
 
 for pk, pal in pairs(Palette.PALETTES) do
-  local seen_tbl, listed = {}, {}
-  local keys = {}
-  local function take(k)
-    local v = pal[k]
-    if is_color(v) and not listed[k] and not seen_tbl[v] then
-      listed[k] = true
-      seen_tbl[v] = true
+  local keys, defs = {}, {}
+  for _, k in ipairs(KEY_ORDER) do
+    local c = pal[k]
+    if is_color(c) then
       keys[#keys + 1] = k
+      defs[k] = { c[1], c[2], c[3] }
     end
   end
-  for _, k in ipairs(KEY_ORDER) do take(k) end
-  local rest = {}
-  for k, v in pairs(pal) do
-    if is_color(v) and not listed[k] then rest[#rest + 1] = k end
-  end
-  table.sort(rest)
-  for _, k in ipairs(rest) do take(k) end
   _color_keys[pk] = keys
-  local defs = {}
-  for _, k in ipairs(keys) do
-    local c = pal[k]
-    defs[k] = { c[1], c[2], c[3] }
-  end
   _defaults[pk] = defs
 end
 
-local function clamp01(v)
-  if v < 0 then return 0 end
-  if v > 1 then return 1 end
-  return v
-end
+local clamp01 = require("render.gfx").clamp01
 
 local function to_hex(c)
   return string.format("%02X%02X%02X",

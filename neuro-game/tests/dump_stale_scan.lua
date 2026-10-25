@@ -1,7 +1,4 @@
-
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", G = "board" })
 
 local A = require("core.actions")
 local D = require("core.dispatcher")
@@ -11,36 +8,27 @@ local StateKinds = require("core.state_kinds")
 
 local TD = require("tests.test_deadlock")
 
-local SEED  = tonumber(arg and arg[1]) or 20260722
-local ITERS = tonumber(arg and arg[2]) or 4000
-math.randomseed(SEED)
-local function ri(a, b) return math.random(a, b) end
-local function pick(t) return t[ri(1, #t)] end
-local function chance(p) return math.random() < p end
+local Corpus = require("tests.dump_corpus")
+local SEED, ITERS = Corpus.seed(20260722, 4000)
+local ri, pick, chance = Corpus.ri, Corpus.pick, Corpus.chance
 
-local function targeted_consumable()   -- needs a live hand to use
-  return { cost = ri(3, 6), sell_cost = ri(1, 3),
-    ability = { name = "The Chariot", set = "Tarot", consumeable = { max_highlighted = ri(1, 2) } },
-    config = { center = { key = "c_chariot", name = "The Chariot", set = "Tarot",
-      loc_txt = { name = "The Chariot", description = "Enhances up to 2 selected cards to Steel" } } } }
+local function targeted_consumable()
+  local chariot = ri(1, 2) == 1
+  return require("tests.engine_cards").consumable(chariot and "c_chariot" or "c_empress",
+    { cost = ri(3, 6), sell_cost = ri(1, 3), center = { loc_txt = { name = chariot and "The Chariot" or "The Empress",
+      description = chariot and "Enhances 1 selected card into a Steel Card"
+        or "Enhances 2 selected cards to Mult Cards" } } })
 end
-local function plain_consumable()       -- usable without a hand (planet / space-only)
-  return { cost = ri(3, 6), sell_cost = ri(1, 3),
-    ability = { name = "Pluto", set = "Planet" },
-    config = { center = { key = "c_pluto", name = "Pluto", set = "Planet",
-      loc_txt = { name = "Pluto", description = "Levels up High Card" } } } }
+local function plain_consumable()
+  return require("tests.engine_cards").consumable("c_pluto", { cost = ri(3, 6), sell_cost = ri(1, 3),
+    center = { loc_txt = { name = "Pluto", description = "Levels up High Card" } } })
 end
 local function shop_joker()
   return { cost = ri(2, 9), sell_cost = ri(1, 4), ability = { name = "Joker", set = "Joker", mult = 4 },
     config = { center = { key = "j_joker", name = "Joker", set = "Joker", loc_txt = { name = "Joker", description = "+4 Mult" } } } }
 end
 
-local WIPE = { "hand","jokers","consumeables","shop_jokers","shop_vouchers","shop_booster","shop","pack_cards","booster_pack","blind_select_opts","blind_select","OVERLAY_MENU" }
-local function fresh_g()
-  for _, k in ipairs(WIPE) do G[k] = nil end
-  G.NEURO = { dispatcher = D, actions = A, persona = "neuro", reserved_dollars = 0, _reservation_epoch = 0, shop_reroll_count = 0,
-  state_enter_serial = (tonumber(G.NEURO and G.NEURO.state_enter_serial) or 0) + 5 }
-end
+local function fresh_g() Corpus.fresh_g(D, A) end
 
 local function mutate(state)
   if G.consumeables then
@@ -88,11 +76,12 @@ local function run_iteration(it)
   local built = pcall(function()
     TD.apply_mock(sc.mock())
     if G.NEURO.persona == nil then G.NEURO.persona = "neuro" end
+    require("tests.helpers").in_scenario_state(sc)
     mutate(state)
   end)
   if not built then crashes[#crashes + 1] = { it = it, state = state, phase = "build" }; return end
 
-  local okf, force = pcall(D.get_force_for_state, state)
+  local okf, force = pcall(require("force.force_router").get_force_for_state, state)
   if not okf then crashes[#crashes + 1] = { it = it, state = state, phase = "force" }; return end
   ran = ran + 1
   local advertised = (type(force) == "table" and force.actions) or {}
@@ -132,7 +121,7 @@ for _, p in ipairs(parity) do
 end
 local safe_n = #parity - dangerous
 
-local function banner(s) print(("="):rep(90)); print(s); print(("="):rep(90)) end
+local banner = Corpus.banner
 banner(string.format("STALE-SCAN FUZZ  seed=%d iters=%d rendered=%d phantom=%d dangerous=%d safe=%d crashes=%d",
   SEED, ITERS, ran, #phantom, dangerous, safe_n, #crashes))
 print("phantom   = use_consumable advertised but NOTHING it can target passes execution (model chases nothing)")

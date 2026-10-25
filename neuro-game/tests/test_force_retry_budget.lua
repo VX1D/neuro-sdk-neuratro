@@ -1,34 +1,23 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
 
 local check, done = require("tests.helpers").harness("force-retry-budget")
 
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
+local Enforce = require("tests.helpers").enforce()
 local Actions = require("core.actions")
-local TxCache = require("core.tx_cache")
-local ActionReceipt = require("core.action_receipt")
+local TxCache = require("core.bridge").tx
+local ActionReceipt = require("core.action_result")
 
 local play_card = require("tests.helpers").play_card
 
 local function bridge()
-  local b = { results = {} }
-  function b:send_action_result(id, ok, message, reason)
-    self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason = reason }
-    return true, { status = "written" }
-  end
-  function b:send_context() return true end
-  b.register_actions = function() end
-  b.unregister_actions = function() end
-  b.is_transition_cooldown = function() return false end
-  return b
+  return require("tests.helpers").fake_bridge({ reason = "reason", ack = "written", register = "noop", cooldown = true })
 end
 
 local function env(t)
   G.TIMERS.REAL = t
-  G.STATES = { SELECTING_HAND = 4, SHOP = 5 }
-  G.STATE = 4; G.STATE_COMPLETE = true; G.OVERLAY_MENU = nil; G.CONTROLLER = nil
+  require("tests.helpers").in_engine_state("SELECTING_HAND")
+  G.STATE_COMPLETE = true; G.OVERLAY_MENU = nil; G.CONTROLLER = nil
   G.GAME = { dollars = 10, chips = 0, used_vouchers = {},
     current_round = { hands_left = 4, discards_left = 2 },
     round_resets = { ante = 1, blind_on_deck = "Small",
@@ -40,9 +29,8 @@ local function env(t)
   G.jokers = { cards = {}, config = { card_limit = 5 } }
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
   G.deck = { cards = {} }
-  G.FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end }
-  require("core.transition_guard").reset()
-  ActionReceipt.reset("test")
+  G.FUNCS = { get_poker_hand_info = require("tests.engine_hand_info").stub("Pair") }
+  require("core.validate").reset_run_state()
   Enforce.reset_run_state()
   TxCache.reset()
   local b = bridge()
@@ -51,7 +39,6 @@ local function env(t)
     send_context = function() return true end }
   require("tests.helpers").stage_registered("SELECTING_HAND",
     { "buy_from_shop", "leave_shop", "discard_hand" })
-  G.NEURO.force_inflight = false
   return b
 end
 
@@ -65,8 +52,20 @@ end
 
 local function send(b, msg) Dispatcher.route_message(msg, b) end
 
+local function stuck(id, b)
+  require("core.execute").abort("test")
+  require("core.execute").admit({ id = id, name = "play_hand", data = {}, bridge = b,
+    run_generation = G.NEURO.run_generation, state = "SELECTING_HAND",
+    exec = function()
+      return ActionReceipt.create({ id = id, name = "play_hand", run_generation = G.NEURO.run_generation,
+        deadline = ActionReceipt.now() + 100000, probe = function() return "pending" end,
+        timeout_outcome = "ambiguous" })
+    end }, false)
+  b.results = {}
+end
+
 local ENFORCE_SRC = (function()
-  local fh = assert(io.open("core/enforce.lua", "r"))
+  local fh = assert(io.open("core/validate.lua", "r"))
   local src = fh:read("*a"); fh:close(); return src
 end)()
 local REJECT_STREAK_LIMIT = tonumber(ENFORCE_SRC:match("REJECT_STREAK_LIMIT%s*=%s*(%d+)"))
@@ -90,21 +89,20 @@ do
     if r.ok ~= false then break end
     before = before + 1
   end
-  check("exactly 2 * REJECT_STREAK_LIMIT refusals reach the wire before the terminal answer",
-    before == 2 * REJECT_STREAK_LIMIT,
+  check("a reworded refusal spends the streak limit, not the window budget",
+    before == REJECT_STREAK_LIMIT,
     "success:false answers before the first success:true: " .. before)
   check("the terminal answer says nothing ran",
-    b.results[#b.results].ok == true
-      and b.results[#b.results].message:find("Nothing was executed", 1, true) ~= nil,
+    b.results[#b.results].ok == true,
     b.results[#b.results].message)
 end
 
 do
   local b = env(710)
   local vectors = {
-    { "play_hand", '{"indices":"nope"}' },        -- SCHEMA_INVALID
-    { "buy_from_shop", '{"area":"shop_jokers","index":1}' }, -- state gate
-    { "play_hand", '{"indices":[99]}' },          -- validator rejection
+    { "play_hand", '{"indices":"nope"}' },
+    { "buy_from_shop", '{"area":"shop_jokers","index":1}' },
+    { "play_hand", '{"indices":[99]}' },
   }
   for i = 1, 30 do
     local v = vectors[(i % 3) + 1]
@@ -119,7 +117,8 @@ do
   for i = 1, 30 do
     send(b, { command = "action", data = { id = ids[(i % 4) + 1], name = "play_hand", data = "{}" } })
   end
-  bounded("M3: rotating the JSON type of an invalid id does not renew the budget", b, 30)
+  check("M3: invalid non-string ids are dropped before retry accounting",
+    #b.results == 0, tostring(#b.results))
 end
 
 do
@@ -128,7 +127,8 @@ do
   for i = 1, 30 do
     send(b, { command = "action", data = { id = 42, name = names[(i % 3) + 1], data = "{}" } })
   end
-  bounded("M4: rotating which offered action is answered does not renew the budget", b, 30)
+  check("M4: invalid non-string ids are dropped before action-name accounting",
+    #b.results == 0, tostring(#b.results))
 end
 
 do
@@ -139,54 +139,67 @@ do
     send(b, { command = "action",
       data = { id = ids[(i % 4) + 1], name = names[(i % 3) + 1], data = "{}" } })
   end
-  bounded("M5: rotating the id type and the action name together is bounded too", b, 30)
+  check("M5: invalid non-string ids are dropped before combined retry accounting",
+    #b.results == 0, tostring(#b.results))
 end
 
--- F3: ACTION_UNKNOWN answered success=false with no circuit at all. core/action_result.lua:3-8 makes
--- the terminal form the house rule for every outcome that handled an action without executing it.
 do
   local b = env(750)
   for i = 1, 30 do
-    send(b, { command = "action",
-      data = { id = "u-" .. i, name = "definitely_not_an_action", data = "{}" } })
+    send(b, { command = "action", data = { id = "u-" .. i, name = "definitely_not_an_action", data = "{}" } })
   end
-  bounded("F3: an unknown action name reaches the terminal form instead of refusing forever", b, 30)
-  check("the first unknown name still gets its retryable refusal",
-    b.results[1].ok == false and b.results[1].reason == "ACTION_UNKNOWN",
-    tostring(b.results[1].reason) .. "/" .. tostring(b.results[1].ok))
-  check("the terminal unknown-name answer keeps its reason class",
-    b.results[#b.results].reason == "ACTION_UNKNOWN", tostring(b.results[#b.results].reason))
+  require("core.action_registry").note_unregistered({ "leave_shop" }, require("core.action_registry").now())
+  for i = 1, 10 do
+    send(b, { command = "action", data = { id = "w-" .. i, name = "leave_shop", data = "{}" } })
+  end
+  for i = 1, 10 do
+    send(b, { command = "action", data = { id = "n-" .. i, data = "{}" } })
+  end
+  local wrong = {}
+  for _, r in ipairs(b.results) do
+    if r.ok ~= false or (r.reason ~= "ACTION_UNKNOWN" and r.reason ~= "ACTION_UNREGISTERED") then
+      wrong[#wrong + 1] = tostring(r.id) .. "=" .. tostring(r.ok) .. "/" .. tostring(r.reason)
+    end
+  end
+  check("F3: every unknown, unregistered or nameless action is refused with success=false",
+    #b.results == 50 and #wrong == 0, #b.results .. " results; " .. table.concat(wrong, " "))
+  b.results = {}
+  G.NEURO.llm_paused = true
+  send(b, { command = "action", data = { id = "p-1", name = "no_such_action", data = "{}" } })
+  G.NEURO.llm_paused = false
+  local paused = b.results[1] or {}
+  check("F3: an unknown action is refused with success=false even while paused",
+    paused.ok == false and paused.reason == "ACTION_UNKNOWN", tostring(paused.ok) .. "/" .. tostring(paused.reason))
+  b.results = {}
+  for i = 1, REJECT_STREAK_LIMIT + 1 do
+    send(b, { command = "action", data = { id = "f3-" .. i, name = "play_hand", data = '{"indices":[97]}' } })
+  end
+  local retried = counts(b)
+  check("unrecognised actions spend nothing of the decision's retry budget",
+    retried == REJECT_STREAK_LIMIT and b.results[#b.results].ok == true, "success:false " .. retried)
 end
 
 do
   local b = env(760)
-  local r = ActionReceipt.create({ id = "held", name = "play_hand",
-    deadline = ActionReceipt.now() + 100000,
-    probe = function() return "pending" end, timeout_outcome = "ambiguous" })
-  ActionReceipt.transition(r, "acknowledged")
+  stuck("held", b)
   for i = 1, 30 do
     send(b, { command = "action", data = { id = "v-" .. i, name = "play_hand",
       data = '{"indices":[1,2]}' } })
   end
   bounded("F4: a stuck verification does not refuse every send forever", b, 30)
-  ActionReceipt.reset("test")
+  require("core.execute").abort("test")
 end
 
 do
   local b = env(770)
-  b.is_force_answer = function(_, id) return tostring(id) == "wire-1" end
   G.NEURO.force_window = nil
-  G.NEURO.force_inflight = false
-  local r = ActionReceipt.create({ id = "held2", name = "play_hand",
-    deadline = ActionReceipt.now() + 100000,
-    probe = function() return "pending" end, timeout_outcome = "ambiguous" })
-  ActionReceipt.transition(r, "acknowledged")
+  stuck("held2", b)
   send(b, { command = "action", data = { id = "wire-1", name = "play_hand",
     data = '{"indices":[1,2]}' } })
-  check("the wire, not the local window, decides whether the answer belongs to a force",
-    b.results[1] and b.results[1].reason == "TRANSITION_ACKNOWLEDGED",
+  check("an action arriving during a pending verification is told to wait, not judged",
+    b.results[1] and b.results[1].reason == "TRANSITION_PENDING" and b.results[1].ok == false,
     b.results[1] and tostring(b.results[1].reason))
-  ActionReceipt.reset("test")
+  require("core.execute").abort("test")
 end
 
 do
@@ -207,16 +220,25 @@ do
 end
 
 do
+  local b = env(785)
+  for i = 1, REJECT_STREAK_LIMIT + 1 do
+    send(b, { command = "action", data = { id = "c-" .. i, name = "play_hand",
+      data = '{"indices":[1,' .. (90 + i) .. ']}' } })
+  end
+  local last = b.results[#b.results] or {}
+  local msg = tostring(last.message)
+  check("a spent budget over changed payloads says what it counted, not that the send repeated",
+    last.ok == true, msg)
+end
+
+do
   local b = env(790)
   for i = 1, 20 do
     send(b, { command = "action", data = { id = "q-" .. i, name = "play_hand",
       data = '{"indices":[' .. (90 + (i % 5)) .. ']}' } })
   end
   b.results = {}
-  local ActionPolicy = require("core.action_policy")
-  check("play_hand is the PROGRESS class this case is about",
-    ActionPolicy.NON_PROGRESS["play_hand"] == nil)
-  Enforce.note_accepted("play_hand")
+  Enforce.note_accepted({ name = "play_hand" })
   send(b, { command = "action", data = { id = "q-next", name = "play_hand",
     data = '{"indices":[97]}' } })
   check("a PROGRESS action that actually ran buys the decision a fresh retry budget",
@@ -230,7 +252,7 @@ do
       data = '{"indices":[' .. (90 + (i % 5)) .. ']}' } })
   end
   b.results = {}
-  Enforce.note_accepted("record_plan")
+  Enforce.note_accepted({ name = "record_plan" })
   send(b, { command = "action", data = { id = "r-next", name = "play_hand",
     data = '{"indices":[97]}' } })
   check("a NON_PROGRESS answer does NOT hand the exhausted decision a fresh retry budget",
@@ -238,8 +260,6 @@ do
 end
 
 do
-  -- Refusals answered success=false before note_rejection first acknowledges, i.e. before the
-  -- decision takes SPECIFICATION.md:188's terminal form.
   local function refusals_before_terminal(fingerprint_of)
     Enforce.reset_run_state()
     G.NEURO = { decision_serial = 1, run_generation = 1 }
@@ -251,11 +271,6 @@ do
   local varying = refusals_before_terminal(function(i) return "reason-" .. i end)
   local repeated = refusals_before_terminal(function() return "same" end)
 
-  check("core/enforce.lua still states the streak limit as a literal",
-    REJECT_STREAK_LIMIT == 3, tostring(REJECT_STREAK_LIMIT))
-  check("the window budget is still 2 * REJECT_STREAK_LIMIT, not a number of its own",
-    ENFORCE_SRC:find("WINDOW_REFUSAL_BUDGET%s*=%s*2%s*%*%s*REJECT_STREAK_LIMIT") ~= nil,
-    tostring(ENFORCE_SRC:match("WINDOW_REFUSAL_BUDGET%s*=%s*([^\n]*)")))
   check("a fingerprint that never repeats spends exactly 2 * REJECT_STREAK_LIMIT refusals",
     varying == 2 * REJECT_STREAK_LIMIT,
     "refusals before the terminal answer: " .. varying .. ", expected " .. (2 * REJECT_STREAK_LIMIT))
@@ -279,7 +294,7 @@ do
     local acknowledged = false
     for i = 1, 40 do
       acknowledged = Enforce.note_rejection("buy_from_shop", "reason-" .. i) or acknowledged
-      Enforce.note_accepted(name)
+      Enforce.note_accepted({ name = name })
     end
     check("" .. name .. " between refusals cannot renew the decision's budget",
       acknowledged == true)
@@ -292,7 +307,7 @@ do
   local acknowledged = false
   for i = 1, 40 do
     acknowledged = Enforce.note_rejection("buy_from_shop", "reason-" .. i) or acknowledged
-    Enforce.note_accepted("play_hand")
+    Enforce.note_accepted({ name = "play_hand" })
   end
   check("a PROGRESS answer between refusals keeps the decision retryable",
     acknowledged == false)

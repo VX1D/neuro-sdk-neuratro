@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 _G.NEURO_TEST = true
 local clock = 1000
 if not love then love = {} end
@@ -7,40 +8,26 @@ _G.localize = function() return "" end
 local check, done = require("tests.helpers").harness("plan-gate-survival")
 
 local Dispatcher = require("core.dispatcher")
-local Enforce = require("core.enforce")
-local PlanGate = require("core.plan_gate")
+local Enforce = require("tests.helpers").enforce()
+local PlanGate = require("core.gate")
 local PlanTransaction = require("core.plan_transaction")
 local PlanHandlers = require("handlers.plan_handlers")
-local ConfirmationEvidence = require("core.confirmation_evidence")
-local HandTx = require("core.hand_transaction")
+local Gate = require("core.gate")
 
-local function card(sort_id)
-  return {
-    base = { value = 5, suit = "Spades" }, sort_id = sort_id,
-    config = { center = { key = "c_base", set = "Default" } },
-  }
-end
+local card = require("tests.fake_cards").five_of_spades
 
 local function bridge()
-  return {
-    results = {}, contexts = {},
-    send_action_result = function(self, id, ok, message, reason_code)
-      self.results[#self.results + 1] = { id = id, ok = ok, message = message, reason_code = reason_code }
-      return true, { status = "written" }
-    end,
-    send_context = function(self, message) self.contexts[#self.contexts + 1] = message end,
-    unregister_actions = function() end,
-    is_transition_cooldown = function() return false end,
-  }
+  return require("tests.helpers").fake_bridge({ ack = "written", context = "contexts", cooldown = true,
+    over = { confirmation_proposal_ref = function() return Gate.proposal_ref() end } })
 end
 
 local function base(opts)
   opts = opts or {}
   clock = clock + 10
   _G.G = {
-    STATE = 1,
-    STATES = { SELECTING_HAND = 1 },
-    hand = { cards = { card(1), card(2), card(3), card(4) }, highlighted = {} },
+    STATE = ES.SELECTING_HAND,
+    STATES = ES,
+    hand = require("tests.helpers").card_area({ cards = { card(1), card(2), card(3), card(4) }, highlighted = {} }),
     GAME = {
       chips = 0,
       round_resets = { ante = opts.ante or 1 },
@@ -49,7 +36,8 @@ local function base(opts)
       hands = { Pair = { level = 1, chips = 10, mult = 2 } },
     },
     NEURO = {
-      run_generation = 7, state_enter_serial = 11, once_serials = {},
+      run_generation = 7, state_enter_serial = 11, once_serials = {}, decision_serial = 1,
+      transport_session = "plan-gate-survival", transport_epoch = 1,
     },
     FUNCS = {
       discard_cards_from_highlighted = function()
@@ -68,32 +56,24 @@ local function base(opts)
         G.hand.cards, G.hand.highlighted = kept, {}
         G.GAME.current_round.hands_left = G.GAME.current_round.hands_left - 1
       end,
-      get_poker_hand_info = function() return "Pair" end,
+      get_poker_hand_info = require("tests.helpers").poker_hand_info("Pair"),
     },
   }
   Dispatcher.reset_tx()
   Enforce.reset_run_state()
-  require("core.force_state").arm("SELECTING_HAND", { "play_hand", "discard_hand" },
-    { play_hand = true, discard_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand", "discard_hand" })
   require("tests.helpers").stage_registered("SELECTING_HAND", { "play_hand", "discard_hand" })
 end
 
 local function rearm(names)
   names = names or { "play_hand", "discard_hand" }
-  G.NEURO.force_inflight = false
   G.NEURO.force_window = nil
   local set = {}
   for _, name in ipairs(names) do set[name] = true end
-  require("core.force_state").arm("SELECTING_HAND", names, set, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", names)
   require("tests.helpers").stage_registered("SELECTING_HAND", names)
 end
-
-local function send(name, id, data, b)
-  Dispatcher.handle_message({
-    command = "action", run_generation = G.NEURO.run_generation,
-    data = { id = id, name = name, data = data },
-  }, b)
-end
+local send = require("tests.helpers").dispatch
 
 local function joined_contexts(b)
   return table.concat(b.contexts, "\n")
@@ -113,23 +93,24 @@ do
     G.NEURO.held_plan_write ~= nil and G.NEURO.held_plan_write.values.boss_plan == BOSS,
     G.NEURO.held_plan_write and tostring(G.NEURO.held_plan_write.values.boss_plan))
 
-  ConfirmationEvidence.step_delivery()
-  local pending = HandTx.current()
   rearm({ "resolve_play" })
-  send("resolve_play", "p2", { transaction_id = pending.id, answer = "yes" }, b)
+  send("resolve_play", "p2", { answer = "yes" }, b)
   check("the explicit confirmation is not refused for a missing plan field",
     b.results[2] and b.results[2].reason_code ~= "PRECONDITION_FAILED",
     b.results[2] and tostring(b.results[2].reason_code) .. "/" .. tostring(b.results[2].message))
   check("the explicit confirmation plays", b.results[2] and b.results[2].ok == true
-    and G.GAME.current_round.hands_left == 3, G.GAME.current_round.hands_left)
+    and G.GAME.current_round.hands_left == 3,
+    b.results[2] and tostring(b.results[2].ok) .. "/" .. tostring(b.results[2].reason_code)
+      .. "/" .. tostring(b.results[2].message) .. " hands=" .. tostring(G.GAME.current_round.hands_left))
   check("the plan written at the gate reaches the register", G.NEURO.plan and G.NEURO.plan.boss == BOSS,
+    b.results[2] and tostring(b.results[2].message) .. " plan="
+      .. tostring(G.NEURO.plan and G.NEURO.plan.boss))
+  check("the boss scope committed with it is current", PlanGate.boss_plan_is_current(G.NEURO.plan),
     G.NEURO.plan and tostring(G.NEURO.plan.boss))
-  check("the boss scope committed with it is current", PlanGate.boss_plan_is_current(G.NEURO.plan))
-  check("committing releases the hold", G.NEURO.held_plan_write == nil)
+  check("committing releases the hold", G.NEURO.held_plan_write == nil,
+    G.NEURO.held_plan_write and tostring(G.NEURO.held_plan_write.proposal_ref))
   check("no copy of the plan text reaches the permanent channel",
     joined_contexts(b):find(BOSS, 1, true) == nil, joined_contexts(b))
-  check("and the write is still acknowledged, by the action result alone",
-    b.results[2] and b.results[2].ok == true, b.results[2] and tostring(b.results[2].ok))
 end
 
 do
@@ -146,7 +127,7 @@ do
     b.results[2] and tostring(b.results[2].reason_code))
   check("the proposal-owned plan remains held for its matching confirmation",
     G.NEURO.plan == nil and G.NEURO.held_plan_write
-      and G.NEURO.held_plan_write.hand_transaction_id == HandTx.current().id)
+      and G.NEURO.held_plan_write.proposal_ref == Gate.proposal_ref())
 end
 
 do
@@ -156,7 +137,7 @@ do
   check("play is gated before the blind changes", b.results[1]
     and b.results[1].reason_code == "CONFIRMATION_REQUIRED")
   G.GAME.blind = { key = "bl_window", name = "The Window", boss = true }
-  HandTx.observe_context_changed()
+  Gate.observe_context_changed()
   rearm()
   send("play_hand", "p2", { indices = { 1, 2 } }, b)
   check("a held plan from the previous boss does not satisfy the new one",

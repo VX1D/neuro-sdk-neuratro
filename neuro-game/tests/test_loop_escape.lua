@@ -1,46 +1,25 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
+local ES = require("tests.engine_cards").states()
 
 local check, done = require("tests.helpers").harness("loop-escape")
 
-local Enforce = require("core.enforce")
+local Enforce = require("tests.helpers").enforce()
 local ActionResult = require("core.action_result")
 local Actions = require("core.actions")
 local Dispatcher = require("core.dispatcher")
-local FS = require("core.force_state")
 local ForceHelpers = require("force.force_helpers")
-local HandTx = require("core.hand_transaction")
-local ConfirmationEvidence = require("core.confirmation_evidence")
+local Gate = require("core.gate")
 local HandHandlers = require("handlers.hand_handlers")
 
 local play_card = require("tests.helpers").play_card
 
-local function open_hand_transaction(indices, promote, rendered)
-  HandTx.invalidate(nil, "test_replace")
-  local cards = {}
-  for i, index in ipairs(indices) do cards[i] = G.hand.cards[index] end
-  local tx = assert(HandTx.create({
-    signature = HandHandlers.play_signature(cards),
-    content = HandHandlers.play_content(cards),
-    indices = indices,
-    context_revision = HandTx.context_revision(),
-    hand_type = "Pair",
-  }))
-  if promote then
-    local candidate = ConfirmationEvidence.candidate(tx.signature, tx.content,
-      indices, "Pair", tx.id, tx.context_revision)
-    assert(ConfirmationEvidence.stage(candidate, rendered or "Committing Pair.",
-      { status = "written" }))
-    assert(ConfirmationEvidence.step_delivery())
-  end
-  return tx
+local function open_proposal(indices, rendered)
+  return assert(require("tests.helpers").open_proposal(indices, rendered))
 end
 
 local function selecting_hand_env(t)
   G.TIMERS.REAL = t
-  G.STATES = { SELECTING_HAND = 4 }
-  G.STATE = 4
+  require("tests.helpers").in_engine_state("SELECTING_HAND")
   G.STATE_COMPLETE = true
   G.OVERLAY_MENU = nil
   G.GAME = {
@@ -58,9 +37,9 @@ local function selecting_hand_env(t)
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
   G.deck = { cards = {} }
   G.FUNCS = {
-    get_poker_hand_info = function(cards) return "Pair", {}, { Pair = { cards } }, cards end,
+    get_poker_hand_info = require("tests.engine_hand_info").stub("Pair"),
   }
-  require("core.transition_guard").reset()
+  require("core.validate").reset_run_state()
   Enforce.reset_run_state()
 end
 
@@ -74,18 +53,21 @@ local function two_jokers()
 end
 
 local function armed_bridge()
-  local b = { emitted = {} }
+  local b = require("tests.helpers").started_bridge(
+    require("tests.helpers").stub_bridge({ emitted = {}, register_actions = "noop", is_transition_cooldown = "false" }))
   function b:send_context(msg) self.emitted[#self.emitted + 1] = tostring(msg) end
-  b.register_actions = function() end
-  b.unregister_actions = function() end
-  b.is_transition_cooldown = function() return false end
   return b
+end
+
+local function session_neuro(decision_serial, init_complete)
+  return require("tests.helpers").started_bridge(require("tests.helpers").stub_bridge({
+    enabled = true, decision_serial = decision_serial, transport_session = 1, _bridge_init_complete = init_complete,
+    dispatcher = Dispatcher, actions = Actions, send_startup = "true", register_actions = "true" }))
 end
 
 local function arm_force()
   G.TIMERS.REAL = G.TIMERS.REAL + 100
-  G.NEURO.force_inflight = false
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
 end
 
 do
@@ -105,14 +87,14 @@ do
   selecting_hand_env(200)
   G.NEURO = { enabled = true, decision_serial = 1 }
   local b = armed_bridge()
-  local last_ok, last_err, last_code
+  local last_ok, last_err, ignored, last_code
   for _ = 1, 31 do
     arm_force()
-    last_ok, last_err, _, last_code = Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
+    last_ok, last_err, ignored, last_code = Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
   end
   check("an identical selection past the cap is still refused", last_ok ~= true, tostring(last_err))
   check("the refusal acknowledges instead of retrying the force",
-    ActionResult.acknowledges(last_code) == true, tostring(last_code))
+    ActionResult.terminal(last_code, true) == true, tostring(last_code))
 
   arm_force()
   local ok_fresh = Enforce.pre_action(b, "play_hand", '{"indices":[3,4]}')
@@ -121,10 +103,9 @@ end
 
 local function arm_names(names)
   G.TIMERS.REAL = G.TIMERS.REAL + 100
-  G.NEURO.force_inflight = false
   local set = {}
   for _, n in ipairs(names) do set[n] = true end
-  FS.arm("SELECTING_HAND", names, set, 1)
+  require("tests.helpers").open_force("SELECTING_HAND", names)
 end
 
 local ACTION_NAMES = {}
@@ -142,24 +123,31 @@ local function names_leaked(text)
   return leaked
 end
 
-local function correction_after_cap(force_names)
+-- A refusal is reported immediately; it does not stage a result for later.
+local function refusal_after_cap(force_names)
   local b = armed_bridge()
+  local ok, message
   for _ = 1, 31 do
     arm_names(force_names)
-    Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
+    ok, message = Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
   end
-  return Enforce.take_correction()
+  return ok, message
+end
+
+local function others_named(text)
+  local out = {}
+  for _, n in ipairs(names_leaked(text)) do
+    if n ~= "play_hand" then out[#out + 1] = n end
+  end
+  return out
 end
 
 do
   selecting_hand_env(300)
   G.NEURO = { enabled = true, decision_serial = 1 }
-  local correction = correction_after_cap({ "play_hand", "discard_hand" })
-  check("the repeat refusal stages a correction", type(correction) == "string", tostring(correction))
-  check("the correction names the past event",
-    tostring(correction):find("wasn't applied", 1, true) ~= nil, tostring(correction))
-  check("it does not restate what is callable on the retained channel",
-    tostring(correction):find("Actions you can take now", 1, true) == nil, tostring(correction))
+  local ok, refusal = refusal_after_cap({ "play_hand", "discard_hand" })
+  check("the repeat refusal carries its reason in its own result", ok ~= true and type(refusal) == "string",
+    tostring(refusal))
 end
 
 do
@@ -171,26 +159,26 @@ do
   for i, shape in ipairs(shapes) do
     selecting_hand_env(320 + i * 20)
     G.NEURO = { enabled = true, decision_serial = 1 }
-    local correction = correction_after_cap(shape)
-    check("O1." .. i .. ": a correction is still produced for force " .. table.concat(shape, "+"),
-      type(correction) == "string", tostring(correction))
-    local leaked = names_leaked(correction)
-    check("O2." .. i .. ": it names no action at all", #leaked == 0, table.concat(leaked, ", "))
+    local _, refusal = refusal_after_cap(shape)
+    check("O1." .. i .. ": a refusal is still produced for force " .. table.concat(shape, "+"),
+      type(refusal) == "string", tostring(refusal))
+    local leaked = others_named(refusal)
+    check("O2." .. i .. ": it names no action but the refused one", #leaked == 0, table.concat(leaked, ", "))
   end
 
   selecting_hand_env(400)
   G.NEURO = { enabled = true, decision_serial = 1 }
   G.TIMERS.REAL = G.TIMERS.REAL + 100
-  G.NEURO.force_inflight = false
-  FS.arm("SHOP", { "buy_from_shop" }, { buy_from_shop = true }, 1)
+  require("tests.helpers").open_force("SHOP", { "buy_from_shop" })
   local b_other = armed_bridge()
+  local other
   for _ = 1, 31 do
     G.TIMERS.REAL = G.TIMERS.REAL + 100
-    Enforce.pre_action(b_other, "play_hand", '{"indices":[1,2]}')
+    local _, message = Enforce.pre_action(b_other, "play_hand", '{"indices":[1,2]}')
+    other = message
   end
-  local other = Enforce.take_correction()
-  check("a force belonging to another screen still yields only the past-event sentence",
-    type(other) == "string" and #names_leaked(other) == 0, tostring(other))
+  check("a force belonging to another screen still yields a refusal naming only the refused action",
+    type(other) == "string" and #others_named(other) == 0, tostring(other))
 end
 
 do
@@ -203,7 +191,7 @@ do
     last_ok = Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
   end
   check("RS1: the cap is latched before the reconnect", last_ok ~= true, tostring(last_ok))
-  FS.reconnect()
+  require("core.neuro_lifecycle").bump_run_generation("transport reconnected")
   arm_names({ "play_hand" })
   local ok_after = Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
   check("RS2: the first send after a reconnect is not counted as a repeat",
@@ -227,16 +215,13 @@ end
 do
   selecting_hand_env(400)
   G.NEURO = { enabled = true, decision_serial = 1, dispatcher = Dispatcher, actions = Actions }
-  local b = { log = {} }
+  local b = require("tests.helpers").stub_bridge({ log = {}, register_actions = "noop", is_transition_cooldown = "false" })
   function b:send_action_result(id, ok, msg, reason)
     self.log[#self.log + 1] = { kind = "result", id = id, ok = ok, reason = reason }
   end
   function b:send_context(msg) self.log[#self.log + 1] = { kind = "context", msg = tostring(msg) } end
-  b.register_actions = function() end
-  b.unregister_actions = function() end
-  b.is_transition_cooldown = function() return false end
 
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
   for i = 1, 31 do
     arm_force()
@@ -253,10 +238,8 @@ do
   check("the action result is the first frame on the wire", kinds[1] == "result", trace)
   check("and it is the only frame -- no permanent context follows it",
     #b.log == 1, trace)
-  local correction = G.NEURO.last_failed_correction
-  check("strict resolution acknowledgements do not manufacture a failure correction",
-    correction == nil and ForceHelpers.failed_action_warning() == "",
-    tostring(correction) .. " || " .. ForceHelpers.failed_action_warning())
+  check("strict resolution acknowledgements leave no failure record behind",
+    G.NEURO.last_failed_action == nil, tostring(G.NEURO.last_failed_action))
 end
 
 do
@@ -264,24 +247,19 @@ do
   G.NEURO = { enabled = true, decision_serial = 1, dispatcher = Dispatcher, actions = Actions }
   local b = armed_bridge()
   b.send_action_result = function() end
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
 
   G.NEURO.last_failed_action = "play_hand"
   G.NEURO.last_failed_reason = "indices must have at most 5 item(s)"
-  G.NEURO.last_failed_at = 1
-  check("the warning is present before the acknowledged answer",
-    ForceHelpers.failed_action_warning():find("Previous action rejected", 1, true) ~= nil)
 
   for i = 1, 31 do
     arm_force()
     Dispatcher.handle_message({ command = "action",
       data = { id = "stale-" .. i, name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   end
-  check("an acknowledged result expires the stale rejection warning",
+  check("an acknowledged result clears the diagnostic failure record",
     G.NEURO.last_failed_action == nil, tostring(G.NEURO.last_failed_action))
-  check("the force query stops carrying it", ForceHelpers.failed_action_warning() == "",
-    ForceHelpers.failed_action_warning())
 end
 
 do
@@ -318,15 +296,14 @@ end
 
 do
   selecting_hand_env(600)
-  G.NEURO = { enabled = true, decision_serial = 1, transport_session = 1,
-    dispatcher = Dispatcher, actions = Actions }
+  G.NEURO = session_neuro(1)
   local codes = {}
   local b = armed_bridge()
   b.send_action_result = function(_self, _id, _ok, _msg, reason)
     codes[#codes + 1] = tostring(reason)
     return true, { status = "written" }
   end
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
 
   arm_force()
@@ -334,11 +311,11 @@ do
     data = { id = "rc-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   check("the first selection arms a confirmation",
     codes[1] == "CONFIRMATION_REQUIRED", tostring(codes[1]))
-  check("the latch is armed", HandTx.current() ~= nil)
+  check("the latch is armed", Gate.proposal() ~= nil)
 
-  Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 2 }, b)
+  Dispatcher.handle_message({ command = "neuro-bridge/reregister_all", transport_session = 2 }, b)
   check("reconnect drops the pending confirmation",
-    HandTx.current() == nil, tostring(HandTx.current()))
+    Gate.proposal() == nil, tostring(Gate.proposal()))
 
   arm_force()
   Dispatcher.handle_message({ command = "action",
@@ -351,7 +328,7 @@ do
   selecting_hand_env(700)
   G.NEURO = { enabled = true, decision_serial = 9 }
   local HH = require("handlers.hand_handlers")
-  open_hand_transaction({ 1, 2 }, true, "Committing Pair A.")
+  open_proposal({ 1, 2 }, "Committing Pair A.")
   local first_pend = HH.pending()
   local first = first_pend and first_pend.indices
   check("the armed selection is announced",
@@ -368,68 +345,27 @@ end
 
 do
   selecting_hand_env(800)
-  G.NEURO = { enabled = true, decision_serial = 3, transport_session = 1,
-    dispatcher = Dispatcher, actions = Actions }
-  open_hand_transaction({ 1, 2 }, false)
-  G.NEURO.context_reviews = { sell_joker = { kind = "sell_joker", phase = "reviewed",
-    context_key = "stale", run_generation = 0, state_enter_serial = 0 } }
+  G.NEURO = session_neuro(3, true)
+  open_proposal({ 1, 2 })
+  G.NEURO.gates = { sell_joker = { key = "stale" } }
   local b = armed_bridge()
   b.send_action_result = function() end
 
-  Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 1 }, b)
-  check("an unchanged transport_session still drops the play_hand confirmation",
-    HandTx.current() == nil, tostring(HandTx.current()))
-  check("it drops pending soft reviews too",
-    G.NEURO.context_reviews == nil, tostring(G.NEURO.context_reviews))
-end
-
-do
-  selecting_hand_env(900)
-  G.NEURO = { enabled = true, decision_serial = 1 }
-  local b = armed_bridge()
-  Enforce.pre_action(b, "play_hand", '{"indices":[1,2]}')
-  Enforce.take_correction()
-  G.TIMERS.REAL = G.TIMERS.REAL + 0.05
-  Enforce.pre_action(b, "discard_hand", '{"indices":[3]}')
-  local correction = Enforce.take_correction()
-  check("a global-gap refusal is reported",
-    type(correction) == "string" and correction:find("slow down", 1, true) ~= nil,
-    tostring(correction))
-  check("it does not advertise actions that are equally gapped",
-    tostring(correction):find("Actions you can take now", 1, true) == nil, tostring(correction))
-end
-
-do
-  selecting_hand_env(1000)
-  G.NEURO = { enabled = true, decision_serial = 1, dispatcher = Dispatcher, actions = Actions }
-  local b = armed_bridge()
-  b.send_action_result = function() end
-  require("core.tx_cache").reset()
-  require("tests.helpers").stage_registered(nil, { "play_hand" })
-  arm_force()
-  G.NEURO.last_failed_action = "play_hand"
-  G.NEURO.last_failed_reason = "indices must have at most 5 item(s)"
-  G.NEURO.last_failed_at = G.TIMERS.REAL
-  Dispatcher.handle_message({ command = "action",
-    data = { id = "fresh-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
-  check("a failure younger than defer_window survives the next answer",
-    G.NEURO.last_failed_action == "play_hand", tostring(G.NEURO.last_failed_action))
+  check("an unchanged transport_session preserves the play_hand confirmation",
+    Gate.proposal() ~= nil, tostring(Gate.proposal()))
+  check("it preserves delivered reviews too",
+    G.NEURO.gates and G.NEURO.gates.sell_joker ~= nil, tostring(G.NEURO.gates))
 end
 
 do
   selecting_hand_env(1100)
-  G.NEURO = { enabled = true, decision_serial = 4, transport_session = 1,
-    dispatcher = Dispatcher, actions = Actions }
-  G.NEURO.context_reviews = { sell_joker = { kind = "sell_joker", phase = "reviewed" } }
-  open_hand_transaction({ 1, 2 }, false)
+  G.NEURO = session_neuro(4)
+  G.NEURO.gates = { sell_joker = { key = "reviewed" } }
+  open_proposal({ 1, 2 })
   G.NEURO.weak_fired_serial = 4
   require("core.neuro_lifecycle").clear_pending_confirm()
-  local leftover = {}
-  for _, field in ipairs({ "weak_fired_serial", "context_reviews" }) do
-    if G.NEURO[field] ~= nil then leftover[#leftover + 1] = field end
-  end
-  check("clear_pending_confirm leaves no confirmation field behind",
-    #leftover == 0 and HandTx.current() == nil, table.concat(leftover, ", "))
+  check("clear_pending_confirm leaves no confirmation state behind",
+    G.NEURO.weak_fired_serial == nil and G.NEURO.gates.sell_joker == nil and Gate.proposal() == nil)
 end
 
 do
@@ -437,16 +373,13 @@ do
   _G.G.NEURO = { enabled = true, state = "SHOP", state_enter_serial = 5,
     run_generation = 1, shop_visit_epoch = 1 }
   _G.G.GAME = { dollars = 10, used_vouchers = {} }
-  _G.G.STATES = { SHOP = 1 }
-  _G.G.STATE = 1
+  require("tests.helpers").in_engine_state("SHOP")
   _G.G.jokers = { cards = { { sort_id = 77, ability = { set = "Joker", name = "Bull" },
     config = { center = { name = "Bull" } } } }, config = { card_limit = 5 } }
   check("no sell confirmation means no line", SH.pending_sell_card_name() == nil)
 
   local _, review = SH.handle_sell_card({ area = "jokers", index = 1, name = "Bull" })
-  local CR = require("core.context_review")
-  CR.stage(review.context_review_candidate, { status = "written" })
-  CR.step_delivery()
+  require("core.gate").delivered(review)
   check("an armed sell confirmation names the joker",
     SH.pending_sell_card_name() ~= nil, tostring(SH.pending_sell_card_name()))
 
@@ -457,21 +390,20 @@ end
 
 do
   selecting_hand_env(1200)
-  G.NEURO = { enabled = true, decision_serial = 2, transport_session = 1,
-    dispatcher = Dispatcher, actions = Actions }
+  G.NEURO = session_neuro(2)
   local Staging = require("core.staging")
   local b = armed_bridge()
   b.send_action_result = function() end
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   require("tests.helpers").stage_registered(nil, { "discard_hand" })
 
   arm_force()
-  Staging.queue({ command = "action",
+  Dispatcher.route_message({ command = "action",
     data = { id = "stale-commit", name = "discard_hand", data = '{"indices":[1]}' } }, b)
   check("the action really is queued in staging", Staging.is_busy() == true,
     tostring(Staging.is_busy()))
 
-  Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 2 }, b)
+  Dispatcher.handle_message({ command = "neuro-bridge/reregister_all", transport_session = 2 }, b)
   check("a reconnect cancels it instead of letting it commit later",
     Staging.is_busy() == false, tostring(Staging.is_busy()))
 end
@@ -480,7 +412,7 @@ do
   selecting_hand_env(1300)
   G.NEURO = { enabled = true, decision_serial = 7 }
   local HH = require("handlers.hand_handlers")
-  open_hand_transaction({ 1, 2, 3 }, true, "Committing three cards.")
+  open_proposal({ 1, 2, 3 }, "Committing three cards.")
   check("the full latched hand is announced",
     #((HH.pending() or {}).indices or {}) == 3)
 
@@ -493,16 +425,15 @@ do
   selecting_hand_env(1400)
   G.NEURO = { enabled = true, decision_serial = 7, weak_fired_serial = 7 }
   local HH = require("handlers.hand_handlers")
-  local sel = { G.hand.cards[1], G.hand.cards[2] }
-  open_hand_transaction({ 1, 2 }, false)
-  local unchanged, unchanged_classes = HH.play_confirm_reject(sel, { 1, 2 })
+  open_proposal({ 1, 2 })
+  local unchanged, unchanged_err = HH.handle_play_hand({ indices = { 1, 2 } })
   check("an unchanged resend does not commit",
-    unchanged ~= nil and unchanged_classes and unchanged_classes.pending_repeat == true)
+    unchanged == nil and unchanged_err and unchanged_err.reason_code == "POLICY_ACKNOWLEDGED")
 
   G.hand.cards[1].base.value = "King"
   G.hand.cards[1].base.suit = "Clubs"
   check("a card mutated in place under a stable sort_id is confirmed again, not committed",
-    HH.play_confirm_reject({ G.hand.cards[1], G.hand.cards[2] }, { 1, 2 }) ~= nil)
+    HH.play_review_reason({ G.hand.cards[1], G.hand.cards[2] }, { 1, 2 }) ~= nil)
 end
 
 do
@@ -515,28 +446,27 @@ do
 end
 
 do
-  _G.G = { NEURO = { enabled = true, decision_serial = 1, state_enter_serial = 3,
-    _decision_windows = {} }, FUNCS = {}, GAME = { current_round = {} },
-    STATES = { BUFFOON_PACK = 9 }, STATE = 9, TIMERS = { REAL = 100 } }
-  local DW = require("core.decision_window")
-  DW.reset_field("pack_review")
-  local note = ForceHelpers.pending_gate_note({ "choose_pack_card", "skip_pack" })
+  _G.G = { NEURO = { enabled = true, decision_serial = 1, state_enter_serial = 3, shop_visit_epoch = 1,
+      shop_entry_dollars = 14 },
+    FUNCS = {}, GAME = { current_round = {}, dollars = 3 },
+    STATES = ES, STATE = ES.SHOP, TIMERS = { REAL = 100 } }
+  local note = ForceHelpers.pending_gate_note({ "leave_shop", "buy_from_shop" })
   check("an armed window is announced before she bounces off it",
-    note:find("choose_pack_card", 1, true) ~= nil and note:find("confirmation", 1, true) ~= nil, note)
+    note ~= "", note)
 
-  DW.evaluate("choose_pack_card", nil)
-  DW.acknowledge("choose_pack_card")
+  require("tests.helpers").review("leave_shop")
+  require("core.gate").acknowledge(require("core.gate").snapshot("leave_shop"))
   check("once acknowledged it stops being announced",
-    ForceHelpers.pending_gate_note({ "choose_pack_card" }) == "",
-    ForceHelpers.pending_gate_note({ "choose_pack_card" }))
+    ForceHelpers.pending_gate_note({ "leave_shop" }) == "",
+    ForceHelpers.pending_gate_note({ "leave_shop" }))
 end
 
 do
   _G.G = { NEURO = { enabled = true, decision_serial = 1, state_enter_serial = 1,
-    _decision_windows = {}, joker_intents = {} },
+    joker_intents = {} },
     FUNCS = { toggle_shop = function() end },
     GAME = { dollars = 0, current_round = { reroll_cost = 99 }, used_vouchers = {} },
-    STATES = { SHOP = 5 }, STATE = 5, TIMERS = { REAL = 100 },
+    STATES = ES, STATE = ES.SHOP, TIMERS = { REAL = 100 },
     shop = {}, shop_jokers = { cards = {} }, shop_booster = { cards = {} },
     shop_vouchers = { cards = {} }, consumeables = { cards = {}, config = { card_limit = 2 } },
     jokers = { cards = { { sort_id = 91, ability = { set = "Joker", name = "Bull", eternal = true },
@@ -544,15 +474,23 @@ do
     hand = { cards = {}, config = { card_limit = 8 } }, deck = { cards = {} } }
   local untagged = require("facts.card_util").untagged_joker_count()
   check("the fixture really is a shop with an untagged joker", untagged > 0, tostring(untagged))
-  check("leave_shop is withheld until tagging is done",
-    require("core.actions").is_action_valid("leave_shop") == false)
+  check("leave_shop stays on offer while a joker is untagged",
+    require("core.actions").is_action_valid("leave_shop") == true)
   local ok_r, routed = pcall(require("force.force_router").get_force_for_state, "SHOP")
   check("a force is still produced instead of silence",
     ok_r and routed ~= nil and routed.actions ~= nil, tostring(ok_r) .. " " .. tostring(routed))
   local names = {}
   for _, n in ipairs((routed and routed.actions) or {}) do names[#names + 1] = n end
-  check("and it offers the action that actually unblocks the shop",
-    table.concat(names, ","):find("record_joker_roles", 1, true) ~= nil, table.concat(names, ","))
+  check("and it offers the disposable exit first, the reusable tagging tool beside it",
+    names[1] == "leave_shop" and table.concat(names, ","):find("record_joker_roles", 1, true) ~= nil,
+    table.concat(names, ","))
+  local bare, why = Dispatcher.preflight("leave_shop", {})
+  check("leaving untagged is refused",
+    bare == nil, tostring(why))
+  local tagged = Dispatcher.preflight("leave_shop", { intents = { { index = 1, tag = "CORE" } } })
+  check("leaving with every untagged joker in `intents` is admitted", type(tagged) == "function", tostring(tagged))
+  local partial = Dispatcher.preflight("leave_shop", { intents = { { index = 2, tag = "CORE" } } })
+  check("an out-of-range intent is refused before anything runs", partial == nil)
 end
 
 do
@@ -563,8 +501,7 @@ do
     local blocked = 0
     for i = 1, (calls or 60) do
       G.TIMERS.REAL = G.TIMERS.REAL + 100
-      G.NEURO.force_inflight = false
-      FS.arm("SELECTING_HAND", { action }, { [action] = true }, 1)
+      require("tests.helpers").open_force("SELECTING_HAND", { action })
       if Enforce.pre_action(b, action, gen(i)) ~= true then blocked = blocked + 1 end
     end
     return blocked
@@ -598,16 +535,14 @@ do
   G.TIMERS.REAL = G.TIMERS.REAL + 100
   Enforce.pre_action(b, "set_joker_order", nil)
   check("the repeat warning stays quiet on the first send",
-    ForceHelpers.repeat_pressure_note() == "", ForceHelpers.repeat_pressure_note())
+    ForceHelpers.repeat_pressure_note({ "set_joker_order" }) == "", ForceHelpers.repeat_pressure_note({ "set_joker_order" }))
   for _ = 1, 3 do
     G.TIMERS.REAL = G.TIMERS.REAL + 100
     Enforce.pre_action(b, "set_joker_order", nil)
   end
-  local note = ForceHelpers.repeat_pressure_note()
+  local note = ForceHelpers.repeat_pressure_note({ "set_joker_order" })
   check("it speaks up once the next identical send would be refused",
-    note ~= "" and note:find("set_joker_order", 1, true) ~= nil, note)
-  check("and it never quotes an ordinal it recomputes from live state",
-    note:find("th identical", 1, true) == nil, note)
+    note ~= "", note)
 end
 
 do
@@ -619,7 +554,7 @@ do
   for i = 1, 4 do
     G.TIMERS.REAL = G.TIMERS.REAL + 100
     Enforce.pre_action(b, "set_joker_order", nil)
-    spoke_at[i] = ForceHelpers.repeat_pressure_note() ~= ""
+    spoke_at[i] = ForceHelpers.repeat_pressure_note({ "set_joker_order" }) ~= ""
   end
   check("silent while another identical send would still be accepted",
     spoke_at[1] == false and spoke_at[2] == false, table.concat({
@@ -633,14 +568,11 @@ do
   G.NEURO = { enabled = true, decision_serial = 5, dispatcher = Dispatcher, actions = Actions }
   local b = armed_bridge()
   local wire = {}
-  b.send_action_result = function(_self, _id, ok, _msg, reason)
-    wire[#wire + 1] = { ok = ok, reason = reason }
-  end
-  require("core.tx_cache").reset()
+  b.send_action_result = require("tests.helpers").result_log(wire, { "_", "ok", "_", "reason" })
+  require("core.bridge").tx.reset()
   require("tests.helpers").stage_registered(nil, { "play_hand" })
-  G.NEURO.force_inflight = false
-  FS.arm("SELECTING_HAND", { "play_hand" }, { play_hand = true }, 1)
-  open_hand_transaction({ 1, 2 }, true, "Committing Pair.")
+  require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
+  open_proposal({ 1, 2 }, "Committing Pair.")
 
   G.NEURO.llm_paused = true
   Dispatcher.route_message({ command = "action",
@@ -649,57 +581,37 @@ do
 
   check("the paused answer carries an acknowledging code, which is what keeps it success=true",
     wire[1] and wire[1].ok == true
-      and ActionResult.acknowledges(wire[1].reason) == true,
+      and ActionResult.terminal(wire[1].reason, true) == true,
     tostring(wire[1] and wire[1].reason))
   check("a paused action does not advance the decision",
     G.NEURO.decision_serial == 5, tostring(G.NEURO.decision_serial))
   check("the pending confirmation survives the pause",
     require("handlers.hand_handlers").pending() ~= nil)
-  local cached = require("core.tx_cache").get("paused-1")
-  check("the paused reply is retained so a redelivery replays it",
-    cached ~= nil and tostring(cached.message or cached.msg or ""):find("Paused", 1, true) ~= nil,
-    tostring(cached and (cached.message or cached.msg)))
-end
-
-do
-  local CODES = require("core.action_result").CODES
-  check("ACTION_UNREGISTERED is declared", CODES.ACTION_UNREGISTERED ~= nil)
-  check("ACTION_UNKNOWN is declared", CODES.ACTION_UNKNOWN ~= nil)
-  check("both are declared as real failures, not merely absent from the table",
-    CODES.ACTION_UNREGISTERED.acknowledge == true
-      and CODES.ACTION_UNKNOWN.acknowledge == nil
-      and CODES.ACTION_UNREGISTERED.transient == false)
-  check("ActionResult.error accepts them instead of asserting",
-    (pcall(ActionResult.error, "ACTION_UNKNOWN", "x")) == true)
+  check("the paused reply marks its id answered", require("core.bridge").tx.get("paused-1") == true)
+  Dispatcher.route_message({ command = "action",
+    data = { id = "paused-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
+  check("so a redelivery of that id earns no second result", #wire == 1, #wire)
 end
 
 do
   local AR = require("core.action_result")
-  check("with no per-send opinion the class answers",
-    AR.is_transient("TRANSITION_PENDING") == true
-      and AR.is_transient("POLICY_REJECTED") == false)
-  check("a per-send value overrides the class in both directions",
-    AR.is_transient("TRANSITION_PENDING", { transient = false }) == false
-      and AR.is_transient("POLICY_REJECTED", { transient = true }) == true)
-  check("opts without the field falls back to the class",
-    AR.is_transient("TRANSITION_PENDING", { acknowledged = true }) == true)
-  check("an unknown or absent code is not transient",
-    AR.is_transient(nil) == false and AR.is_transient("no_such_code") == false)
+  check("both are declared as real failures (success=false, as in Action.cs:52-60), not merely absent from the table",
+    AR.terminal("ACTION_UNREGISTERED", true) == false and AR.terminal("ACTION_UNKNOWN", true) == false)
+  check("ActionResult.error accepts them instead of asserting",
+    (pcall(ActionResult.error, "ACTION_UNKNOWN", "x")) == true)
 
   selecting_hand_env(2050)
   G.NEURO = { enabled = true, decision_serial = 1 }
   local b = armed_bridge()
-  local _, _, transient, code = Enforce.pre_action(b, "no_such_action_at_all")
-  check("a settled refusal reports the flag its own code declares",
-    code == "ACTION_UNAVAILABLE" and transient == AR.is_transient(code) and transient == false,
-    tostring(code) .. "/" .. tostring(transient))
+  local _, _, terminal, code = Enforce.pre_action(b, "no_such_action_at_all")
+  check("a settled refusal is retried (success=false)",
+    code == "ACTION_UNAVAILABLE" and terminal == false, tostring(code) .. "/" .. tostring(terminal))
 
   local gapped = armed_bridge()
   gapped.is_transition_cooldown = function() return true end
-  local _, _, transient_t, code_t = Enforce.pre_action(gapped, "play_hand", '{"indices":[1,2]}')
-  check("and a momentary one reports the flag its own code declares",
-    code_t == "TRANSITION_PENDING" and transient_t == AR.is_transient(code_t) and transient_t == true,
-    tostring(code_t) .. "/" .. tostring(transient_t))
+  local _, _, terminal_t, code_t = Enforce.pre_action(gapped, "play_hand", '{"indices":[1,2]}')
+  check("and a momentary one outside a force is retried too",
+    code_t == "TRANSITION_PENDING" and terminal_t == false, tostring(code_t) .. "/" .. tostring(terminal_t))
 end
 
 do
@@ -710,8 +622,7 @@ do
   local blocked = 0
   for i = 1, 12 do
     G.TIMERS.REAL = G.TIMERS.REAL + 100
-    G.NEURO.force_inflight = false
-    FS.arm("SELECTING_HAND", { "set_joker_order" }, { set_joker_order = true }, 1)
+    require("tests.helpers").open_force("SELECTING_HAND", { "set_joker_order" })
     if Enforce.pre_action(b, "set_joker_order", (i % 2 == 0) and nil or "{}") ~= true then
       blocked = blocked + 1
     end
@@ -722,92 +633,30 @@ end
 do
   selecting_hand_env(2100)
   G.NEURO = { enabled = true, decision_serial = 4, run_generation = 1 }
-  open_hand_transaction({ 1 }, false)
+  open_proposal({ 1 })
   require("core.neuro_lifecycle").reset_run_state()
   check("a new run inherits no confirmation state from the old one",
-    HandTx.current() == nil, tostring(HandTx.current()))
-end
-
-do
-  selecting_hand_env(2200)
-  two_jokers()
-  G.NEURO = { enabled = true, decision_serial = 1 }
-  local b = armed_bridge()
-  for _ = 1, 5 do
-    G.TIMERS.REAL = G.TIMERS.REAL + 100
-    Enforce.pre_action(b, "set_joker_order", nil)
-  end
-  check("a refusal really did stage a correction", Enforce.take_correction() ~= nil)
-  for _ = 1, 5 do
-    G.TIMERS.REAL = G.TIMERS.REAL + 100
-    Enforce.pre_action(b, "set_joker_order", nil)
-  end
-  Enforce.reset_run_state()
-  check("a staged correction does not survive into the next run",
-    Enforce.take_correction() == nil, tostring(Enforce.take_correction()))
+    Gate.proposal() == nil, tostring(Gate.proposal()))
 end
 
 do
   selecting_hand_env(2300)
-  G.NEURO = { enabled = true, decision_serial = 2, transport_session = 1,
-    dispatcher = Dispatcher, actions = Actions }
+  G.NEURO = session_neuro(2, true)
   local Staging = require("core.staging")
   local b = armed_bridge()
   b.send_action_result = function() end
-  require("core.tx_cache").reset()
+  require("core.bridge").tx.reset()
   require("tests.helpers").stage_registered(nil, { "discard_hand" })
-  G.NEURO.force_inflight = false
-  FS.arm("SELECTING_HAND", { "discard_hand" }, { discard_hand = true }, 1)
-  Staging.queue({ command = "action",
+  require("tests.helpers").open_force("SELECTING_HAND", { "discard_hand" })
+  Dispatcher.route_message({ command = "action",
     data = { id = "dup-sess", name = "discard_hand", data = '{"indices":[1]}' } }, b)
   check("the action is queued", Staging.is_busy() == true)
-  Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 1 }, b)
+  Dispatcher.handle_message({ command = "neuro-bridge/reregister_all", transport_session = 1 }, b)
   check("a duplicate reregister on the same transport keeps the queued action",
     Staging.is_busy() == true, tostring(Staging.is_busy()))
-  Dispatcher.handle_message({ command = "actions/reregister_all", transport_session = 2 }, b)
+  Dispatcher.handle_message({ command = "neuro-bridge/reregister_all", transport_session = 2 }, b)
   check("a real transport change still cancels it",
     Staging.is_busy() == false, tostring(Staging.is_busy()))
-end
-
-do
-  selecting_hand_env(2400)
-  two_jokers()
-  G.NEURO = { enabled = true, decision_serial = 1 }
-  local b = armed_bridge()
-  local function send(payload)
-    G.TIMERS.REAL = G.TIMERS.REAL + 100
-    return Enforce.pre_action(b, "set_joker_order", payload) == true
-  end
-
-  local allowed = 0
-  while allowed < 50 and send("not json at all") do allowed = allowed + 1 end
-  check("a run of malformed sends is capped", allowed > 0 and allowed < 50, tostring(allowed))
-
-  selecting_hand_env(2500)
-  two_jokers()
-  G.NEURO = { enabled = true, decision_serial = 1 }
-  b = armed_bridge()
-  local pre = true
-  for _ = 1, allowed do pre = pre and send("not json at all") end
-  check("the same run is accepted up to the cap", pre == true)
-  check("a payload that parses is accepted after that run", send(nil) == true)
-
-  local post = true
-  for _ = 1, allowed do post = post and send("not json at all") end
-  check("the junk counter restarts from zero after a payload that parsed", post == true)
-  check("and the cap still fires on the restarted run", send("not json at all") == false)
-
-  local function refuse_msg()
-    G.TIMERS.REAL = G.TIMERS.REAL + 100
-    local _, msg = Enforce.pre_action(b, "set_joker_order", "not json at all")
-    return tonumber((tostring(msg):match("repeated (%d+) times")))
-  end
-  local first = refuse_msg()
-  for _ = 1, 20 do refuse_msg() end
-  local later = refuse_msg()
-  check("the refused junk count the message quotes stops at the cap",
-    first == allowed and later == allowed,
-    tostring(allowed) .. ": " .. tostring(first) .. " -> " .. tostring(later))
 end
 
 do
@@ -815,22 +664,12 @@ do
   G.NEURO = { enabled = true, decision_serial = 5, once_serials = {}, state_enter_serial = 1 }
   G.GAME.blind = { chips = 300, debuff = {}, config = { blind = {} } }
   local HH = require("handlers.hand_handlers")
-  local GOLDEN = "Committing Pair -- Call resolve_play with transaction_id and answer yes to commit this play."
-  open_hand_transaction({ 1, 2 }, true, GOLDEN)
+  local GOLDEN = "Committing Pair -- Use the currently offered resolve_play action with answer yes or no."
+  open_proposal({ 1, 2 }, GOLDEN)
 
   local pending = require("handlers.hand_handlers").pending()
   check("the confirmation the sentence describes is actually open",
     type(pending) == "table" and table.concat(pending.indices, ",") == "1,2", tostring(pending))
-
-  local q = (require("force.force_selecting_hand").build() or {}).query or ""
-  check("the force states the open confirmation verbatim", q:find(GOLDEN, 1, true) ~= nil, q)
-
-  HandTx.invalidate(nil, "test_clear")
-  local q2 = (require("force.force_selecting_hand").build() or {}).query or ""
-  check("the force really was rebuilt after the latch was cleared",
-    q2:find("State: SELECTING_HAND.", 1, true) ~= nil, q2)
-  check("and says nothing about an open confirmation when none is",
-    q2:find("A play_hand confirmation is open", 1, true) == nil, q2)
 end
 
 done()

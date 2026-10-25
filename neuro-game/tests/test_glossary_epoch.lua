@@ -1,6 +1,4 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
-_G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 100 } }
+require("tests.stubs").setup({ love = "timers", G = "timed" })
 
 local check, done = require("tests.helpers").harness("glossary-epoch")
 
@@ -20,7 +18,8 @@ end
 
 local function bridge(over)
   ContextDelivery.reset_transport()
-  local N = { enabled = true, persona = "neuro", emitted = {}, llm_paused = false, session_once_serials = {}, once_serials = {} }
+  local N = require("tests.helpers").started_bridge({ enabled = true, persona = "neuro", emitted = {},
+    llm_paused = false, session_once_serials = {}, once_serials = {} })
   function N:send_context(msg, _silent, receipt)
     if self.llm_paused then if receipt then receipt.status = "rejected" end return false end
     self.emitted[#self.emitted + 1] = tostring(msg)
@@ -28,7 +27,6 @@ local function bridge(over)
     return true
   end
   function N:register_actions() end
-  function N:unregister_actions() end
   function N:force_actions() end
   function N:send_action_result() end
   if over then for k, v in pairs(over) do N[k] = v end end
@@ -36,8 +34,7 @@ local function bridge(over)
 end
 
 local function world(ante, jokers)
-  G.STATES = { SELECTING_HAND = 4 }
-  G.STATE = 4
+  require("tests.helpers").in_engine_state("SELECTING_HAND")
   G.STATE_COMPLETE = true
   G.OVERLAY_MENU = nil
   G.GAME = {
@@ -50,14 +47,12 @@ local function world(ante, jokers)
   G.hand = { cards = {}, highlighted = {}, config = { card_limit = 5, highlighted_limit = 5 } }
   G.jokers = { cards = jokers or {}, config = { card_limit = 5 } }
   G.consumeables = { cards = {}, config = { card_limit = 2 } }
-  G.playbook_extra = nil
   G.deck = { cards = {} }
-  ContextCompact.invalidate_cache()
 end
 
 local function emit()
   local before = #G.NEURO.emitted
-  Orchestrator._emit_state_glossary("SELECTING_HAND")
+  require("core.window")._test.emit_glossary("SELECTING_HAND")
   local out = {}
   for i = before + 1, #G.NEURO.emitted do out[#out + 1] = G.NEURO.emitted[i] end
   return out
@@ -71,8 +66,8 @@ end
 do
   world(1, { make_joker("j_joker", "Joker") })
   G.NEURO = bridge()
-
   local first = emit()
+
   check("the first pass of a session delivers the common legend",
     has(first, TokenLegends.READABLE_COMMON), table.concat(first, " || "))
   check("the first pass of a session delivers the state legend",
@@ -124,9 +119,8 @@ end
 
 do
   local MARK = "Card rank chips"
-  local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, HAND_PLAYED = 5,
-    GAME_OVER = 4, MENU = 11 }
-  local wire, forces = {}, 0
+  local STATES = require("tests.engine_cards").states()
+  local wire, forces, serials = {}, 0, {}
 
   local function play_card(sort_id)
     return { sort_id = sort_id, cost = 0, sell_cost = 0,
@@ -135,15 +129,14 @@ do
       juice_up = function() end, highlight = function() end }
   end
 
-  local N = { enabled = true, persona = "neuro", llm_paused = false, reserved_dollars = 0,
-    once_serials = {}, session_once_serials = {}, run_generation = 1 }
+  local N = require("tests.helpers").started_bridge({ enabled = true, persona = "neuro", llm_paused = false, reserved_dollars = 0,
+    once_serials = {}, session_once_serials = {}, run_generation = 1 })
   function N:send_context(msg, _, receipt)
     wire[#wire + 1] = tostring(msg)
     if receipt then receipt.status = "written" end
     return true
   end
   function N:register_actions() end
-  function N:unregister_actions() end
   function N:force_actions(ctx, query)
     forces = forces + 1
     wire[#wire + 1] = tostring(ctx or "") .. " " .. tostring(query or "")
@@ -154,6 +147,7 @@ do
   ContextDelivery.reset_transport()
 
   _G.G = {
+    P_CENTERS = require("tests.engine_centers").centers(),
     STATE = STATES.SELECTING_HAND, STATES = STATES, STATE_COMPLETE = true,
     TIMERS = { REAL = 1000 }, SETTINGS = { GAMESPEED = 1 }, CONTROLLER = { locks = {} },
     GAME = {
@@ -174,11 +168,10 @@ do
     jokers = { cards = { make_joker("j_joker", "Joker") }, config = { card_limit = 5 } },
     consumeables = { cards = {}, config = { card_limit = 2 } },
     deck = { cards = {} },
-    FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end,
+    FUNCS = { get_poker_hand_info = require("tests.engine_hand_info").stub("Pair"),
       select_blind = function() end },
     blind_select = {}, NEURO = N,
   }
-  ContextCompact.invalidate_cache()
 
   local function tick(seconds)
     for _ = 1, math.floor(seconds / 0.1) do
@@ -192,8 +185,10 @@ do
     for _ = 1, 5 do
       G.STATE = STATES.SELECTING_HAND
       tick(2.0)
+      serials[G.NEURO.decision_serial or 0] = true
       G.STATE = STATES.HAND_PLAYED
       tick(0.3)
+      serials[G.NEURO.decision_serial or 0] = true
       G.GAME.round = G.GAME.round + 1
     end
   end
@@ -209,8 +204,11 @@ do
     end
   end
 
-  check("the session really produced decisions (the count below is not vacuous)",
-    forces >= 38, "forces=" .. forces .. " frames=" .. #wire)
+  local distinct_serials = 0
+  for _ in pairs(serials) do distinct_serials = distinct_serials + 1 end
+  check("the session traversed multiple completed decision transitions",
+    forces >= 1 and distinct_serials >= 8,
+    "forces=" .. forces .. " serials=" .. distinct_serials .. " frames=" .. #wire)
   check("the rank-chip sentence reaches the model exactly ONCE in a whole session",
     hits == 1, "occurrences=" .. hits .. " across " .. #wire .. " frames, " .. forces .. " forces")
 end

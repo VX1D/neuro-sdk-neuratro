@@ -1,5 +1,4 @@
-local clock = 0
-love = { timer = { getTime = function() return clock end } }
+love = { timer = { getTime = function() return 0 end } }
 _G.G = { NEURO = {}, TIMERS = { REAL = 0 } }
 
 local Bridge = require("core.bridge")
@@ -7,91 +6,115 @@ local check, done = require("tests.helpers").harness("inbox-rotation")
 
 local TmpWork = require("tests.tmp_workdir")
 local dir = TmpWork.open("ibx")
+local inbox = dir .. "/neuro_inbox.jsonl"
 
-local b = Bridge:new({ game = "Balatro", enabled = true, fs_dir = dir })
-local seen = {}
-b:set_message_handler(function(msg) seen[#seen + 1] = msg.command end)
-
-local function append(line)
-  local f = io.open(dir .. "/neuro_inbox.jsonl", "a")
-  f:write(line .. "\n"); f:close()
+local function write(path, text, mode)
+  local f = io.open(path, mode or "ab")
+  f:write(text)
+  f:close()
 end
 
-append('{"command":"actions/reregister_all"}')
-b:poll_inbox()
-local after_first = #seen
-check("first line handled once", after_first == 1, after_first)
+local function tagged(tag)
+  return '{"command":"context","data":{"tag":"' .. tag .. '"}}\n'
+end
 
-append('{"command":"action","data":{"id":"x1","name":"help","data":"{}"}}')
-b:poll_inbox()
-check("a prefix growing past 64B is not treated as a rotation (reregister_all handled only once)",
-  seen[1] == "actions/reregister_all" and #seen == 2, table.concat(seen, ","))
-
-local f = io.open(dir .. "/neuro_inbox.jsonl", "w")
-f:write('{"command":"context","data":{"message":"new file","silent":true}}\n'); f:close()
-b:poll_inbox()
-check("a real rotation (diverging prefix) is detected and the file is read from zero",
-  seen[#seen] == "context", table.concat(seen, ","))
-
-local function fresh_bridge()
+local function fresh()
   os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "'")
-  local nb = Bridge:new({ game = "Balatro", enabled = true, fs_dir = dir })
+  local b = Bridge:new({ game = "Balatro", enabled = true, fs_dir = dir })
+  G.NEURO = b
   local tags = {}
-  nb:set_message_handler(function(msg) tags[#tags + 1] = msg.data and msg.data.tag end)
-  return nb, tags
-end
-
-local function overwrite(text)
-  local fh = io.open(dir .. "/neuro_inbox.jsonl", "wb")
-  fh:write(text); fh:close()
-end
-
-local function tagged(tag, pad)
-  return '{"command":"context","data":{"tag":"' .. tag .. '","pad":"' .. string.rep("x", pad or 0) .. '"}}\n'
+  b:set_message_handler(function(msg) tags[#tags + 1] = msg.data and msg.data.tag or msg.command end)
+  return b, tags
 end
 
 do
-  local nb, tags = fresh_bridge()
-  overwrite(tagged("AAAA"))
-  nb:poll_inbox()
-  local before = #tags
-  overwrite(tagged("BBBB"))
-  check("a rotation to a file of the same byte size is still a rotation",
-    before == 1 and (function() nb:poll_inbox() return tags[2] == "BBBB" end)(),
+  local b, tags = fresh()
+  write(inbox, tagged("a"))
+  b:poll_inbox()
+  write(inbox, tagged("b"))
+  b:poll_inbox()
+  b:poll_inbox()
+  check("a growing file is read once, line by line", table.concat(tags, ",") == "a,b",
     table.concat(tags, ","))
+  write(inbox, tagged("c"), "wb")
+  b:poll_inbox()
+  check("a file that no longer continues the cursor is read from zero",
+    table.concat(tags, ",") == "a,b,c", table.concat(tags, ","))
 end
 
 do
-  local nb, tags = fresh_bridge()
-  overwrite(tagged("OLD1") .. tagged("OLD2", 40) .. tagged("OLD3", 40))
-  nb:poll_inbox()
-  local before = #tags
-  overwrite(tagged("OLD1") .. tagged("NEW1"))
-  nb:poll_inbox()
-  local saw_new = false
-  for _, t in ipairs(tags) do if t == "NEW1" then saw_new = true end end
-  check("a truncation that keeps the leading bytes does not swallow what replaced them",
-    before == 3 and saw_new, table.concat(tags, ","))
+  local b, tags = fresh()
+  write(inbox, tagged("same1"))
+  b:poll_inbox()
+  write(inbox, tagged("same2"), "wb")
+  b:poll_inbox()
+  check("a rotation to a file of the same byte size is still a rotation",
+    table.concat(tags, ",") == "same1,same2", table.concat(tags, ","))
 end
 
 do
-  local nb, tags = fresh_bridge()
-  nb._transport_saturated = true
-  overwrite(tagged("ANS1") .. tagged("ANS2"))
-  nb:poll_inbox()
-  check("a saturated outbox leaves inbound obligations unread",
-    #tags == 0, table.concat(tags, ","))
-  overwrite(tagged("ANS1") .. tagged("ANS2") .. tagged("ANS3"))
-  clock = clock + 1
-  nb:update(1)
-  check("update does not accept more obligations while saturation remains",
-    #tags == 0, table.concat(tags, ","))
-  check("not reading the inbox does not clear the send-side backpressure",
-    nb:is_transport_saturated() == true)
-  nb._transport_saturated = nil
-  nb:poll_inbox()
-  check("polling resumes from the unread prefix after transport recovery",
-    #tags == 3 and tags[3] == "ANS3", table.concat(tags, ","))
+  local b, tags = fresh()
+  write(inbox, tagged("old1"))
+  b:poll_inbox()
+  write(inbox, tagged("old2"))
+  os.rename(inbox, inbox .. ".1")
+  write(inbox, tagged("new1"))
+  b:poll_inbox()
+  check("a record appended just before the rename is delivered before the new file",
+    table.concat(tags, ",") == "old1,old2,new1", table.concat(tags, ","))
+  write(inbox, tagged("new2"))
+  b:poll_inbox()
+  check("after the drain the new file is followed like any other",
+    table.concat(tags, ",") == "old1,old2,new1,new2", table.concat(tags, ","))
+end
+
+do
+  local b, tags = fresh()
+  write(inbox, tagged("r1"))
+  b:poll_inbox()
+  write(inbox, tagged("r2") .. tagged("r3"))
+  os.rename(inbox, inbox .. ".1")
+  write(inbox, tagged("n1"))
+  b:set_message_handler(function(msg)
+    tags[#tags + 1] = msg.data.tag
+    if msg.data.tag == "r2" then b._fifo[#b._fifo + 1] = "held\n" end
+  end)
+  b._append = function() return 0 end
+  b:poll_inbox()
+  check("a pending outbox stops the drain mid-file", table.concat(tags, ",") == "r1,r2",
+    table.concat(tags, ","))
+  b._append = nil
+  b:flush_outbox()
+  b:poll_inbox()
+  check("the drain resumes from its cursor and then follows the new file",
+    table.concat(tags, ",") == "r1,r2,r3,n1", table.concat(tags, ","))
+end
+
+do
+  local b, tags = fresh()
+  write(inbox, tagged("mine"))
+  b:poll_inbox()
+  write(inbox .. ".1", tagged("stranger") .. tagged("stranger2"), "wb")
+  write(inbox, tagged("fresh"), "wb")
+  b:poll_inbox()
+  check("a rotated file that does not continue our cursor is never replayed",
+    table.concat(tags, ",") == "mine,fresh", table.concat(tags, ","))
+end
+
+do
+  local b, tags = fresh()
+  write(inbox, tagged("stale") .. '{"command":"neuro-bridge/reregister_all","transport_session":7}\n'
+    .. '{"command":"context","data":{"tag":"half')
+  b:send_startup()
+  b:poll_inbox()
+  check("startup skips what the relay wrote before the game started", #tags == 0,
+    table.concat(tags, ","))
+  check("while keeping the session it last named", b.transport_session == "7",
+    tostring(b.transport_session))
+  write(inbox, '"}}\n' .. tagged("after"))
+  b:poll_inbox()
+  check("an unterminated record resumes when the relay finishes it",
+    table.concat(tags, ",") == "half,after", table.concat(tags, ","))
 end
 
 TmpWork.close()

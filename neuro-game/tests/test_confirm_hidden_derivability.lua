@@ -1,3 +1,4 @@
+local ES = require("tests.engine_cards").states()
 rawset(_G, "NEURO_TEST", true)
 if not love then love = { timer = { getTime = function() return 0 end } } end
 
@@ -10,17 +11,8 @@ local check, done = H.harness("confirm hidden derivability")
 local sid = 0
 local function card(v, suit)
   sid = sid + 1
-  local id = H.RID[v]
-  local c = {
-    base = { value = H.VALN[v] or v, suit = suit, id = id, nominal = (id <= 10 and id or 10) },
-    sort_id = sid, cost = 1, sell_cost = 1,
-    ability = { set = "Default", name = "Base", effect = "" },
-    config = { center = { key = "c_base", set = "Default" } },
-    facing = "front",
-  }
-  c.is_suit = function(_, s) return s == suit end
-  c.get_id = function(self) return self.base.id end
-  c.is_face = function(self) return self.base.id >= 11 and self.base.id <= 13 end
+  local c = require("tests.engine_cards").playing(H.VALN[v] or v, suit, { sort_id = sid })
+  c.cost, c.sell_cost = 1, 1
   return c
 end
 
@@ -48,8 +40,8 @@ local function base_G()
     end
   end
   local g = {
-    NEURO = { run_generation = 1 }, STATE = 1,
-    STATES = { SELECTING_HAND = 1, SHOP = 2, BLIND_SELECT = 3, ROUND_EVAL = 7, MENU = 20 },
+    NEURO = { run_generation = 1 }, STATE = ES.SELECTING_HAND,
+    STATES = ES,
     jokers = { cards = {}, config = { card_limit = 5 } },
     consumeables = { cards = {}, config = { card_limit = 2 } },
     hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
@@ -63,37 +55,11 @@ local function base_G()
   return g, by
 end
 
-local function real_phi(sel)
-  local counts, order = {}, {}
-  for _, c in ipairs(sel or {}) do
-    local id = c.base.id
-    if not counts[id] then order[#order + 1] = id end
-    counts[id] = (counts[id] or 0) + 1
-  end
-  local pairs_n, trips_n, best_id, best_n = 0, 0, nil, 0
-  for _, id in ipairs(order) do
-    local n = counts[id]
-    if n >= 3 then trips_n = trips_n + 1 elseif n == 2 then pairs_n = pairs_n + 1 end
-    if n > best_n then best_id, best_n = id, n end
-  end
-  local name = "High Card"
-  if trips_n > 0 then name = "Three of a Kind"
-  elseif pairs_n >= 2 then name = "Two Pair"
-  elseif pairs_n == 1 then name = "Pair" end
-  local scoring = {}
-  if best_n > 1 then
-    for _, c in ipairs(sel) do if c.base.id == best_id then scoring[#scoring + 1] = c end end
-  else
-    for _, c in ipairs(sel or {}) do scoring[#scoring + 1] = c end
-  end
-  local ph = { [name] = scoring }
-  if trips_n > 0 or pairs_n >= 2 then ph["Pair"] = scoring end
-  return name, {}, ph, scoring
-end
+local real_phi = require("tests.engine_hand_info").engine()
 
 local function confirm(sel, indices)
-  local msg = HandHandlers.play_confirm_reject(sel, indices)
-  return tostring(msg)
+  local ask, _, facts = HandHandlers.play_review_reason(sel, indices)
+  return require("context.state_doc").lines(facts, ask)
 end
 
 local function place(visible, hidden, pos)
@@ -117,14 +83,7 @@ local function idx_str(idx)
   return "[" .. table.concat(idx, ",") .. "]"
 end
 
-local function each_position(n, fn)
-  local bad = nil
-  for pos = 1, n do
-    local ok, detail = fn(pos)
-    if not ok and not bad then bad = "at hidden position " .. pos .. ": " .. tostring(detail) end
-  end
-  return bad == nil, bad or "all positions 1.." .. n
-end
+local each_position = require("tests.helpers").each_position
 
 local function baron_board(hidden_rank, pos)
   local g, by = base_G()
@@ -145,11 +104,10 @@ check("held face-down card: its rank is not derivable from the play confirmation
     local k, t = baron_board("K", pos), baron_board("2", pos)
     return k == t, "[" .. k .. "] vs [" .. t .. "]"
   end))
-check("held face-down card: the confirmation still prices Baron off the public deck",
+check("held face-down card: the confirmation's ceiling counts only the public whole deck",
   each_position(6, function(pos)
     local k = baron_board("K", pos)
-    return k:find("at most x3.38 Mult", 1, true) ~= nil
-      and k:find("4 such cards in your deck, and you hold at most 3", 1, true) ~= nil, k
+    return k:find("4 such cards in your deck", 1, true) ~= nil, k
   end))
 
 do
@@ -162,7 +120,8 @@ do
   g.FUNCS.get_poker_hand_info = real_phi
   local visible = confirm({ by["4Diamonds"], by["7Hearts"], by["9Clubs"] }, { 4, 5, 6 })
   check("all-visible hand: the confirmation states Baron's exact x3.38 with no hedge",
-    visible:find("add x3.38 Mult to High Card (Baron x3.38 Mult)", 1, true) ~= nil, visible)
+    visible:find("Your jokers on High Card, in scoring order -- as the cards score: joker 1 x3.38 mult.", 1, true) ~= nil
+      and visible:find("at most", 1, true) == nil, visible)
 end
 
 local function triboulet_board(hidden_rank, pos)
@@ -185,10 +144,10 @@ check("played face-down card: its rank is not derivable from the play confirmati
     local k, t = triboulet_board("K", pos), triboulet_board("2", pos)
     return k == t, "[" .. k .. "] vs [" .. t .. "]"
   end))
-check("played face-down card: the confirmation still prices Triboulet off the public deck",
+check("played face-down card: the confirmation's ceiling counts the public selection, the hidden card as a possible match",
   each_position(5, function(pos)
     local k = triboulet_board("K", pos)
-    return k:find("at most x", 1, true) ~= nil and k:find("in your deck", 1, true) ~= nil, k
+    return k:find("at most x16 Mult (Triboulet x16 Mult -- the 3 cards you are about to play", 1, true) ~= nil, k
   end))
 
 do
@@ -236,7 +195,7 @@ check("weak pause: the hand a face-down card would complete is not derivable",
 check("weak pause: it masks the same four fields the engine masks",
   each_position(5, function(pos)
     local k, idx = mark_board("K", 2, pos)
-    return k:find("Selection " .. idx_str(idx) .. " = ???? (lvl ?, ? chips x ? mult).", 1, true) ~= nil, k
+    return k:find("Selection " .. idx_str(idx) .. " = hand type hidden: it includes a face-down card", 1, true) ~= nil, k
   end))
 check("weak pause: it says why the hand has no name", each_position(5, function(pos)
   local k = mark_board("K", 2, pos)

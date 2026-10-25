@@ -1,4 +1,4 @@
-{"command":"actions/reregister_all","transport_session":1}
+{"command":"neuro-bridge/reregister_all","transport_session":1}
 {"command":"action","data":{"data":"{\"persona\": \"neuro\"}","id":"381ecbedb728464db8d88416cd994cf1","name":"choose_persona"}}
 {"command":"action","data":{"id":"667165de0fec4076a53493cbe9ed19ea","name":"setup_run"}}
 {"command":"action","data":{"id":"fbf97ccaab89445592b6e146e7b9e85e","name":"start_setup_run"}}
@@ -356,7 +356,7 @@
 {"command":"action","data":{"data":"{\"area\": \"booster_pack\", \"index\": 1, \"name\": \"Photograph\", \"plan\": {\"build_plan\": \"Flush build with Crafty Joker + Photograph X2 Mult on first face card; keep looking for scaling/xMult jokers and level Flush with planets.\", \"hand_plan\": \"Keep playing Flushes in diamonds; include a face card to trigger Photograph.\", \"money_plan\": \"Keep bank for interest; buy jokers/planets that boost Flush.\"}}","id":"5794cb1118e64dae816b4f27e92785d5","name":"use_card"}}
 {"command":"action","data":{"data":"{\"area\": \"booster_pack\", \"index\": 1, \"name\": \"Photograph\", \"plan\": {\"build_plan\": \"Photograph X2 Mult on first face card scored -- our first multiplier; pair it with Crafty Joker Flush chips. Look for more xMult/scaling next shops.\", \"hand_plan\": \"Keep playing Flushes in diamonds; include at least one face card (J/Q/K) in the flush to trigger Photograph.\", \"money_plan\": \"Keep $1+ bank for interest; spend on scaling/mult jokers and planets for Flush.\"}}","id":"6aa57a9331034d3db4ed9257203785a6","name":"use_card"}}
 {"command":"action","data":{"data":"{\"intents\": [{\"index\": 1, \"tag\": \"CORE\", \"note\": \"Flush +80 chips, engine of the build\"}, {\"index\": 2, \"tag\": \"CORE\", \"note\": \"X2 mult on face card, keep in flushes\"}]}","id":"35c4cd08a4234ad98e5d391f1eecdb63","name":"set_joker_intents"}}
-{"command":"neuro-bridge/abandon","data":{"ids":["35c4cd08a4234ad98e5d391f1eecdb63"]}}
+{"command":"neuro-bridge/abandon","transport_session":1,"data":{"ids":["35c4cd08a4234ad98e5d391f1eecdb63"]}}
 {"command":"actions/reregister_all","transport_session":1}
 {"command":"action","data":{"data":"{\"persona\": \"neuro\"}","id":"251032b0e127475d906599d73445e4f4","name":"choose_persona"}}
 {"command":"action","data":{"id":"907ba501f1544cc28aa5a484a732aade","name":"setup_run"}}
@@ -573,7 +573,7 @@
 {"command":"action","data":{"data":"{\"indices\": [1], \"plan\": {\"hand_plan\": \"Ace high clears the 5 remaining chips.\", \"build_plan\": \"Keep Fortune Teller core; buy Tarots each shop.\", \"money_plan\": \"Hold cash for interest.\"}}","id":"896a37c0099e43f88fb34ff708a1e9b2","name":"play_hand"}}
 {"command":"action","data":{"data":"{\"indices\": [1]}","id":"333fe0bf193b40b5be24532bd6671cf5","name":"play_hand"}}
 {"command":"action","data":{"id":"1cf1ca49f8c449958c5993dc2cb5f7f3","name":"cash_out"}}
-{"command":"neuro-bridge/abandon","data":{"ids":["1cf1ca49f8c449958c5993dc2cb5f7f3"]}}
+{"command":"neuro-bridge/abandon","transport_session":1,"data":{"ids":["1cf1ca49f8c449958c5993dc2cb5f7f3"]}}
 {"command":"actions/reregister_all","transport_session":1}
 {"command":"action","data":{"data":"{\"persona\": \"neuro\"}","id":"511d5a231f1243cf8990c12fb84bb375","name":"choose_persona"}}
 {"command":"action","data":{"id":"a0ae10bf51524ae3b95dd5c56e7e7cb6","name":"setup_run"}}
@@ -593,4 +593,4 @@
 {"command":"action","data":{"data":"{\"indices\": [2, 5, 7, 8], \"plan\": {\"hand_plan\": \"Chase Spade flush (61% hit); fall back to QQ/99 two pair if missed\", \"build_plan\": \"Shop next: buy xMult or scoring joker\", \"money_plan\": \"Rebuild interest after cash-out\"}}","id":"24130d4a0d5d41f9937ee1c05e4f2212","name":"discard_hand"}}
 {"command":"action","data":{"data":"{\"indices\": [4, 6, 7, 8], \"plan\": {\"hand_plan\": \"Chase Spade flush (66%); fall back to pair/99 hands; need ~130 total, flush ~130 clears.\", \"build_plan\": \"Shop next: buy xMult or scoring joker.\", \"money_plan\": \"Rebuild interest after cash-out.\"}}","id":"b28c97d623aa48a8b54d9b07812a59c8","name":"discard_hand"}}
 {"command":"action","data":{"data":"{\"indices\": [2, 4, 5, 6, 7], \"plan\": {\"hand_plan\": \"Spade flush scores ~296, clears the blind.\", \"build_plan\": \"Shop next: buy xMult or scoring joker.\", \"money_plan\": \"Rebuild interest after cash-out.\"}}","id":"ec3322c7caa041339161de03d852c8af","name":"play_hand"}}
-{"command":"neuro-bridge/abandon","data":{"ids":["ec3322c7caa041339161de03d852c8af"]}}
+{"command":"neuro-bridge/abandon","transport_session":1,"data":{"ids":["ec3322c7caa041339161de03d852c8af"]}}

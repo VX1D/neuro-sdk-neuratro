@@ -2,6 +2,7 @@ local M = {}
 
 local Utils = require("util.utils")
 local PublicCard = require("facts.public_card_identity")
+local StateKinds = require("core.state_kinds")
 
 local MAX_PUBLIC_LABEL_BYTES = 160
 local MAX_RENDERED_EVENTS = 16
@@ -9,7 +10,7 @@ local MAX_HAND_OUTCOMES = 12
 local MAX_RENDERED_HAND_OUTCOMES = 6
 
 local BUY_AREAS = { shop_jokers = true, shop_vouchers = true, shop_booster = true }
-local SELL_AREAS = { jokers = true, consumeables = true }
+local SELL_AREAS = { jokers = true, consumables = true }
 local PURCHASE_KINDS = {
   joker = true, consumable = true, voucher = true, booster = true, buy_and_use = true, other = true,
 }
@@ -95,17 +96,8 @@ local function read_store()
 end
 
 local function ensure_store()
-  if not (G and G.NEURO) then return nil end
-  local journal = G.NEURO.gameplay_journal
-  if type(journal) ~= "table" then
-    journal = { next_sequence = 1, by_action_id = {}, ordered = {}, hand_outcomes = {} }
-    G.NEURO.gameplay_journal = journal
-  end
-  journal.next_sequence = math.max(1, math.floor(tonumber(journal.next_sequence) or 1))
-  journal.by_action_id = type(journal.by_action_id) == "table" and journal.by_action_id or {}
-  journal.ordered = type(journal.ordered) == "table" and journal.ordered or {}
-  journal.hand_outcomes = type(journal.hand_outcomes) == "table" and journal.hand_outcomes or {}
-  return journal
+  return require("core.neuro_lifecycle").neuro_table("gameplay_journal",
+    function() return { next_sequence = 1, by_action_id = {}, ordered = {}, hand_outcomes = {} } end)
 end
 
 local function finite_nonnegative(value)
@@ -135,16 +127,22 @@ local function validate_hand_outcome(body)
   }
 end
 
+local function claim(id, run_generation)
+  if not (G and G.NEURO) then return nil, "journal unavailable" end
+  local generation = tonumber(G.NEURO.run_generation) or 0
+  if tonumber(run_generation) ~= generation then return nil, "stale generation" end
+  local journal = ensure_store()
+  if not journal then return nil, "journal unavailable" end
+  if journal.by_action_id[id] then return nil, "duplicate" end
+  journal.by_action_id[id] = true
+  return journal, generation
+end
+
 function M.publish_hand_outcome(body)
   local clean, err = validate_hand_outcome(body)
   if not clean then return false, err end
-  if not (G and G.NEURO) then return false, "journal unavailable" end
-  local generation = tonumber(G.NEURO.run_generation) or 0
-  if clean.run_generation ~= generation then return false, "stale generation" end
-  local journal = ensure_store()
-  if not journal then return false, "journal unavailable" end
-  if journal.by_action_id[clean.action_id] then return false, "duplicate" end
-  journal.by_action_id[clean.action_id] = true
+  local journal, reason = claim(clean.action_id, clean.run_generation)
+  if not journal then return false, reason end
   journal.hand_outcomes[#journal.hand_outcomes + 1] = clean
   while #journal.hand_outcomes > MAX_HAND_OUTCOMES do table.remove(journal.hand_outcomes, 1) end
   return true, clean
@@ -168,7 +166,7 @@ function M.observe_settled(state_name)
     lp.outcome_observed = true
     return false
   end
-  if current == before and state_name ~= "ROUND_EVAL" then return false end
+  if current == before and (state_name == "HAND_PLAYED" or state_name == "DRAW_TO_HAND") then return false end
   local ok, reason = M.publish_hand_outcome({
     action_id = lp.action_id,
     run_generation = lp.run_generation,
@@ -181,7 +179,10 @@ function M.observe_settled(state_name)
     scored_count = lp.scored or 0,
     chips_delta = current - before,
   })
-  if ok or reason == "duplicate" then lp.outcome_observed = true end
+  if ok or reason == "duplicate" then
+    lp.outcome_observed = true
+    lp.chips_delta = current - before
+  end
   return ok
 end
 
@@ -202,19 +203,13 @@ function M.publish(event)
   if not clean then return false, err end
   local id = event.action_id
   if type(id) ~= "string" or id == "" then return false, "action id required" end
-  if not (G and G.NEURO) then return false, "journal unavailable" end
-  local generation = tonumber(G.NEURO.run_generation) or 0
-  if tonumber(event.run_generation) ~= generation then return false, "stale generation" end
-  local journal = ensure_store()
-  if not journal then return false, "journal unavailable" end
-  if journal.by_action_id[id] then return false, "duplicate" end
-
+  local journal, generation = claim(id, event.run_generation)
+  if not journal then return false, generation end
   clean.action_id = id
   clean.run_generation = generation
   clean.shop_visit_epoch = tonumber(event.shop_visit_epoch) or 0
   clean.sequence = journal.next_sequence
   journal.next_sequence = clean.sequence + 1
-  journal.by_action_id[id] = true -- tombstone survives body pruning until run reset
   journal.ordered[#journal.ordered + 1] = clean
   return true, clean
 end
@@ -244,21 +239,16 @@ end
 
 local function in_shop_scope(state_name)
   if state_name == "SHOP" then return true end
-  local ok, StateKinds = pcall(require, "core.state_kinds")
-  return ok and StateKinds.is_pack_state(state_name)
-    and G and G.NEURO and G.NEURO.shop_pack_interrupt == true
+  return StateKinds.is_pack_state(state_name) and G and G.NEURO and G.NEURO.shop_pack_interrupt == true
 end
 
 local function hand_history_scope(state_name)
-  if state_name == "SELECTING_HAND" or state_name == "SHOP" or state_name == "BLIND_SELECT" then
-    return true
-  end
-  local ok, StateKinds = pcall(require, "core.state_kinds")
-  return ok and StateKinds.is_pack_state(state_name)
+  return state_name == "SELECTING_HAND" or state_name == "SHOP" or state_name == "BLIND_SELECT"
+    or StateKinds.is_pack_state(state_name)
 end
 
 local function hand_history_text(journal)
-  local events = type(journal.hand_outcomes) == "table" and journal.hand_outcomes or {}
+  local events = journal.hand_outcomes
   if #events == 0 then return nil end
   local first = math.max(1, #events - MAX_RENDERED_HAND_OUTCOMES + 1)
   local parts = {}
@@ -307,7 +297,7 @@ function M.render(state_name, delivered_through, board)
     if history then lines[#lines + 1] = history end
   end
   if #lines == 0 then return nil, through end
-  return "Recent verified history:\n" .. table.concat(lines, "\n"), through
+  return "## Recent verified history\n" .. table.concat(lines, "\n"), through
 end
 
 function M.prune_delivered(candidate)
@@ -326,16 +316,8 @@ function M.prune_delivered(candidate)
   journal.ordered = kept
 end
 
-M.MAX_PUBLIC_LABEL_BYTES = MAX_PUBLIC_LABEL_BYTES
-M.MAX_RENDERED_EVENTS = MAX_RENDERED_EVENTS
 M.MAX_HAND_OUTCOMES = MAX_HAND_OUTCOMES
 M.MAX_RENDERED_HAND_OUTCOMES = MAX_RENDERED_HAND_OUTCOMES
-if rawget(_G, "NEURO_TEST") then
-  M._test = {
-    validate_body = validate_body,
-    validate_hand_outcome = validate_hand_outcome,
-    public_label = public_label,
-  }
-end
+if rawget(_G, "NEURO_TEST") then M._test = { public_label = public_label } end
 
 return M

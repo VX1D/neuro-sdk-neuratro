@@ -1,116 +1,96 @@
 local Actions = require("core.actions")
-local Utils = require("util.utils")
 local CardArea = require("facts.card_area_util")
-local CardUtil = require("facts.card_util")
 local GameActions = require("core.game_actions")
-local safe_name_or = Utils.safe_name_or
+local ActionResult = require("core.action_result")
 local mock_UIBox = GameActions.mock_UIBox
+local function blind_selection_matches(kind, fallback_key, expected)
+  if not (G and G.blind_select and G.P_BLINDS
+      and Actions.get_selectable_blind_key() == kind) then
+    return false
+  end
+  local choices = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
+  local key = choices and choices[kind]
+  local current = key and G.P_BLINDS[key] or nil
+  if not current and fallback_key then current = G.P_BLINDS[fallback_key] end
+  return current == expected
+end
+local function deferred_blind_selection(kind, fallback_key, blind)
+  return function()
+    if not blind_selection_matches(kind, fallback_key, blind) then
+      return nil, "Blind selection changed before execution; nothing was selected. Choose again."
+    end
+    local fn = G.FUNCS and G.FUNCS.select_blind
+    if type(fn) ~= "function" then return nil, "Blind selection is unavailable; nothing was selected. Choose again." end
+    fn({ config = { ref_table = blind }, UIBox = mock_UIBox })
+    return ActionResult.done()
+  end
+end
+local BLIND_SLOTS = { small = { "Small", "bl_small" }, big = { "Big", "bl_big" }, boss = { "Boss" } }
 
 local function handle_select_blind(data)
   local blind = data.blind
   if not G or not G.P_BLINDS then
-    return nil, "Game is not ready yet."
+    return nil, "The game has not finished loading, so nothing was selected. Wait for the blind selection screen, then select the blind again."
   end
   local sel_key = Actions.get_selectable_blind_key()
-  local function is_selectable(key)
-    return sel_key == key
-  end
   local current = sel_key and sel_key:lower() or nil
 
   if current and blind ~= current then
-    return nil, string.format("'%s' is not selectable right now. Currently selectable: %s — use select_blind with blind='%s'.", tostring(blind), current, current)
+    return nil, string.format("'%s' is not selectable right now. Currently selectable: %s — select it with blind='%s'.", tostring(blind), current, current)
   end
 
   if not G.blind_select then
-    return nil, "The blind selection screen is not open."
+    return nil, "The blind selection screen is not open, so nothing was selected. Select a blind only while it is shown."
   end
   if not (G.FUNCS and type(G.FUNCS.select_blind) == "function") then
-    return nil, "The blind selection engine action is not available."
+    return nil, "Blind selection cannot run right now, so nothing was selected. Wait a moment, then select the blind again."
   end
-
-  if blind == "small" then
-    if not is_selectable("Small") then
-      return nil, "Small blind is not available right now. Current selectable: " .. tostring(current or "none") .. "."
-    end
-    local small_key = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
-      and G.GAME.round_resets.blind_choices.Small
-    local bl_small = (small_key and G.P_BLINDS[small_key]) or G.P_BLINDS.bl_small
-    if not bl_small then
-      return nil, "Small blind definition not found."
-    end
-    local blind_name = bl_small.name or "Small Blind"
-    return function()
-      local fn = G.FUNCS and G.FUNCS.select_blind
-      if fn then fn({ config = { ref_table = bl_small }, UIBox = mock_UIBox }) end
-      return "Selected: " .. blind_name
-    end
-  elseif blind == "big" then
-    if not is_selectable("Big") then
-      return nil, "Big blind is not available right now. Current selectable: " .. tostring(current or "none") .. "."
-    end
-    local big_key = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
-      and G.GAME.round_resets.blind_choices.Big
-    local bl_big = (big_key and G.P_BLINDS[big_key]) or G.P_BLINDS.bl_big
-    if not bl_big then
-      return nil, "Big blind definition not found."
-    end
-    local blind_name = bl_big.name or "Big Blind"
-    return function()
-      local fn = G.FUNCS and G.FUNCS.select_blind
-      if fn then fn({ config = { ref_table = bl_big }, UIBox = mock_UIBox }) end
-      return "Selected: " .. blind_name
-    end
-  elseif blind == "boss" then
-    if not is_selectable("Boss") then
-      return nil, "Boss blind is not available right now. Current selectable: " .. tostring(current or "none") .. "."
-    end
-    local boss_key = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices and
-      G.GAME.round_resets.blind_choices.Boss
-    local boss = boss_key and G.P_BLINDS[boss_key] or nil
-    if boss then
-      local boss_name = boss.name or "Boss Blind"
-      return function()
-        local fn = G.FUNCS and G.FUNCS.select_blind
-        if fn then fn({ config = { ref_table = boss }, UIBox = mock_UIBox }) end
-        return "Selected: " .. boss_name
-      end
-    end
-    return nil, "Boss blind definition not found."
+  local choices = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
+  local kind, fallback = BLIND_SLOTS[blind][1], BLIND_SLOTS[blind][2]
+  if sel_key ~= kind then
+    return nil, kind .. " blind is not selectable right now (selectable: " .. tostring(current or "none")
+      .. "), so nothing was selected. Wait for the blind selection screen to offer it, then select the blind again."
   end
-  return nil, "Blind must be one of: small, big, boss. Currently selectable: " .. tostring(current or "none") .. "."
+  local key = choices and choices[kind]
+  local def = (key and G.P_BLINDS[key]) or (fallback and G.P_BLINDS[fallback]) or nil
+  if not def then
+    return nil, kind .. " blind's details are not loaded, so nothing was selected. Wait a moment, then select the blind again."
+  end
+  return deferred_blind_selection(kind, fallback, def)
 end
 
 local function handle_set_joker_order(data)
   if not G or not G.jokers or not G.jokers.cards then
-    return nil, "Jokers are not available yet."
+    return nil, "Your jokers are not loaded yet, so nothing was reordered. Wait until a run is in progress, then move the joker again."
   end
   local from_idx = data.from_index
   local to_idx = data.to_index
-  if not from_idx or not to_idx then
-    return nil, "Both from_index and to_index are required."
-  end
   local njok = #G.jokers.cards
-  local ok_from, err_from = CardArea.validate_index(from_idx, njok, "from_index", "jokers")
-  if not ok_from then return nil, err_from end
-  local ok_to, err_to = CardArea.validate_index(to_idx, njok, "to_index", "jokers")
-  if not ok_to then return nil, err_to end
+  for _, arg in ipairs({ { "from_index", from_idx }, { "to_index", to_idx } }) do
+    local ok, err = CardArea.validate_index(arg[2], njok, arg[1], "jokers")
+    if not ok then return nil, err end
+  end
+  local card = G.jokers.cards[from_idx]
   if from_idx == to_idx then
-    return nil, "from_index and to_index are the same."
+    return ActionResult.unchanged(require("facts.public_card_identity").label(card, "jokers", from_idx)
+      .. " is already at position " .. from_idx)
   end
   return function()
-    local card = G.jokers.cards[from_idx]
-    local card_name = CardUtil.is_face_down(card) and "face-down joker" or safe_name_or(card)
+    local cards = G and G.jokers and G.jokers.cards
+    if type(cards) ~= "table" or cards[from_idx] ~= card or to_idx > #cards then
+      return nil, "Joker lineup changed before the reorder ran; nothing was moved. Inspect the current order and choose again."
+    end
     table.remove(G.jokers.cards, from_idx)
     table.insert(G.jokers.cards, to_idx, card)
     for _, c in ipairs(G.jokers.cards) do if c.states and c.states.drag then c.states.drag.is = false end end
     if G.jokers.set_ranks then G.jokers:set_ranks() end
     if G.jokers.align_cards then G.jokers:align_cards() end
     if G.jokers.hard_set_cards then G.jokers:hard_set_cards() end
-    return string.format("Moved %s from position %d to %d", card_name, from_idx, to_idx)
+    return ActionResult.done()
   end
 end
 
-local function handle_skip_blind(_data)
+local function handle_skip_blind()
   local blocked = Actions.blind_skip_blocker()
   if blocked then
     return nil, blocked
@@ -119,15 +99,20 @@ local function handle_skip_blind(_data)
 
   local opt = G.blind_select_opts and G.blind_select_opts[string.lower(on_deck)]
   if not (opt and type(opt.get_UIE_by_ID) == "function") then
-    return nil, "Blind UI option is unavailable; cannot skip right now."
+    return nil, "The skip button is not on screen, so nothing was skipped. Wait a moment, then skip the blind again, or select it to play it."
   end
 
   return function()
-    local before = G.GAME and G.GAME.blind_on_deck or on_deck
+    local live_key = Actions.get_selectable_blind_key()
+    local live_opt = live_key and G.blind_select_opts
+      and G.blind_select_opts[string.lower(live_key)] or nil
+    if live_key ~= on_deck or live_opt ~= opt then
+      return nil, "Blind selection changed before the skip ran; nothing was skipped. Choose again."
+    end
     local fn = G.FUNCS and G.FUNCS.skip_blind
-    if fn then fn({ UIBox = opt, config = {} }) end
-    local after = G.GAME and G.GAME.blind_on_deck or before
-    return string.format("Skipped %s blind. Next selectable: %s", tostring(before), tostring(after))
+    if type(fn) ~= "function" then return nil, "Blind skip is unavailable; nothing was skipped. Choose again." end
+    fn({ UIBox = opt, config = {} })
+    return ActionResult.done()
   end
 end
 

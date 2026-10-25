@@ -3,11 +3,21 @@ local M = {}
 local CardArea = require("facts.card_area_util")
 local Utils = require("util.utils")
 local GameFacts = require("facts.game_facts")
+local PlanLimits = require("core.plan_limits")
+local SchemaValidate = require("util.schema_validate")
+local ActionResult = require("core.action_result")
+local Lifecycle = require("core.neuro_lifecycle")
 
-local function clean(s)
+local validate_value = SchemaValidate.validate_value
+
+local function clean(s, max_length, label)
   if type(s) ~= "string" then return nil end
   s = Utils.normalize_ws(s)
   if #s == 0 then return nil end
+  if max_length then
+    local ok, err = validate_value({ type = "string", maxLength = max_length }, s, label or "value")
+    if not ok then return nil, err end
+  end
   return s
 end
 
@@ -29,11 +39,6 @@ end
 local function clean_hand_focus(raw)
   if raw == nil then return nil end
   if type(raw) ~= "table" then return nil, "hand_focus must be an object." end
-  for key in pairs(raw) do
-    if key ~= "primary" and key ~= "fallback" then
-      return nil, "hand_focus supports only primary and fallback."
-    end
-  end
   local primary, primary_err = visible_hand_name(raw.primary, "hand_focus.primary")
   if not primary then return nil, primary_err end
   local fallback, fallback_err
@@ -44,48 +49,34 @@ local function clean_hand_focus(raw)
   return { primary = primary, fallback = fallback }
 end
 
-local VALID_INTENT = { CORE = true, SCALING = true, HOLD = true, CHANGE = true }
-local function identity_value(value)
-  if value == nil then return "-" end
-  local text = tostring(value)
-  return type(value) .. ":" .. tostring(#text) .. ":" .. text
-end
-
-local function joker_intents_identity()
-  local parts = {}
-  for i = 1, #G.jokers.cards do
-    local card = G.jokers.cards[i]
-    local sid = card and card.sort_id
-    local intent = sid ~= nil and G.NEURO.joker_intents[sid] or nil
-    parts[#parts + 1] = identity_value(sid)
-      .. "|" .. identity_value(intent and intent.tag)
-      .. "|" .. identity_value(intent and intent.note)
+-- Multiple writes may share a decision serial, so commits need their ordinal within that decision.
+local function write_ordinal(decision)
+  local n = G.NEURO
+  local run = tonumber(n.run_generation) or 0
+  local log = n.plan_writes
+  if type(log) ~= "table" or log.run ~= run then
+    log = { run = run, counts = {} }
+    n.plan_writes = log
   end
-  return table.concat(parts, ";")
+  log.counts[decision] = (log.counts[decision] or 0) + 1
+  return log.counts[decision]
 end
 
 local function prepare_joker_intents(data)
   if not (G and G.jokers and G.jokers.cards) then
-    return nil, "Jokers are not available yet."
+    return nil, "Your jokers are not loaded yet, so nothing was tagged. Wait until a run is in progress, then record the roles again."
   end
   local njok = #G.jokers.cards
   if njok < 1 then return nil, "You have no jokers to tag." end
-  local intents = data and data.intents
-  if type(intents) ~= "table" or #intents == 0 then
-    return nil, "Provide intents: a list of { index, tag }."
-  end
   local seen, resolved = {}, {}
-  for _, entry in ipairs(intents) do
-    if type(entry) ~= "table" then return nil, "Each intent must be an object { index, tag }." end
+  for _, entry in ipairs(data.intents) do
     local idx, tag = entry.index, entry.tag
-    if not VALID_INTENT[tag] then
-      return nil, "Invalid tag '" .. tostring(tag) .. "'. Use CORE, SCALING, HOLD, or CHANGE."
-    end
     local ok_idx, err_idx = CardArea.validate_index(idx, njok, "index", "jokers")
     if not ok_idx then return nil, err_idx end
     if seen[idx] then return nil, "Duplicate index " .. tostring(idx) .. " in one call." end
     seen[idx] = true
-    local note = clean(entry.note)
+    local note, note_err = clean(entry.note, PlanLimits.JOKER_NOTE_MAX, "note")
+    if note_err then return nil, note_err end
     local clear_note = type(entry.note) == "string" and note == nil
     resolved[#resolved + 1] = { card = G.jokers.cards[idx], idx = idx, tag = tag, note = note,
       clear_note = clear_note }
@@ -93,15 +84,22 @@ local function prepare_joker_intents(data)
   local authored_ante = GameFacts.ante(0)
   local authored_decision = tonumber(G.NEURO and G.NEURO.decision_serial) or 0
   return function()
-    if not G.NEURO then return "Tagged." end
+    local cards = G.jokers and G.jokers.cards
+    if type(cards) ~= "table" then
+      return nil, "Joker lineup changed before tagging ran; nothing was changed. Inspect the current order and choose again."
+    end
+    for _, r in ipairs(resolved) do
+      if cards[r.idx] ~= r.card then
+        return nil, "Joker lineup changed before tagging ran; nothing was changed. Inspect the current order and choose again."
+      end
+    end
+    Lifecycle.observe_joker_roster()
     G.NEURO.joker_intents = G.NEURO.joker_intents or {}
-    G.NEURO.joker_intent_revision = (tonumber(G.NEURO.joker_intent_revision) or 0) + 1
     local provenance = {
       ante = authored_ante,
       decision_serial = authored_decision,
-      revision = G.NEURO.joker_intent_revision,
+      write = write_ordinal(authored_decision),
     }
-    local parts = {}
     for _, r in ipairs(resolved) do
       local sid = r.card and r.card.sort_id
       if sid then
@@ -116,67 +114,60 @@ local function prepare_joker_intents(data)
         end
         G.NEURO.joker_intents[sid] = { tag = r.tag, note = note, provenance = provenance }
       end
-      local label = tostring(r.idx) .. "=" .. r.tag .. " (" .. Utils.real_name_or(r.card) .. ")"
-      if r.note then
-        label = label .. " note: \"" .. r.note .. "\""
-      elseif r.clear_note then label = label .. " note cleared" end
-      parts[#parts + 1] = label
     end
-    local identity = joker_intents_identity()
-    local prev_identity = G.NEURO.joker_intents_ack_identity
-    G.NEURO.joker_intents_ack_identity = identity
-    if identity == prev_identity then return "Tagged." end
-    return "Tagged: " .. table.concat(parts, ", ")
+    Lifecycle.sync_joker_intent_revision()
+    provenance.revision = G.NEURO.joker_intent_revision
+    return ActionResult.done()
   end
 end
 
-local function prepare_plan(data, required_fields, scope_snapshot, explicitly_written)
-  data = data or {}
-  local p = (type(data.plan) == "table") and data.plan or {}
-  local raw_hand = data.hand_plan ~= nil and data.hand_plan or p.hand_plan
-  local raw_build = data.build_plan ~= nil and data.build_plan or p.build_plan
-  local raw_money = data.money_plan ~= nil and data.money_plan or p.money_plan
-  local raw_boss = data.boss_plan ~= nil and data.boss_plan or p.boss_plan
-  local raw_focus = data.hand_focus ~= nil and data.hand_focus or p.hand_focus
-  local written = explicitly_written or {
-    hand = data.hand_plan ~= nil or p.hand_plan ~= nil,
-    build = data.build_plan ~= nil or p.build_plan ~= nil,
-    money = data.money_plan ~= nil or p.money_plan ~= nil,
-    boss = data.boss_plan ~= nil or p.boss_plan ~= nil,
-    focus = data.hand_focus ~= nil or p.hand_focus ~= nil,
-  }
+function M.boss_plan_writable()
+  return require("core.gate").current_boss_scope() ~= nil
+end
 
-  local hand = clean(raw_hand)
-  local build = clean(raw_build)
-  local money = clean(raw_money)
-  local boss = clean(raw_boss)
+local PLAN_FIELDS = {
+  { key = "hand", field = "hand_plan", scope = "current_blind_scope" },
+  { key = "build", field = "build_plan", scope = "current_build_scope" },
+  { key = "money", field = "money_plan", scope = "current_economy_scope" },
+  { key = "boss", field = "boss_plan", scope = "current_boss_scope" },
+}
+
+local function prepare_plan(data, required_fields, scope_snapshot, explicitly_written)
+  local p = (type(data.plan) == "table") and data.plan or {}
+  local raw_focus = data.hand_focus ~= nil and data.hand_focus or p.hand_focus
+  local text, text_err = {}, nil
+  for _, f in ipairs(PLAN_FIELDS) do
+    local raw = data[f.field] ~= nil and data[f.field] or p[f.field]
+    local value, err = clean(raw, PlanLimits.PLAN_TEXT_MAX, f.field)
+    text[f.key], text_err = value, text_err or err
+  end
+  local hand, build, money, boss = text.hand, text.build, text.money, text.boss
+  if text_err then return ActionResult.reject("SCHEMA_INVALID", text_err) end
   local focus, focus_err = clean_hand_focus(raw_focus)
   if focus_err then return nil, focus_err end
-  local PlanGate = require("core.plan_gate")
-  local state_at_prepare = require("core.state").get_state_name()
-  local boss_writable = (state_at_prepare == "BLIND_SELECT"
-      and require("core.actions").get_selectable_blind_key() == "Boss")
-    or (state_at_prepare ~= "BLIND_SELECT"
-      and not not (G and G.GAME and G.GAME.blind and G.GAME.blind.boss))
+  local written = explicitly_written or {
+    hand = hand ~= nil, build = build ~= nil, money = money ~= nil, boss = boss ~= nil, focus = focus ~= nil,
+  }
+  local Gate = require("core.gate")
+  local boss_writable = M.boss_plan_writable()
   local required = required_fields
-  if required == nil and not PlanGate.shop_revision_is_complete(hand ~= nil, build ~= nil, money ~= nil) then
-    required = PlanGate.shop_required_fields()
+  if required == nil and not Gate.shop_revision_is_complete(hand ~= nil, build ~= nil, money ~= nil) then
+    required = Gate.shop_required_fields()
   end
   if required then
     local missing = {}
-    if required.hand and not hand then missing[#missing + 1] = "hand_plan" end
-    if required.build and not build then missing[#missing + 1] = "build_plan" end
-    if required.money and not money then missing[#missing + 1] = "money_plan" end
-    if required.boss and not boss then missing[#missing + 1] = "boss_plan" end
+    for _, f in ipairs(PLAN_FIELDS) do
+      if required[f.key] and not text[f.key] then missing[#missing + 1] = f.field end
+    end
     if #missing > 0 then
-      return require("core.action_result").reject("PRECONDITION_FAILED",
+      return ActionResult.reject("PRECONDITION_FAILED",
         "Provide the required plan fields with this action: " .. table.concat(missing, ", ") .. ".")
     end
   end
 
   if not hand and not build and not money and not boss and not focus then
-    return require("core.action_result").reject("PRECONDITION_FAILED",
-      "Provide hand_plan, build_plan, money_plan, boss_plan, and/or hand_focus.")
+    return ActionResult.reject("PRECONDITION_FAILED",
+      "Provide hand_plan, build_plan, money_plan, and/or hand_focus.")
   end
   local authored_ante = GameFacts.ante(0)
   local authored_decision = tonumber(G and G.NEURO and G.NEURO.decision_serial) or 0
@@ -187,29 +178,28 @@ local function prepare_plan(data, required_fields, scope_snapshot, explicitly_wr
     })
     local ante = GameFacts.ante(0)
     local prev = (G and G.NEURO and G.NEURO.plan) or {}
-    local boss_committed = boss_writable and boss or nil
-    local hand_scope = scope_snapshot and scope_snapshot.hand or PlanGate.current_blind_scope()
-    local build_scope = scope_snapshot and scope_snapshot.build or PlanGate.current_build_scope()
-    local money_scope = scope_snapshot and scope_snapshot.money or PlanGate.current_economy_scope()
-    local boss_scope = scope_snapshot and scope_snapshot.boss or PlanGate.current_boss_scope()
+    local committed = { hand = hand, build = build, money = money, boss = boss_writable and boss or nil }
+    local scopes = {}
+    for _, f in ipairs(PLAN_FIELDS) do
+      scopes[f.key] = scope_snapshot and scope_snapshot[f.key] or Gate[f.scope]()
+    end
     local focus_scope = scope_snapshot and (scope_snapshot.focus or scope_snapshot.hand)
-      or PlanGate.current_blind_scope()
+      or Gate.current_blind_scope()
     if G and G.NEURO then
       local revision = (tonumber(G.NEURO.plan_revision) or 0) + 1
       G.NEURO.plan_revision = revision
       local provenance = {}
       for key, value in pairs(prev.provenance or {}) do provenance[key] = value end
+      local write
       if written.hand and not written.focus then provenance.focus = nil end
       local function stamp(field, value, scope)
         if written[field] and value ~= nil then
+          write = write or write_ordinal(authored_decision)
           provenance[field] = { ante = authored_ante, decision_serial = authored_decision,
-            revision = revision, scope = scope }
+            write = write, revision = revision, scope = scope }
         end
       end
-      stamp("hand", hand, hand_scope)
-      stamp("build", build, build_scope)
-      stamp("money", money, money_scope)
-      stamp("boss", boss_committed, boss_scope)
+      for _, f in ipairs(PLAN_FIELDS) do stamp(f.key, committed[f.key], scopes[f.key]) end
       stamp("focus", focus, focus_scope)
       local committed_focus, committed_focus_scope
       if written.focus then
@@ -219,40 +209,45 @@ local function prepare_plan(data, required_fields, scope_snapshot, explicitly_wr
       else
         committed_focus, committed_focus_scope = prev.hand_focus, prev.hand_focus_scope
       end
-      G.NEURO.plan = {
-        hand = hand or prev.hand,
-        hand_scope = hand and hand_scope or prev.hand_scope,
-        build = build or prev.build,
-        build_scope = build and build_scope or prev.build_scope,
-        money = money or prev.money,
-        money_scope = money and money_scope or prev.money_scope,
-        boss = boss_committed or prev.boss,
-        boss_scope = boss_committed and boss_scope or prev.boss_scope,
-        hand_focus = committed_focus,
-        hand_focus_scope = committed_focus_scope,
-        ante = ante,
-        provenance = provenance,
-      }
+      local plan = { hand_focus = committed_focus, hand_focus_scope = committed_focus_scope, ante = ante,
+        provenance = provenance }
+      for _, f in ipairs(PLAN_FIELDS) do
+        local value, scope_key = committed[f.key], f.key .. "_scope"
+        plan[f.key] = value or prev[f.key]
+        plan[scope_key] = value and scopes[f.key] or prev[scope_key]
+      end
+      G.NEURO.plan = plan
     end
-    PlanGate.mark_written(hand ~= nil, build ~= nil, money ~= nil)
+    Gate.mark_written(hand ~= nil, build ~= nil, money ~= nil)
     return nil
   end
 end
+M.prepare_plan = prepare_plan
+local RECORD_PLAN_BOSS = "Not saved: boss_plan is not a field of a plan record; "
+  .. "put a boss rule in plan.boss_plan when you select the blind, play or discard."
 
-local function handle_record_plan(data)
+function M.record_plan_note(data)
+  local nested = type(data) == "table" and type(data.plan) == "table" and data.plan or {}
+  if type(data) == "table" and (data.boss_plan ~= nil or nested.boss_plan ~= nil) then return RECORD_PLAN_BOSS end
+  return nil
+end
+
+M.ACCEPTED_UNDECLARED = { record_plan = { plan = true } }
+
+M.handle_record_plan = function(data)
+  local nested = type(data.plan) == "table" and data.plan or nil
+  if M.record_plan_note(data) then
+    data.boss_plan = nil
+    if nested then nested.boss_plan = nil end
+    local has = function(t, key) return t and t[key] ~= nil end
+    local any = false
+    for _, key in ipairs({ "hand_plan", "build_plan", "money_plan", "hand_focus" }) do
+      any = any or has(data, key) or has(nested, key)
+    end
+    if not any then return ActionResult.reject("PRECONDITION_FAILED", RECORD_PLAN_BOSS) end
+  end
   return prepare_plan(data)
 end
-
-local function handle_record_joker_roles(data)
-  return prepare_joker_intents(data)
-end
-
-M.prepare_plan = prepare_plan
-M.handle_record_plan = handle_record_plan
-M.handle_record_joker_roles = handle_record_joker_roles
-
-if _G.NEURO_TEST then
-  M.prepare_joker_intents = prepare_joker_intents
-end
+M.handle_record_joker_roles = prepare_joker_intents
 
 return M

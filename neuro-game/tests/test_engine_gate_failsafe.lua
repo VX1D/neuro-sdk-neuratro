@@ -1,65 +1,48 @@
-_G.NEURO_TEST = true
-love = { timer = { getTime = function() return (G and G.TIMERS and G.TIMERS.REAL) or 0 end } }
+require("tests.stubs").setup({ love = "timers" })
 
-local check, done = require("tests.helpers").harness("engine_gate_failsafe")
+local H = require("tests.helpers")
+local check, done = H.harness("engine_gate_failsafe")
 
-local STATES = { BLIND_SELECT = 1, SHOP = 2, SELECTING_HAND = 3, GAME_OVER = 4,
-  TAROT_PACK = 6, ROUND_EVAL = 7, MENU = 11 }
+local STATES = require("tests.engine_cards").states()
 
-local joker = require("tests.helpers").flat_mult_joker
+local joker = H.flat_mult_joker
 
-_G.G = {
-  STATE = STATES.BLIND_SELECT, STATES = STATES, STATE_COMPLETE = true,
-  TIMERS = { REAL = 1000 }, SETTINGS = { GAMESPEED = 1 },
-  GAME = { dollars = 20, blind_on_deck = "Small", round = 11, chips = 0, STOP_USE = 1,
-    current_round = { hands_left = 4, discards_left = 3, reroll_cost = 5 },
-    round_resets = { ante = 4,
-      blind_choices = { Small = "bl_small", Big = "bl_big", Boss = "bl_club" },
-      blind_states = { Small = "Select", Big = "Upcoming", Boss = "Upcoming" } },
-    blind = { name = "Big Blind" }, used_vouchers = {}, modifiers = {},
-    hands = { Pair = { level = 1, chips = 10, mult = 2, visible = true } }, pack_choices = 2 },
-  P_BLINDS = { bl_small = { key = "bl_small", name = "Small Blind" },
-    bl_big = { key = "bl_big", name = "Big Blind" },
-    bl_club = { key = "bl_club", name = "The Club" } },
-  jokers = { cards = { joker("j_joker", "Joker") }, config = { card_limit = 5 } },
-  consumeables = { cards = {}, config = { card_limit = 2 } },
-  hand = { cards = {}, highlighted = {}, config = { card_limit = 8, highlighted_limit = 5 } },
-  deck = { cards = {} },
-  FUNCS = { get_poker_hand_info = function(c) return "Pair", {}, { Pair = { c } }, c end },
-  CONTROLLER = { locks = {} },
-  E_MANAGER = { queues = {} },
-}
+H.orch_board({ kind = "club", state = "BLIND_SELECT", states = STATES, edit = function(g)
+  g.GAME.STOP_USE = 1
+  g.jokers.cards = { joker("j_joker", "Joker") }
+  g.shop_jokers, g.shop_vouchers, g.shop_booster = nil, nil, nil
+end })
 
 local Config = require("core.config")
-local Guard = require("core.transition_guard")
+local Guard = require("core.validate")
 local timeout = Config.get_raw("NEURO_ENGINE_GATE_FAILSAFE")
 check("failsafe has a named positive setting", type(timeout) == "number" and timeout > 0, timeout)
 timeout = tonumber(timeout) or 8
 check("transition guard owns the engine gate", type(Guard.engine_ready) == "function")
 
 if type(Guard.engine_ready) == "function" then
-  Guard.reset()
+  Guard.reset_run_state()
   check("fresh STOP_USE blocks the engine gate", Guard.engine_ready() == false)
   G.TIMERS.REAL = 1000 + timeout - 0.1
   check("STOP_USE remains blocked before the failsafe", Guard.engine_ready() == false)
   G.TIMERS.REAL = 1000 + timeout + 0.1
   check("persistent STOP_USE self-releases after the failsafe", Guard.engine_ready() == true)
   check("the same failsafe also releases the per-action STOP_USE guard",
-    Guard.reject_reason("choose_pack_card") == nil and Guard.reject_reason("skip_pack") == nil)
+    Guard.settling("choose_pack_card") == nil and Guard.settling("skip_pack") == nil)
   check("self-release does not mutate the engine flag", G.GAME.STOP_USE == 1)
   G.GAME.STOP_USE = 0
   check("a clear frame resets the engine gate", Guard.engine_ready() == true)
   G.GAME.STOP_USE = 1
   check("a new blockage receives a fresh grace period", Guard.engine_ready() == false)
   G.GAME.STOP_USE = 0
-  Guard.reset()
+  Guard.reset_run_state()
   G.CONTROLLER.locked = true
   check("fresh controller lock blocks the engine gate", Guard.engine_ready() == false)
   G.TIMERS.REAL = G.TIMERS.REAL + timeout + 0.1
   check("persistent controller lock self-releases", Guard.engine_ready() == true)
   check("self-release does not mutate the controller lock", G.CONTROLLER.locked == true)
   G.CONTROLLER.locked = nil
-  Guard.reset()
+  Guard.reset_run_state()
   G.E_MANAGER.queues.base = { { blocking = true, blockable = true } }
   check("fresh blocking event blocks the engine gate", Guard.engine_ready() == false)
   G.TIMERS.REAL = G.TIMERS.REAL + timeout + 0.1
@@ -84,38 +67,49 @@ end
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
 local forces = {}
-G.NEURO = {
-  enabled = true, persona = "neuro", run_generation = 1,
-  dispatcher = Dispatcher, actions = Actions,
-  _decision_windows = {}, once_serials = {}, decision_serial = 1,
-  state_enter_serial = 1, reserved_dollars = 0,
-  state = "BLIND_SELECT", force_dirty = true, force_dirty_at = G.TIMERS.REAL,
-  update = function() end,
-  register_actions = function() end,
-  unregister_actions = function() end,
-  send_context = function() end,
-  send_action_result = function() end,
-}
+G.NEURO = H.orch_neuro({ dispatcher = Dispatcher, actions = Actions, state = "BLIND_SELECT",
+  register_actions = "true", send_context = "written", send_action_result = "noop" })
 function G.NEURO:force_actions(_ctx, _query, actions)
   forces[#forces + 1] = table.concat(actions, ",")
+  return true
 end
 
 local Orch = require("core.orchestrator")
+local Window = require("core.window")
 local HudState = require("hud.state")
 G.GAME.STOP_USE = 1
-Guard.reset()
+Guard.reset_run_state()
 Orch.reset_run_state()
-G.NEURO.force_dirty = true
-G.NEURO.force_dirty_at = G.TIMERS.REAL
 HudState.state_changed_at = G.TIMERS.REAL
-Orch._step_force_arming("BLIND_SELECT", G.TIMERS.REAL)
+Window.step("BLIND_SELECT")
 check("orchestrator emits nothing while the engine flag is fresh", #forces == 0, #forces)
-G.TIMERS.REAL = G.TIMERS.REAL + timeout + Config.get("NEURO_FORCE_DEBOUNCE") + 0.2
-Orch._step_force_arming("BLIND_SELECT", G.TIMERS.REAL)
+G.TIMERS.REAL = G.TIMERS.REAL + timeout + 0.1
+Window.step("BLIND_SELECT")
+G.TIMERS.REAL = G.TIMERS.REAL + Config.get("NEURO_FORCE_DEBOUNCE") + 0.1
+Window.step("BLIND_SELECT")
 check("orchestrator eventually emits through a stuck engine flag", #forces == 1, #forces)
-Orch._step_unsent_window_guard()
-check("the unsent-window guard leaves a window that already reached the wire alone",
-  #forces == 1 and G.NEURO.force_inflight == true, #forces)
+check("the emitted force holds the open window", #forces == 1 and Window.current() ~= nil, #forces)
 check("emitted force preserves the stuck engine flag", G.GAME.STOP_USE == 1)
+
+do
+  G.GAME.STOP_USE = 0
+  G.STATE = STATES.SELECTING_HAND
+  G.play = { cards = { {} } }
+  Window.reset()
+  Guard.reset_run_state()
+  HudState.state_changed_at_game = G.TIMERS.REAL - 100
+  local settled = Window._test.settled
+  check("a hand resolving in G.play holds the hand screen", settled("SELECTING_HAND") == false)
+  G.TIMERS.REAL = G.TIMERS.REAL + timeout - 0.1
+  check("and still holds it before the failsafe", settled("SELECTING_HAND") == false)
+  G.TIMERS.REAL = G.TIMERS.REAL + 0.2
+  check("cards stuck in G.play release the hand screen after the failsafe", settled("SELECTING_HAND") == true)
+  check("self-release does not touch G.play", #G.play.cards == 1)
+  G.play.cards = {}
+  check("an empty play area is settled at once", settled("SELECTING_HAND") == true)
+  G.GAME.blind.block_play = true
+  check("a new blockage receives a fresh grace period", settled("SELECTING_HAND") == false)
+  G.GAME.blind.block_play = nil
+end
 
 done()

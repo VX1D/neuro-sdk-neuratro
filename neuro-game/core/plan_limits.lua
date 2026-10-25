@@ -1,7 +1,10 @@
 local DEFAULT_HAND_SELECT_MAX = 5
+local PLAN_TEXT_MAX = 512
+local JOKER_NOTE_MAX = 256
 
 local M = {
-  DEFAULT_HAND_SELECT_MAX = DEFAULT_HAND_SELECT_MAX,
+  PLAN_TEXT_MAX = PLAN_TEXT_MAX,
+  JOKER_NOTE_MAX = JOKER_NOTE_MAX,
 }
 
 local function int(v)
@@ -37,9 +40,4 @@ M.hand_select_max = function()
   return math.max(M.play_select_max(), M.discard_select_max(), 1)
 end
 
-return setmetatable(M, {
-  __index = function(_, k)
-    if k == "HAND_SELECT_MAX" then return M.hand_select_max() end
-    return nil
-  end,
-})
+return M

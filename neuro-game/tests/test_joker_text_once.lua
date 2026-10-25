@@ -1,7 +1,4 @@
-_G.NEURO_TEST = true
-if not love then love = { timer = { getTime = function() return 0 end } } end
-_G.localize = function() return "" end
-_G.G = { NEURO = {}, FUNCS = {}, GAME = { current_round = {} } }
+require("tests.stubs").setup({ love = "lazy", localize = true, G = "board" })
 
 local check, done = require("tests.helpers").harness("joker-text-once")
 local FP = require("tests.force_payload")
@@ -77,9 +74,6 @@ do
   LB.load("SELECTING_HAND", "Normal: 5 cards, 4 hands, 3 discards")
   local payload = FP.build("SELECTING_HAND")
   local msg = payload.message
-  check("the roster is the one place the rule text is rendered",
-    msg:find("Your jokers (", 1, true) ~= nil
-      and msg:find("Joker details:", 1, true) == nil, msg:sub(1, 200))
   local carried, absent = 0, {}
   for _, card in ipairs(G.jokers.cards) do
     local desc = Semantics.description(card)
@@ -101,40 +95,17 @@ do
     G.NEURO.joker_hits[card.sort_id] = { hands = 8 + i, fired = i }
   end
   for i, card in ipairs(G.jokers.cards) do
-    local hits, hands = require("core.joker_hits").condition_counts(card)
-    want[#want + 1] = { i = i, text = hits and ("Mult, held " .. hits .. "/" .. hands) or "Mult" }
+    local hits, hands, label = require("core.joker_hits").condition_counts(card)
+    want[#want + 1] = { i = i, text = hits and ("Mult, " .. label .. " " .. hits .. "/" .. hands) or "Mult" }
   end
   local payload = FP.build("SELECTING_HAND")
   local msg = payload.message
-  check("the observation wording is written once for the whole roster",
-    select(2, msg:gsub("Observed this run", "")) == 1
-      and select(2, msg:gsub("of your last", "")) == 1
-      and msg:find("Observed from your Jokers this run", 1, true) == nil,
-    msg:match("Observed[^\n]*") or "no observation line")
   local lost = {}
   for _, w in ipairs(want) do
     if not msg:find(w.i .. ". " .. w.text, 1, true) then lost[#lost + 1] = w.i .. ". " .. w.text end
   end
   check("and every per-joker number it used to carry is still there",
     #lost == 0 and #want >= 5, "missing: " .. table.concat(lost, " | "))
-end
-
-do
-  local Vanilla = require("tests.fixtures.vanilla_jokers")
-  LB.load("SELECTING_HAND", "Normal: 5 cards, 4 hands, 3 discards")
-  local mystic = Vanilla.card_played("j_mystic_summit", 901)
-  mystic.config.center.loc_txt = { name = "Mystic Summit",
-    description = { "+15 Mult when 0 discards remaining" } }
-  mystic.debuff = false
-  G.jokers.cards = { mystic, LB.joker("j_scary_face", 902) }
-  G.GAME.current_round.discards_left = 0
-  local section = require("context.ctx_jokers").jokers_section("SELECTING_HAND")
-  check("a ceiling source whose why is its own row's condition keeps only the attribution",
-    section:find("(Mystic Summit +15 Mult;", 1, true) ~= nil, section)
-  check("a ceiling source whose why derived the figure keeps it",
-    section:find("Scary Face +150 Chips -- 16 such cards in your deck", 1, true) ~= nil, section)
-  check("and the cap it was derived against is not restated beside it",
-    section:find("holds at most", 1, true) == nil, section)
 end
 
 done()

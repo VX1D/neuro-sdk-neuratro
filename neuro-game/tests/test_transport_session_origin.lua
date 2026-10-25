@@ -6,7 +6,7 @@ _G.G = { NEURO = {}, FUNCS = {}, GAME = {}, TIMERS = { REAL = 1000 } }
 
 local check, done = require("tests.helpers").harness("transport-session-origin")
 local Bridge = require("core.bridge")
-local Protocol = require("core.bridge_protocol")
+local Protocol = require("core.bridge").wire
 local TmpWork = require("tests.tmp_workdir")
 
 local dir_seq = 0
@@ -31,60 +31,55 @@ local function over_the_wire(line)
 end
 
 do
-  check("the bridge-control prefix is the transport's own namespace",
-    Protocol.CONTROL_PREFIX == "neuro-bridge/")
-  check("is_transport_control accepts the transport's namespace",
-    Protocol.is_transport_control("neuro-bridge/abandon") == true)
-  check("is_transport_control rejects the spec namespace",
-    Protocol.is_transport_control("actions/reregister_all") == false
-      and Protocol.is_transport_control("action") == false)
-  check("is_transport_control survives a non-string command",
-    Protocol.is_transport_control(nil) == false and Protocol.is_transport_control(7) == false)
-end
-
-do
-  local msg = over_the_wire('{"command":"actions/reregister_all","transport_session":424242}')
-  check("a spec-namespace stamp reaches the dispatcher marked unattributable",
-    msg ~= nil and msg.transport_session == 424242 and msg.transport_session_unattributed == true,
-    msg and tostring(msg.transport_session_unattributed))
-end
-
-do
-  local msg = over_the_wire('{"command":"neuro-bridge/abandon","transport_session":9,"data":{"ids":["a-1"]}}')
-  check("a stamp in the transport's own namespace is not marked",
-    msg ~= nil and msg.transport_session == 9 and msg.transport_session_unattributed == nil,
-    msg and tostring(msg.transport_session_unattributed))
+  local msg = over_the_wire(
+    '{"command":"neuro-bridge/reregister_all","transport_session":424242}')
+  check("the vendor-prefixed reconnect control reaches the handler",
+    msg ~= nil and msg.command == "neuro-bridge/reregister_all"
+      and msg.transport_session == 424242,
+    msg and tostring(msg.command) .. "/" .. tostring(msg.transport_session))
 end
 
 do
   local msg = over_the_wire(
-    '{"command":"actions/reregister_all","transport_session":5,"transport_session_unattributed":false}')
-  check("the wire cannot vouch for itself",
-    msg ~= nil and msg.transport_session_unattributed == true,
-    msg and tostring(msg.transport_session_unattributed))
-  local listed = false
-  for _, field in ipairs(Protocol.TRANSPORT_FIELDS) do
-    if field == "transport_session_unattributed" then listed = true end
-  end
-  check("the attribution field is mod-local and never goes to the wire", listed)
-  local wire = Protocol.sanitize_for_wire({
-    command = "action/result", game = "Balatro", transport_session_unattributed = true,
-    data = { id = "x", success = true },
-  })
-  check("sanitize_for_wire drops it outbound", wire.transport_session_unattributed == nil)
+    '{"command":"neuro-bridge/abandon","transport_session":9,"data":{"ids":["a-1"]}}')
+  check("the vendor-prefixed abandon control keeps its transport stamp",
+    msg ~= nil and msg.command == "neuro-bridge/abandon"
+      and msg.transport_session == 9,
+    msg and tostring(msg.command) .. "/" .. tostring(msg.transport_session))
 end
 
 do
-  local msg = over_the_wire('{"command":"actions/reregister_all"}')
-  check("the bare frame PROPOSALS.md defines carries no attribution either way",
-    msg ~= nil and msg.transport_session == nil and msg.transport_session_unattributed == nil)
+  local msg = over_the_wire(
+    '{"command":"action","transport_session":11,"data":{"id":"a-1","name":"play_hand"}}')
+  check("public action frames do not retain transport bookkeeping",
+    msg ~= nil and msg.command == "action" and msg.transport_session == nil,
+    msg and tostring(msg.transport_session))
 end
 
 do
-  local msg = over_the_wire('{"command":"action","transport_session":11,"data":{"id":"a-1","name":"play_hand"}}')
-  check("the mark is not special-cased to reregister_all",
-    msg ~= nil and msg.transport_session_unattributed == true,
-    msg and tostring(msg.transport_session_unattributed))
+  local msg = over_the_wire(
+    '{"command":"actions/reregister_all","transport_session":5}')
+  check("proposed public reconnect control has no private transport semantics",
+    msg ~= nil and msg.command == "actions/reregister_all"
+      and msg.transport_session == nil,
+    msg and tostring(msg.command) .. "/" .. tostring(msg.transport_session))
+end
+
+do
+  local wire = Protocol.result("x", true)
+  check("transport bookkeeping never reaches the SDK wire",
+    wire.transport_session == nil, tostring(wire.transport_session))
+check("results carry only the public command and data",
+  wire.command == "action/result" and wire.data.id == "x" and wire.data.success == true)
+local registration = Protocol.register({
+  { name = "play_hand", description = "Play the selected hand." },
+})
+check("registration constructors emit the canonical public command",
+  registration.command == "actions/register"
+    and registration.data.actions[1].name == "play_hand")
+local startup = Protocol.startup("Balatro")
+check("startup constructors contain only the game identity",
+  startup.command == "startup" and startup.game == "Balatro" and startup.data == nil)
 end
 
 TmpWork.close()

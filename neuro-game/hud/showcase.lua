@@ -13,9 +13,6 @@ Showcase.FOOTER_CYCLE = 4
 Showcase.JOKER_SHOWCASE_DURATION = 4.8
 Showcase.JOKER_SHOWCASE_FADE_IN = 0.30
 Showcase.JOKER_SHOWCASE_FADE_OUT = 0.55
--- The engine hands several cards over in one frame (Riff-raff makes two jokers in one event func,
--- dump card.lua:2901-2914; The Emperor/High Priestess two consumables, game.lua:552,554), so the
--- corridor schedules the whole backlog against one budget instead of paying the full span per card.
 Showcase.JOKER_SHOWCASE_BUDGET = 7.0
 Showcase.JOKER_SHOWCASE_MIN = 1.2
 Showcase.SHOWCASE_QUEUE_CAP =
@@ -32,7 +29,6 @@ local BUY_SHOWCASE_FADE_OUT = 0.30
 local BUY_SHOWCASE_MIN_DWELL = 0.9
 Showcase.BUY_SHOWCASE_FADE_IN = BUY_SHOWCASE_FADE_IN
 Showcase.BUY_SHOWCASE_FADE_OUT = BUY_SHOWCASE_FADE_OUT
-Showcase.BUY_SHOWCASE_MIN_DWELL = BUY_SHOWCASE_MIN_DWELL
 
 Showcase.REFUSAL_CODES = { INSUFFICIENT_FUNDS = true, NO_SLOT = true }
 Showcase.REFUSAL_COOLDOWN = 6.0
@@ -58,6 +54,16 @@ local function hold_card(card)
   return true
 end
 
+local function merge_money(head, dropped)
+  local spend = (tonumber(dropped.merged_spend) or 0)
+  local gain = (tonumber(dropped.merged_gain) or 0)
+  local dir = Showcase.money_direction(dropped.area)
+  if dir == "spend" then spend = spend + (tonumber(dropped.cost) or 0)
+  elseif dir == "gain" then gain = gain + (tonumber(dropped.cost) or 0) end
+  if spend > 0 then head.merged_spend = (tonumber(head.merged_spend) or 0) + spend end
+  if gain > 0 then head.merged_gain = (tonumber(head.merged_gain) or 0) + gain end
+end
+
 local function release_card(card, now)
   if type(card) ~= "table" then return false end
   local n = in_flight[card]
@@ -73,28 +79,26 @@ local function release_card(card, now)
   return true
 end
 
+local function push_capped(list, item, cap, now, diag_key, diag_msg, merge)
+  list[#list + 1] = item
+  while #list > cap do
+    local dropped = table.remove(list, 1)
+    local head = list[1]
+    head.merged = (head.merged or 0) + 1 + (dropped.merged or 0)
+    if merge then merge(head, dropped) end
+    release_card(dropped.card, now)
+    Utils.diag_once(diag_key, diag_msg)
+  end
+end
+
 function Showcase.enqueue_purchase(item)
   if not (G and G.NEURO and type(item) == "table") then return false end
   if Showcase.PACK_CINEMATIC_ALWAYS[tostring(item.area or "")] then return false end
   local q = G.NEURO.purchase_showcase_queue
   if type(q) ~= "table" then q = {} end
-  q[#q + 1] = item
   hold_card(item.card)
-  while #q > Showcase.PURCHASE_QUEUE_CAP do
-    local dropped = table.remove(q, 1)
-    local head = q[1]
-    head.merged = (head.merged or 0) + 1 + (dropped.merged or 0)
-    local spend = (tonumber(dropped.merged_spend) or 0)
-    local gain = (tonumber(dropped.merged_gain) or 0)
-    local dir = Showcase.money_direction(dropped.area)
-    if dir == "spend" then spend = spend + (tonumber(dropped.cost) or 0)
-    elseif dir == "gain" then gain = gain + (tonumber(dropped.cost) or 0) end
-    if spend > 0 then head.merged_spend = (tonumber(head.merged_spend) or 0) + spend end
-    if gain > 0 then head.merged_gain = (tonumber(head.merged_gain) or 0) + gain end
-    release_card(dropped.card, tonumber(item.at))
-    Utils.diag_once("purchase_queue_overflow",
-      "purchase toast queue overflowed, oldest pending merged into a +N chip")
-  end
+  push_capped(q, item, Showcase.PURCHASE_QUEUE_CAP, tonumber(item.at), "purchase_queue_overflow",
+    "purchase toast queue overflowed, oldest pending merged into a +N chip", merge_money)
   G.NEURO.purchase_showcase_queue = q
   return true
 end
@@ -129,7 +133,7 @@ function Showcase.enqueue_refusal(item)
 end
 
 local function apply_item(sc, item, now)
-  sc._born, sc._pair_at, sc._Lr, sc._Lr_sig, sc._defer_seen = nil, nil, nil, nil, nil
+  sc._born, sc._pair_at, sc._Lr, sc._defer_seen = nil, nil, nil, nil
   sc.hold_at, sc.hold_elapsed = nil, nil
   sc.born_at = now
   sc.card = item.card
@@ -305,19 +309,17 @@ function Showcase.update_buy(now)
   end
 end
 
+local SET_LABEL = { Joker = "NEW JOKER", Planet = "NEW PLANET", Tarot = "NEW TAROT",
+  Spectral = "NEW SPECTRAL", Voucher = "VOUCHER" }
+
 function Showcase.card_set_label(c)
   local set = c and c.config and c.config.center and c.config.center.set
-  if set == "Joker"    then return "NEW JOKER"
-  elseif set == "Planet"   then return "NEW PLANET"
-  elseif set == "Tarot"    then return "NEW TAROT"
-  elseif set == "Spectral" then return "NEW SPECTRAL"
-  elseif set == "Voucher"  then return "VOUCHER"
-  else return "NEW CARD" end
+  return set and SET_LABEL[set] or "NEW CARD"
 end
 
 local function is_in_pack_state()
   if not G then return false end
-  local sn = (G.NEURO and (G.NEURO.force_state or G.NEURO.state)) or ""
+  local sn = require("core.window").state_name() or (G.NEURO and G.NEURO.state) or ""
   return StateKinds.is_pack_state(sn)
 end
 
@@ -345,15 +347,8 @@ function receipt_suppressed(item, now)
 end
 
 local function showcase_push(list, item, now)
-  list[#list + 1] = item
-  while #list > Showcase.SHOWCASE_QUEUE_CAP do
-    local dropped = table.remove(list, 1)
-    local head = list[1]
-    head.merged = (head.merged or 0) + 1 + (dropped.merged or 0)
-    release_card(dropped.card, now)
-    Utils.diag_once("showcase_queue_overflow",
-      "showcase queue overflowed, oldest pending gain merged into a +N chip")
-  end
+  push_capped(list, item, Showcase.SHOWCASE_QUEUE_CAP, now, "showcase_queue_overflow",
+    "showcase queue overflowed, oldest pending gain merged into a +N chip")
 end
 
 local function push_showcase(c, label, now)
@@ -410,10 +405,10 @@ local function claim_consumed(card, now)
   return (tonumber(now) or Utils.gate_now("showcase_grace")) <= until_at
 end
 
-function Showcase.note_removal(card, now)
+function Showcase.note_removal(card)
   local sid = card and card.sort_id
   if sid == nil then return false end
-  removal_expected[sid] = (tonumber(now) or Utils.gate_now("showcase_grace")) + Showcase.REMOVAL_GRACE
+  removal_expected[sid] = Utils.gate_now("showcase_grace") + Showcase.REMOVAL_GRACE
   pending_lost[sid] = nil
   return true
 end
@@ -493,8 +488,6 @@ local function scan_joker_losses(now)
   for sid, until_at in pairs(removal_expected) do
     if until_at <= now then removal_expected[sid] = nil end
   end
-  -- Only claim_expected is weak-keyed. Apart from a consumed claim the sid half shrinks here,
-  -- which the earlier returns can skip; reset_run_state bounds it per run.
   for sid, until_at in pairs(claim_expected_sid) do
     if until_at <= now then claim_expected_sid[sid] = nil end
   end
@@ -619,6 +612,19 @@ function Showcase.update_joker(now)
   pull_showcase(now)
 end
 
+local PACK_NIL = {
+  "pack_last_sn", "pack_leave_t", "pack_leave_snap", "pack_w_hi", "pack_claim_at", "pack_collapse_t",
+  "pack_collapse_snap", "pack_collapse_req", "pack_collapse_done", "pack_losers", "pack_exit_last",
+  "pack_env_last", "pack_h_last", "pack_settle_t", "pack_settle_env", "pack_settle_h", "pack_disp",
+}
+
+function Showcase.reset_pack_state()
+  for _, k in ipairs(PACK_NIL) do S[k] = nil end
+  S.pack_appear_t, S.pack_initial_count, S.pack_leave_n = 0, 0, 0
+  S.pack_card_indices, S.pack_hidden_indices, S.pack_winners = {}, {}, {}
+  S.pack_hl, S.pack_hl_t = false, 0
+end
+
 function Showcase.reset_run_state()
   Episode.reset()
   in_flight = setmetatable({}, { __mode = "k" })
@@ -637,30 +643,9 @@ function Showcase.reset_run_state()
   S.joker_showcase = nil
   S.joker_showcase_q = {}
   S.pack_gained_q = {}
-  S.pack_claim_at = nil
   S.buy_showcase = nil
   S.voucher_drawer_gate = {}
-  S.pack_last_sn = nil
-  S.pack_appear_t = nil
-  S.pack_card_indices = {}
-  S.pack_hidden_indices = {}
-  S.pack_initial_count = 0
-  S.pack_hl = false
-  S.pack_hl_t = 0
-  S.pack_relight_t = nil
-  S.pack_leave_t = nil
-  S.pack_leave_snap = nil
-  S.pack_leave_n = 0
-  S.pack_winners = {}
-  S.pack_collapse_t = nil
-  S.pack_collapse_snap = nil
-  S.pack_collapse_req = nil
-  S.pack_collapse_done = nil
-  S.pack_losers = nil
-  S.pack_exit_last = nil
-  S.pack_env_last = nil
-  S.pack_h_last = nil
-  S.pack_disp = nil
+  Showcase.reset_pack_state()
 end
 
 return Showcase

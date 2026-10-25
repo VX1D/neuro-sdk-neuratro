@@ -1,6 +1,4 @@
 local Utils = {}
--- collect_placeholder_values has no signature guard, so this TTL is the only thing that refreshes
--- a joker counter surfacing solely through loc_vars. Keep it short.
 Utils.UI_TEXT_TTL = 0.75
 
 function Utils.safe_tostring(value)
@@ -46,8 +44,7 @@ function Utils.game_now()
   return total + pause_carry
 end
 
--- The one clock a run reset does not rewind: G.TIMERS.REAL is set back to 12 when a run ends
--- (game.lua:1556-1558), which would jump every wire-facing deadline that reset happens to cross.
+-- Engine timers rewind between runs, so deadlines use a monotonic wall clock.
 function Utils.wall_now()
   if love and love.timer and love.timer.getTime then return love.timer.getTime() end
   return os.time()
@@ -106,16 +103,72 @@ local function strip_loc_tags(s)
   return s
 end
 
+-- Unpunctuated clauses and small or greyed side notes need a separator; a bare space runs them together.
+local CONTINUES = {}
+for w in ("a an the and or to of for each every with by when if per give gives gain gains earn earns"
+  .. " cost costs up at in on is are be from into than permanently"):gmatch("%S+") do CONTINUES[w] = true end
+
+-- These capitalized game nouns may continue a clause rather than begin a new one.
+local GAME_NOUNS = {}
+for w in ("Joker Jokers Blind Blinds Boss Challenge Tarot Tarots Planet Planets Spectral Card Cards Tag Tags"
+  .. " Booster Boosters Pack Packs Voucher Vouchers Seal Seals Ace Aces King Kings Queen Queens Jack Jacks"
+  .. " Hearts Spades Clubs Diamonds Mult Chips Hand Hands Discard Discards Round Rounds Ante Antes Shop"
+  .. " Stone Steel Glass Gold Lucky Wild Bonus Foil Holographic Polychrome Negative Straight Flush Pair"
+  .. " Full High Two Three Four Five Small Big Common Uncommon Rare Legendary Mega Jumbo Arcana Celestial"
+  .. " Standard Buffoon Club Heart Spade Diamond Stake Stakes Edition Editions Enhanced"):gmatch("%S+") do GAME_NOUNS[w] = true end
+
+local function starts_clause(line)
+  local s = trim(strip_loc_tags(line)):gsub("#%d+#", "1")
+  local word = s:match("^(%u%l+)%f[%A]")
+  return s:find("^[+%-]%$?%d") or s:find("^X%d") or s:find("^%$%d") or s:find("^%d+ in %d+ ")
+    or (word and not GAME_NOUNS[word])
+end
+
+local function open_ended(line)
+  local s = trim(strip_loc_tags(line))
+  if s:find("[%.,;:!?%(]$") then return true end
+  return CONTINUES[(s:match("(%a+)$") or ""):lower()] == true
+end
+
+local function join_desc_lines(lines, notes)
+  local out, prev = {}, nil
+  for i, line in ipairs(lines) do
+    local text = trim(line)
+    if trim(strip_loc_tags(text)) ~= "" then
+      if prev and notes and notes[i] and not trim(strip_loc_tags(text)):find("^%(") then
+        out[#out] = out[#out]:gsub(",%s*$", "")
+        out[#out + 1] = " (" .. text .. ")"
+      elseif prev and starts_clause(text) and not open_ended(prev) then
+        out[#out + 1] = "; " .. text
+      else
+        out[#out + 1] = (prev and " " or "") .. text
+      end
+      prev = text
+    end
+  end
+  return table.concat(out)
+end
+
+-- A line whose control codes all shrink or grey it is rendered as a note.
+local function raw_note_line(line)
+  if type(line) ~= "string" or not line:find("^%s*{") then return false end
+  local any = false
+  for code in line:gmatch("{([^{}]*)}") do
+    if code ~= "" then
+      local s = tonumber(code:match("s:([%d%.]+)"))
+      if not ((s and s < 1) or code:find("C:inactive", 1, true)) then return false end
+      any = true
+    end
+  end
+  return any
+end
+
+local IDENTIFIER_PREFIXES = { "^[jJ]_", "^[lL]_", "^[vV]_", "^[bB]l_", "^[bB]_", "^[cC]_", "^[pP]_" }
+
 local function humanize_identifier(id)
   local s = tostring(id or "")
   if s == "" then return "Unknown" end
-  s = s:gsub("^[jJ]_", "")
-  s = s:gsub("^[lL]_", "")
-  s = s:gsub("^[vV]_", "")
-  s = s:gsub("^[bB]l_", "")
-  s = s:gsub("^[bB]_", "")
-  s = s:gsub("^[cC]_", "")
-  s = s:gsub("^[pP]_", "")
+  for _, prefix in ipairs(IDENTIFIER_PREFIXES) do s = s:gsub(prefix, "") end
   s = s:gsub("_", " ")
   s = normalize_spaces(s)
   s = s:gsub("(%a)([%w']*)", function(a, b)
@@ -143,19 +196,23 @@ local function reap_ui_window(fn)
   end
 
   local n = 0
-  if G and type(G.I) == "table" then
+  local reg_seen = {}
+  local function snapshot(fresh)
+    if not (G and type(G.I) == "table") then return end
     for _, reg in pairs(G.I) do
-      if type(reg) == "table" then
+      if type(reg) == "table" and not reg_seen[reg] then
         n = n + 1
         regs[n] = reg
-        local before = befores[n]
-        if not before then before = {}; befores[n] = before end
-        for _, obj in pairs(reg) do before[obj] = true end
+        reg_seen[reg] = true
+        local before = not fresh and befores[n] or {}
+        befores[n] = before
+        if not fresh then for _, obj in pairs(reg) do before[obj] = true end end
       end
     end
   end
-
+  snapshot(false)
   local ok, result = pcall(fn)
+  snapshot(true)
 
   local unreapable = 0
   for i = 1, n do
@@ -187,20 +244,44 @@ local function reap_ui_window(fn)
 
   return ok, result
 end
+local _text_epoch = 0
+function Utils.begin_text_build()
+  _text_epoch = _text_epoch + 1
+end
+
 local function cache_is_fresh(entry, t)
-  if not entry then return false end
+  if not entry or entry.epoch ~= _text_epoch then return false end
   local dt = t - (entry.at or 0)
   return dt >= 0 and dt < Utils.UI_TEXT_TTL
 end
 
 local function cache_revision(cache, card)
   if not card then return 0 end
-  local entry = cache[card]
+  local entry = cache.entries[card]
   if not entry then return 0 end
   local revision = entry.revision or 0
   if cache_is_fresh(entry, Utils.gate_now("ui_text_cache_ttl")) then return revision end
   return -revision
 end
+
+local function text_cache()
+  return { entries = setmetatable({}, { __mode = "k" }), serial = 0 }
+end
+
+local function memo(cache, card, signature, build)
+  local t = Utils.gate_now("ui_text_cache_ttl")
+  local sig = signature and signature(card)
+  local entry = cache.entries[card]
+  if entry and entry.sig == sig and cache_is_fresh(entry, t) then return entry end
+  entry = build(card)
+  cache.serial = cache.serial + 1
+  entry.at, entry.epoch, entry.sig, entry.revision = t, _text_epoch, sig, cache.serial
+  cache.entries[card] = entry
+  return entry
+end
+
+local LOC_VARS_MAX_INDEX = 256
+local LOC_VARS_SCAN_LIMIT = 512
 
 local function loc_vars_values(card)
   local center = card and card.config and card.config.center
@@ -214,17 +295,33 @@ local function loc_vars_values(card)
     return nil
   end
   local vars = ret.vars
-  local out = {}
-  for i = 1, #vars do
-    local v = vars[i]
-    local t = type(v)
-    if t == "number" or t == "string" or t == "boolean" then
-      out[i] = tostring(v)
-    else
-      out[i] = "?"
+  local max_index = 0
+  local ambiguous = false
+  local scanned = 0
+  for k, _ in pairs(vars) do
+    scanned = scanned + 1
+    if scanned > LOC_VARS_SCAN_LIMIT then
+      ambiguous = true
+      break
+    end
+    if type(k) == "number" and k >= 1 and k % 1 == 0 and k > max_index then
+      max_index = k
     end
   end
-  return out
+  if max_index == 0 then return {}, ambiguous end
+  if max_index > LOC_VARS_MAX_INDEX then
+    local out = {}
+    for i = 1, LOC_VARS_MAX_INDEX do out[i] = "?" end
+    return out, true
+  end
+
+  local out = {}
+  for i = 1, max_index do
+    local v = vars[i]
+    local t = type(v)
+    out[i] = not ambiguous and (t == "number" or t == "string" or t == "boolean") and tostring(v) or "?"
+  end
+  return out, ambiguous
 end
 
 function Utils.refresh_dynamic_joker(card)
@@ -233,6 +330,7 @@ function Utils.refresh_dynamic_joker(card)
   local ckey = card.config and card.config.center and card.config.center.key
   if ckey == "j_swashbuckler" or (ckey == nil and ability.name == "Swashbuckler") then
     if not (G and G.jokers and G.jokers.cards) then return end
+    -- Swashbuckler counts face-down jokers too; the engine scores every joker in the area.
     local sell = 0
     for i = 1, #G.jokers.cards do
       local j = G.jokers.cards[i]
@@ -245,7 +343,8 @@ function Utils.refresh_dynamic_joker(card)
 end
 
 local function build_placeholder_values(card)
-  local from_loc_vars = loc_vars_values(card)
+  local from_loc_vars, loc_vars_ambiguous = loc_vars_values(card)
+  if loc_vars_ambiguous then return from_loc_vars or {} end
   if from_loc_vars and #from_loc_vars > 0 then
     return from_loc_vars
   end
@@ -284,12 +383,13 @@ local function build_placeholder_values(card)
     end
   end
 
-  if #values > 1 then return {} end
+  if #values > 1 then
+    for i = 1, #values do values[i] = "?" end
+  end
   return values
 end
 
-local _placeholder_cache = setmetatable({}, { __mode = "k" })
-local _placeholder_serial = 0
+local _placeholder_cache = text_cache()
 
 function Utils.placeholder_revision(card)
   return cache_revision(_placeholder_cache, card)
@@ -299,18 +399,8 @@ local function collect_placeholder_values(card)
   if not card then return {}, 0 end
 
   Utils.refresh_dynamic_joker(card)
-
-  local t = Utils.gate_now("ui_text_cache_ttl")
-  local cached = _placeholder_cache[card]
-  if cache_is_fresh(cached, t) then
-    return cached.values, cached.revision
-  end
-
-  local values = build_placeholder_values(card)
-  _placeholder_serial = _placeholder_serial + 1
-  local revision = _placeholder_serial
-  _placeholder_cache[card] = { at = t, values = values, revision = revision }
-  return values, revision
+  local entry = memo(_placeholder_cache, card, nil, function(c) return { values = build_placeholder_values(c) } end)
+  return entry.values, entry.revision
 end
 
 local function coerce_text(v)
@@ -318,6 +408,14 @@ local function coerce_text(v)
   if t == "string" then return v end
   if t == "number" or t == "boolean" then return tostring(v) end
   return ""
+end
+
+local function append_text(parts, v)
+  if type(v) == "table" then
+    for _, line in ipairs(v) do parts[#parts + 1] = coerce_text(line) end
+  else
+    parts[#parts + 1] = coerce_text(v)
+  end
 end
 
 local function clean_loc_text(raw, placeholder_values)
@@ -344,8 +442,7 @@ local function clean_loc_text(raw, placeholder_values)
   return text
 end
 
-local _ui_text_cache = setmetatable({}, { __mode = "k" })
-local _ui_text_serial = 0
+local _ui_text_cache = text_cache()
 
 function Utils.neuro_log(...)
   if require("core.config").bool("NEURO_DEBUG") then print("[neuro-game]", ...) end
@@ -353,6 +450,11 @@ end
 
 local function push_line(lines, raw)
   if raw == nil then return end
+  if lines.raw then
+    local piece = strip_loc_tags(coerce_text(raw))
+    if piece ~= "" then lines[#lines + 1] = piece end
+    return
+  end
   local text = clean_loc_text(raw)
   if not text or text == "" then return end
   if lines[#lines] ~= text then
@@ -406,9 +508,13 @@ local function collect_ui_lines(node, lines, depth)
       for _, n in ipairs(nums) do local x = tonumber(n); if x < lo then lo = x end; if x > hi then hi = x end end
       push_line(lines, lo .. " to " .. hi)
     else
+      -- DynaText shows one element at a time, so list each distinct element only once.
+      local seen = {}
       for _, e in ipairs(strs) do
         local s = dyna_str(e)
-        if s and not (s:find("#@", 1, true) or s:find("()", 1, true)) then
+        local key = s and s:match("^%s*(.-)%s*$")
+        if s and not seen[key] and not (s:find("#@", 1, true) or s:find("()", 1, true)) then
+          seen[key] = true
           push_line(lines, s)
         end
       end
@@ -422,6 +528,51 @@ local function collect_ui_lines(node, lines, depth)
   for i = 1, #node do
     collect_ui_lines(node[i], lines, depth + 1)
   end
+end
+
+local function is_badge_row(row)
+  if type(row) ~= "table" or row.config ~= nil or #row == 0 then return false end
+  for j = 1, #row do
+    local n = row[j]
+    if type(n) ~= "table" or type(n.nodes) ~= "table" or #n.nodes == 0 then return false end
+    for k = 1, #n.nodes do
+      if type(n.nodes[k]) ~= "table" or type(n.nodes[k].nodes) ~= "table" then return false end
+    end
+  end
+  return true
+end
+
+-- Description text style comes from its rendered scale and colour.
+local function row_text_styles(node, out, depth)
+  if depth > 14 or type(node) ~= "table" then return end
+  local cfg = node.config
+  if type(cfg) == "table" then
+    if type(cfg.text) == "string" and cfg.text:find("%S") then
+      out[#out + 1] = { scale = tonumber(cfg.scale), colour = cfg.colour }
+    end
+    local oc = type(cfg.object) == "table" and cfg.object.config
+    if type(oc) == "table" and type(oc.string) == "table" then
+      out[#out + 1] = { scale = tonumber(oc.scale), colour = type(oc.colours) == "table" and oc.colours[1] or nil }
+    end
+  end
+  if node.nodes then row_text_styles(node.nodes, out, depth + 1) end
+  for i = 1, #node do row_text_styles(node[i], out, depth + 1) end
+end
+
+local function same_colour(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  if a == b then return true end
+  if a[1] == nil then return false end
+  for i = 1, 4 do
+    if a[i] ~= b[i] then return false end
+  end
+  return true
+end
+
+-- “None” is a literal localized word, not an absent value.
+local function none_word()
+  local ok, word = pcall(localize, "k_none")
+  return (ok and type(word) == "string" and word ~= "" and word ~= "ERROR") and word or "None"
 end
 
 local function build_ui_text(card)
@@ -448,9 +599,45 @@ local function build_ui_text(card)
     end
   end
 
-  local desc_lines = {}
-  collect_ui_lines(ui.main, desc_lines, 0)
-  local desc = (#desc_lines > 0) and table.concat(desc_lines, " ") or nil
+  local desc_lines, status_lines, row_notes = {}, {}, {}
+  if type(ui.main) == "table" then
+    local rows, main_scale = {}, 0
+    for i = 1, #ui.main do
+      local row = ui.main[i]
+      if is_badge_row(row) then
+        collect_ui_lines(row, status_lines, 0)
+      else
+        local styles = {}
+        row_text_styles(row, styles, 0)
+        for _, st in ipairs(styles) do main_scale = math.max(main_scale, st.scale or 0) end
+        rows[#rows + 1] = { row = row, styles = styles }
+      end
+    end
+    local inactive = G and G.C and G.C.UI and G.C.UI.TEXT_INACTIVE
+    for _, r in ipairs(rows) do
+      local pieces = { raw = true }
+      collect_ui_lines(r.row, pieces, 0)
+      local text = clean_loc_text(table.concat(pieces))
+      if text and desc_lines[#desc_lines] ~= text then
+        local note = #r.styles > 0
+        for _, st in ipairs(r.styles) do
+          local small = st.scale and st.scale < main_scale * 0.95
+          if not (small or same_colour(st.colour, inactive)) then note = false end
+        end
+        desc_lines[#desc_lines + 1] = text
+        row_notes[#desc_lines] = note
+      end
+    end
+  end
+  local desc = (#desc_lines > 0) and join_desc_lines(desc_lines, row_notes) or nil
+  if #status_lines > 0 then
+    local none = none_word()
+    for i, line in ipairs(status_lines) do
+      if line == none then status_lines[i] = line:lower() end
+    end
+    local status = "(currently: " .. table.concat(status_lines, " ") .. ")"
+    desc = desc and (desc .. " " .. status) or status
+  end
 
   local info_lines = {}
   collect_ui_lines(ui.info, info_lines, 0)
@@ -476,20 +663,11 @@ local function get_cached_ui_text(card)
   if not card then return nil, nil, nil end
 
   Utils.refresh_dynamic_joker(card)
-
-  local t = Utils.gate_now("ui_text_cache_ttl")
-  local sig = ui_text_signature(card)
-  local cache = _ui_text_cache[card]
-  if cache and cache.sig == sig and cache_is_fresh(cache, t) then
-    return cache.name, cache.desc, cache.info
-  end
-
-  local name, desc, info = build_ui_text(card)
-  _ui_text_serial = _ui_text_serial + 1
-  _ui_text_cache[card] = {
-    at = t, sig = sig, name = name, desc = desc, info = info, revision = _ui_text_serial,
-  }
-  return name, desc, info
+  local entry = memo(_ui_text_cache, card, ui_text_signature, function(c)
+    local name, desc, info = build_ui_text(c)
+    return { name = name, desc = desc, info = info }
+  end)
+  return entry.name, entry.desc, entry.info
 end
 
 function Utils.ui_text_revision(card)
@@ -514,11 +692,6 @@ function Utils.is_playing_card(card)
   return card ~= nil and card.base ~= nil and card.base.value ~= nil and card.base.suit ~= nil
 end
 
-function Utils.playing_card_label(card)
-  local b = card and card.base
-  return tostring((b and b.value) or "?") .. " of " .. tostring((b and b.suit) or "?")
-end
-
 local _masked_names = { ["Not Discovered"] = true, ["Locked"] = true }
 local _localized_masked_names = false
 local function masked_names()
@@ -535,6 +708,49 @@ function Utils.is_masked_name(ui_name)
   return masked_names()[ui_name] == true
 end
 
+local function readable_name(text, placeholders)
+  local nm = clean_loc_text(text, placeholders)
+  if not nm or nm == "" then return nil end
+  if nm:find("_") and not nm:find(" ") then return humanize_identifier(nm) end
+  return nm
+end
+
+local function localized_name(card, center, placeholders)
+  local function clean(text)
+    if not text then return nil end
+    local nm = clean_loc_text(text, placeholders)
+    if nm and nm ~= "" then return nm end
+  end
+  local entry = get_localization_entry(card)
+  local nm = clean(entry and entry.name) or clean(center.loc_txt and center.loc_txt.name)
+  if nm then return nm end
+  local pc = center.key and G and G.P_CENTERS and G.P_CENTERS[center.key]
+  return clean(pc and pc.loc_txt and pc.loc_txt.name)
+end
+
+-- Stone cards hide rank and suit in the engine.
+function Utils.hides_front(card)
+  if type(card) ~= "table" then return false end
+  if type(card.should_hide_front) == "function" then
+    local ok, v = pcall(card.should_hide_front, card)
+    if ok and v then return true end
+  end
+  local center = type(card.config) == "table" and type(card.config.center) == "table" and card.config.center or {}
+  local ability = type(card.ability) == "table" and card.ability or {}
+  return center.effect == "Stone Card" or center.replace_base_card == true or center.key == "m_stone"
+    or ability.effect == "Stone Card" or ability.enhancement == "m_stone" or ability.name == "Stone Card"
+end
+
+function Utils.playing_card_label(card)
+  if Utils.hides_front(card) then
+    local center = type(card.config) == "table" and type(card.config.center) == "table" and card.config.center or {}
+    return localized_name(card, center) or (center.name and readable_name(center.name))
+      or (center.key == "m_stone" and "Stone Card") or "card with no rank or suit"
+  end
+  local b = card and card.base
+  return tostring((b and b.value) or "?") .. " of " .. tostring((b and b.suit) or "?")
+end
+
 function Utils.safe_name(card)
   if not card then return nil end
 
@@ -545,68 +761,26 @@ function Utils.safe_name(card)
   local placeholders = collect_placeholder_values(card)
   local center = card.config and card.config.center or {}
 
-  local ui_name = nil
-  local ok_ui, n = pcall(function()
-    local name = get_cached_ui_text(card)
-    return name
-  end)
-  if ok_ui then ui_name = n end
-  if type(ui_name) == "string" and ui_name ~= "" then
-    if not Utils.is_masked_name(ui_name) then
-      return ui_name
+  local ok_ui, ui_name = pcall(get_cached_ui_text, card)
+  if ok_ui and type(ui_name) == "string" and ui_name ~= "" and not Utils.is_masked_name(ui_name) then
+    return ui_name
+  end
+
+  local localized = localized_name(card, center, placeholders)
+  if localized then return localized end
+
+  local lbl = card.label and readable_name(card.label, placeholders)
+  if lbl then
+    local first_char = lbl:sub(1, 1)
+    if lbl:find(" ") or (first_char == first_char:upper() and first_char ~= first_char:lower()) then
+      return lbl
     end
   end
 
-  local entry = get_localization_entry(card)
-  if entry and entry.name then
-    local nm = clean_loc_text(entry.name, placeholders)
-    if nm and nm ~= "" then return nm end
-  end
-
-  if center.loc_txt and center.loc_txt.name then
-    local nm = clean_loc_text(center.loc_txt.name, placeholders)
-    if nm and nm ~= "" then return nm end
-  end
-
-  if center.key and G and G.P_CENTERS then
-    local pc = G.P_CENTERS[center.key]
-    if pc and pc.loc_txt and pc.loc_txt.name then
-      local nm = clean_loc_text(pc.loc_txt.name, placeholders)
-      if nm and nm ~= "" then return nm end
-    end
-  end
-
-  if card.label and card.label ~= "" then
-    local lbl = clean_loc_text(card.label, placeholders)
-    if lbl and lbl ~= "" then
-      if lbl:find("_") and not lbl:find(" ") then
-        lbl = humanize_identifier(lbl)
-      end
-      local first_char = lbl:sub(1, 1)
-      if lbl:find(" ") or (first_char == first_char:upper() and first_char ~= first_char:lower()) then
-        return lbl
-      end
-    end
-  end
-
-  if center.name then
-    local nm = clean_loc_text(center.name, placeholders)
-    if nm and nm ~= "" then
-      if nm:find("_") and not nm:find(" ") then
-        return humanize_identifier(nm)
-      end
-      return nm
-    end
-  end
-  if card.ability and card.ability.name then
-    local nm = clean_loc_text(card.ability.name, placeholders)
-    if nm and nm ~= "" then
-      if nm:find("_") and not nm:find(" ") then
-        return humanize_identifier(nm)
-      end
-      return nm
-    end
-  end
+  local nm = center.name and readable_name(center.name, placeholders)
+  if nm then return nm end
+  nm = card.ability and card.ability.name and readable_name(card.ability.name, placeholders)
+  if nm then return nm end
 
   if center.key then
     return humanize_identifier(center.key)
@@ -622,28 +796,11 @@ function Utils.real_name(card)
   end
   local placeholders = collect_placeholder_values(card)
   local center = card.config and card.config.center or {}
-  local entry = get_localization_entry(card)
-  if entry and entry.name then
-    local nm = clean_loc_text(entry.name, placeholders)
-    if nm and nm ~= "" then return nm end
-  end
-  if center.loc_txt and center.loc_txt.name then
-    local nm = clean_loc_text(center.loc_txt.name, placeholders)
-    if nm and nm ~= "" then return nm end
-  end
-  if center.key and G and G.P_CENTERS then
-    local pc = G.P_CENTERS[center.key]
-    if pc and pc.loc_txt and pc.loc_txt.name then
-      local nm = clean_loc_text(pc.loc_txt.name, placeholders)
-      if nm and nm ~= "" then return nm end
-    end
-  end
+  local localized = localized_name(card, center, placeholders)
+  if localized then return localized end
   if type(center.name) == "string" and center.name ~= "" then
-    local nm = clean_loc_text(center.name, placeholders)
-    if nm and nm ~= "" then
-      if nm:find("_") and not nm:find(" ") then return humanize_identifier(nm) end
-      return nm
-    end
+    local nm = readable_name(center.name, placeholders)
+    if nm then return nm end
   end
   return Utils.safe_name(card)
 end
@@ -657,26 +814,14 @@ function Utils.flatten_description(desc)
   if type(desc) == "string" then return desc end
   if type(desc) ~= "table" then return tostring(desc) end
   local parts = {}
-  for _, v in ipairs(desc) do
-    if type(v) == "table" then
-      for _, line in ipairs(v) do
-        parts[#parts + 1] = coerce_text(line)
-      end
-    else
-      parts[#parts + 1] = coerce_text(v)
-    end
+  for _, v in ipairs(desc) do append_text(parts, v) end
+  if #parts > 0 then
+    local notes = {}
+    for i, line in ipairs(parts) do notes[i] = raw_note_line(line) end
+    return join_desc_lines(parts, notes)
   end
-  if #parts > 0 then return table.concat(parts, " ") end
   for k, v in pairs(desc) do
-    if type(k) == "string" then
-      if type(v) == "table" then
-        for _, line in ipairs(v) do
-          parts[#parts + 1] = coerce_text(line)
-        end
-      else
-        parts[#parts + 1] = coerce_text(v)
-      end
-    end
+    if type(k) == "string" then append_text(parts, v) end
   end
   return #parts > 0 and table.concat(parts, " ") or nil
 end
@@ -693,10 +838,7 @@ function Utils.safe_description(loc_txt, card)
 end
 
 local function runtime_description(card)
-  local ok_ui, _, ui_desc = pcall(function()
-    local name, desc = get_cached_ui_text(card)
-    return name, desc
-  end)
+  local ok_ui, _, ui_desc = pcall(get_cached_ui_text, card)
   if ok_ui and ui_desc and ui_desc ~= "" then
     return ui_desc
   end
@@ -714,18 +856,16 @@ local function runtime_description(card)
     end
   end
 
-  local candidates = {}
-  local function add_candidate(v)
-    if v ~= nil then candidates[#candidates + 1] = v end
-  end
-  add_candidate(center.loc_txt and (center.loc_txt.description or center.loc_txt.text))
-  add_candidate(ability.loc_txt and (ability.loc_txt.description or ability.loc_txt.text))
-  add_candidate(card.loc_txt and (card.loc_txt.description or card.loc_txt.text))
-  add_candidate(entry and (entry.text or entry.description))
-  add_candidate(pc_loc)
-
-  for _, candidate in ipairs(candidates) do
-    local out = clean_loc_text(candidate, placeholders)
+  local candidates = {
+    center.loc_txt and (center.loc_txt.description or center.loc_txt.text),
+    ability.loc_txt and (ability.loc_txt.description or ability.loc_txt.text),
+    card.loc_txt and (card.loc_txt.description or card.loc_txt.text),
+    entry and (entry.text or entry.description),
+    pc_loc,
+  }
+  -- Keep candidate positions fixed: missing candidates leave holes.
+  for i = 1, 5 do
+    local out = clean_loc_text(candidates[i], placeholders)
     if out and out ~= "" then
       return out
     end
@@ -774,14 +914,12 @@ end
 
 function Utils.card_info_text(card)
   if not card then return nil end
-  local ok, _name, _desc, info = pcall(get_cached_ui_text, card)
+  local ok, _, _, info = pcall(get_cached_ui_text, card)
   if ok and type(info) == "string" and info ~= "" then return info end
   return nil
 end
 
-function Utils.humanize_identifier(id)
-  return humanize_identifier(id)
-end
+Utils.humanize_identifier = humanize_identifier
 
 function Utils.safe_name_or(card)
   return Utils.safe_name(card) or "Unknown"
@@ -809,8 +947,48 @@ function Utils.font_at(path, base_px, scale)
   return f
 end
 
-function Utils.load_font_pair(path, sz_small, sz_big, scale)
-  return Utils.font_at(path, sz_small, scale), Utils.font_at(path, sz_big, scale)
+function Utils.env_flag(name)
+  local v = os.getenv(name)
+  if not v then return nil end
+  v = tostring(v):lower()
+  if v == "1" or v == "on" or v == "true" or v == "yes" then return true end
+  if v == "0" or v == "off" or v == "false" or v == "no" then return false end
+  return nil
+end
+
+function Utils.stable_repr(value, max_depth, depth, seen)
+  local kind = type(value)
+  if kind == "nil" or kind == "boolean" or kind == "number" or kind == "string" then
+    return tostring(value)
+  end
+  if kind ~= "table" then return kind end
+  depth = depth or 0
+  if depth >= max_depth then return "{...}" end
+  seen = seen or {}
+  if seen[value] then return "<cycle>" end
+  seen[value] = true
+  local keys = {}
+  for key in pairs(value) do keys[#keys + 1] = key end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+  local parts = {}
+  for _, key in ipairs(keys) do
+    parts[#parts + 1] = tostring(key) .. "=" .. Utils.stable_repr(value[key], max_depth, depth + 1, seen)
+  end
+  seen[value] = nil
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+
+function Utils.identity_value(value)
+  if value == nil then return "-" end
+  local text = tostring(value)
+  return type(value) .. ":" .. tostring(#text) .. ":" .. text
+end
+
+function Utils.index_in(cards, target)
+  for index, card in ipairs(cards or {}) do
+    if card == target then return index end
+  end
+  return nil
 end
 
 function Utils.list_to_set(list)
@@ -831,14 +1009,6 @@ function Utils.drop_last_codepoint(s)
   return s:sub(1, i - 1)
 end
 
-function Utils.money(n)
-  return "$" .. tostring(n or 0)
-end
-
-function Utils.money_signed(n)
-  n = tonumber(n) or 0
-  return n < 0 and ("-$" .. tostring(-n)) or ("$" .. tostring(n))
-end
 
 function Utils.lazy_require(name)
   local ok, mod = pcall(require, name)
@@ -874,11 +1044,27 @@ function Utils.engine_settled()
   end
   return true
 end
+local function infinity_text(n)
+  local raw = tonumber(n)
+  if raw == math.huge then return "inf" end
+  if raw == -math.huge then return "-inf" end
+  return nil
+end
+
+local function finite_number(n)
+  n = tonumber(n)
+  if not n or n ~= n or n == math.huge or n == -math.huge then return 0 end
+  return n
+end
+
 function Utils.fmt_num(n)
-  n = tonumber(n) or 0
-  if n ~= n then return "0" end
-  if n == 0 then return "0" end   -- avoid "-0" from a negative-zero delta
+  local inf = infinity_text(n)
+  if inf then return inf end
+  n = finite_number(n)
   local a = n < 0 and -n or n
+  -- Round before testing zero so tiny negatives do not render as -0.
+  if a < 1e15 and n % 1 ~= 0 then n = tonumber(string.format("%.2f", n)) end
+  if n == 0 then return "0" end
   if a < 1e15 then
     if n % 1 ~= 0 then return (string.format("%.2f", n):gsub("%.?0+$", "")) end
     return string.format("%.0f", n)
@@ -886,16 +1072,37 @@ function Utils.fmt_num(n)
   return string.format("%.4g", n)
 end
 
+
+function Utils.money(n)
+  n = tonumber(n) or 0
+  return (n < 0 and "-$" or "$") .. Utils.fmt_num(n < 0 and -n or n)
+end
+
+function Utils.money_change(n)
+  n = tonumber(n) or 0
+  return (n < 0 and "" or "+") .. Utils.money(n)
+end
+
 function Utils.fmt_2dp(n)
-  return tostring(tonumber(string.format("%.2f", n)))
+  local inf = infinity_text(n)
+  if inf then return inf end
+  local value = tonumber(string.format("%.2f", finite_number(n)))
+  if value == 0 then return "0" end
+  return tostring(value)
 end
 
 function Utils.fmt_xmult(n)
   return "x" .. Utils.fmt_2dp(n)
 end
 
-function Utils.signed(n, suffix)
-  return (n < 0 and "" or "+") .. Utils.fmt_num(n) .. (suffix or "")
+function Utils.signed(n)
+  local text = Utils.fmt_num(n)
+  return (text:sub(1, 1) == "-" and "" or "+") .. text
+end
+
+function Utils.trim_line_ends(text)
+  if type(text) ~= "string" then return text end
+  return (text:gsub("[ \t]+\n", "\n"):gsub("[ \t]+$", ""):gsub("\n\n\n+", "\n\n"))
 end
 
 return Utils

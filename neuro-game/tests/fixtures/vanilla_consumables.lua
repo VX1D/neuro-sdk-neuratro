@@ -1,0 +1,16 @@
+return {
+  {"c_fool","Tarot",0}, {"c_magician","Tarot",2}, {"c_high_priestess","Tarot",0}, {"c_empress","Tarot",2},
+  {"c_emperor","Tarot",0}, {"c_heirophant","Tarot",2}, {"c_lovers","Tarot",1}, {"c_chariot","Tarot",1},
+  {"c_justice","Tarot",1}, {"c_hermit","Tarot",0}, {"c_wheel_of_fortune","Tarot",0}, {"c_strength","Tarot",2},
+  {"c_hanged_man","Tarot",2}, {"c_death","Tarot",2}, {"c_temperance","Tarot",0}, {"c_devil","Tarot",1},
+  {"c_tower","Tarot",1}, {"c_star","Tarot",3}, {"c_moon","Tarot",3}, {"c_sun","Tarot",3},
+  {"c_judgement","Tarot",0}, {"c_world","Tarot",3},
+  {"c_mercury","Planet",0}, {"c_venus","Planet",0}, {"c_earth","Planet",0}, {"c_mars","Planet",0},
+  {"c_jupiter","Planet",0}, {"c_saturn","Planet",0}, {"c_uranus","Planet",0}, {"c_neptune","Planet",0},
+  {"c_pluto","Planet",0}, {"c_planet_x","Planet",0}, {"c_ceres","Planet",0}, {"c_eris","Planet",0},
+  {"c_familiar","Spectral",0}, {"c_grim","Spectral",0}, {"c_incantation","Spectral",0}, {"c_talisman","Spectral",1},
+  {"c_aura","Spectral",0}, {"c_wraith","Spectral",0}, {"c_sigil","Spectral",0}, {"c_ouija","Spectral",0},
+  {"c_ectoplasm","Spectral",0}, {"c_immolate","Spectral",0}, {"c_ankh","Spectral",0}, {"c_deja_vu","Spectral",1},
+  {"c_hex","Spectral",0}, {"c_trance","Spectral",1}, {"c_medium","Spectral",1}, {"c_cryptid","Spectral",1},
+  {"c_soul","Spectral",0}, {"c_black_hole","Spectral",0},
+}

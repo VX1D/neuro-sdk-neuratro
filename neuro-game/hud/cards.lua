@@ -2,25 +2,19 @@ local Cards = {}
 Cards._mini_edition_fail = 0
 Cards._mini_edition_skip = 0
 Cards._mini_fallback = 0
-Cards._badge_icon_missing = 0
 
 local QUAD_CACHE_MAX = 512
--- quad_bucket nests ns/prefix/x/y/px/py before the leaf record.
-local QUAD_CACHE_DEPTH = 6
-local _diag_logged = {}
-function Cards.diag_once(key, message)
-  if _diag_logged[key] then return false end
-  _diag_logged[key] = true
-  print("[neuro-game] " .. tostring(message))
-  return true
-end
 
 local Palette = require("render.palette")
 local Utils = require("util.utils")
+Cards.diag_once = Utils.diag_once
 local S = require("hud.state")
 local Assets = require("hud.assets")
+local GfxGuard = require("render.gfx_guard")
 local Prims = require("hud.prims")
+local set_col = Prims.set_col
 local smoothstep01 = Prims.smoothstep01
+local mix, fit_text = require("render.gfx").mix, require("render.gfx").fit_text
 
 local neuro_log = Utils.neuro_log
 
@@ -84,22 +78,24 @@ local function valid_pos(p)
   return type(p) == "table" and type(p.x) == "number" and type(p.y) == "number"
 end
 
+local function cell_u10(v) return v >= 0 and v < 1024 and v % 1 == 0 end
+
 local function quad_bucket(ns, prefix, x, y, px, py)
   local t = S.quad_cache
   local t0 = t[ns]
   if not t0 then t0 = {}; t[ns] = t0 end
   local t1 = t0[prefix]
   if not t1 then t1 = {}; t0[prefix] = t1 end
-  local t2 = t1[x]
-  if not t2 then t2 = {}; t1[x] = t2 end
-  local t3 = t2[y]
-  if not t3 then t3 = {}; t2[y] = t3 end
-  local t4 = t3[px]
-  if not t4 then t4 = {}; t3[px] = t4 end
-  local leaf = t4[py]
+  local k
+  if cell_u10(x) and cell_u10(y) and cell_u10(px) and cell_u10(py) then
+    k = ((x * 1024 + y) * 1024 + px) * 1024 + py
+  else
+    k = x .. "," .. y .. "," .. px .. "," .. py
+  end
+  local leaf = t1[k]
   if not leaf then
     leaf = {}
-    t4[py] = leaf
+    t1[k] = leaf
     S.quad_cache_n = (S.quad_cache_n or 0) + 1
   end
   return leaf
@@ -122,11 +118,13 @@ local function cached_quad(ns, prefix, x, y, px, py, sx, sy, w, h, image)
   return rec.quad, (not ok)
 end
 
-local function atlas_quad(atlas_key, pos)
+local function atlas_quad(atlas_key, pos, crop)
   local atlas = G.ASSET_ATLAS and G.ASSET_ATLAS[atlas_key]
   if not atlas or not atlas.image or not valid_pos(pos) then return nil end
   local px, py = atlas.px or 71, atlas.py or 95
-  local q = cached_quad("base", atlas_key, pos.x, pos.y, px, py, pos.x * px, pos.y * py, px, py, atlas.image)
+  local q = cached_quad(crop and "crop" or "base", atlas_key, pos.x, pos.y, px, py,
+    pos.x * px + (crop and crop.x or 0), pos.y * py + (crop and crop.y or 0),
+    crop and crop.w or px, crop and crop.h or py, atlas.image)
   if not q then return nil end
   return atlas, q, px, py
 end
@@ -138,15 +136,12 @@ local ICON_CROP = {
   rental     = { x = 4,  y = 24, w = 19, h = 19 },
 }
 
-local function draw_cropped_quad(atlas_key, pos, crop, x, y, scale_x, scale_y, a)
-  local atlas = G and G.ASSET_ATLAS and G.ASSET_ATLAS[atlas_key]
-  if not atlas or not atlas.image or not valid_pos(pos) or not crop then return 0 end
-  local px, py = atlas.px or 71, atlas.py or 95
-  local q = cached_quad("crop", atlas_key, pos.x, pos.y, px, py,
-    pos.x * px + crop.x, pos.y * py + crop.y, crop.w, crop.h, atlas.image)
-  if not q then return 0 end
-  love.graphics.setColor(1, 1, 1, a or 1)
-  love.graphics.draw(atlas.image, q, x + crop.x * scale_x, y + crop.y * scale_y, 0, scale_x, scale_y)
+local function draw_atlas_quad(atlas_key, pos, x, y, scale_x, scale_y, a, crop)
+  local atlas, q, px = atlas_quad(atlas_key, pos, crop)
+  if not atlas then return 0 end
+  love.graphics.setColor(1, 1, 1, a)
+  if crop then x, y = x + crop.x * scale_x, y + crop.y * scale_y end
+  love.graphics.draw(atlas.image, q, x, y, 0, scale_x, scale_y)
   love.graphics.setColor(1, 1, 1, 1)
   return px * scale_x
 end
@@ -161,50 +156,14 @@ local function draw_stickers(ab, x, y, scale_x, scale_y, a)
   for i = 1, #STICKER_ORDER do
     local key = STICKER_ORDER[i]
     if ab[key] then
-      draw_cropped_quad("stickers", STICKER_POS[key], ICON_CROP[key], x, y, scale_x, scale_y, a)
+      draw_atlas_quad("stickers", STICKER_POS[key], x, y, scale_x, scale_y, a, ICON_CROP[key])
     end
   end
 end
 
-local function draw_atlas_quad(atlas_key, pos, x, y, scale_x, scale_y_or_a, a_param)
-  local atlas, q, px = atlas_quad(atlas_key, pos)
-  if not atlas then return 0 end
-  local scale_y, a
-  if type(scale_y_or_a) == "number" and type(a_param) == "number" then
-    scale_y = scale_y_or_a
-    a = a_param
-  else
-    scale_y = scale_x
-    a = scale_y_or_a or 1
-  end
-  love.graphics.setColor(1, 1, 1, a)
-  love.graphics.draw(atlas.image, q, x, y, 0, scale_x, scale_y)
-  love.graphics.setColor(1, 1, 1, 1)
-  return px * scale_x
-end
-
-local function draw_shaded_quad(atlas_key, pos, x, y, scale_x, scale_y_or_a, a_or_shader, shader_name_or_card, card_or_dissolve, dissolve_or_b1, burn1_or_b2, burn2_or_hov, hovering_param)
-  local scale_y
-  local a, shader_name, card, dissolve, burn1, burn2, hovering
-  if type(scale_y_or_a) == "number" and (type(a_or_shader) == "number" or type(a_or_shader) == "nil") then
-    scale_y = scale_y_or_a
-    a = a_or_shader or 1
-    shader_name = shader_name_or_card
-    card = card_or_dissolve
-    dissolve = dissolve_or_b1
-    burn1 = burn1_or_b2
-    burn2 = burn2_or_hov
-    hovering = hovering_param
-  else
-    scale_y = scale_x
-    a = scale_y_or_a
-    shader_name = a_or_shader
-    card = shader_name_or_card
-    dissolve = card_or_dissolve
-    burn1 = dissolve_or_b1
-    burn2 = burn1_or_b2
-    hovering = burn2_or_hov
-  end
+local function draw_shaded_quad(atlas_key, pos, x, y, scale_x, scale_y, a, shader_name, card, dissolve,
+    burn1, burn2, hovering)
+  a = a or 1
   local shader = G.SHADERS and G.SHADERS[shader_name]
   local atlas, q, px, py = atlas_quad(atlas_key, pos)
   if not shader or not atlas then return false end
@@ -212,8 +171,6 @@ local function draw_shaded_quad(atlas_key, pos, x, y, scale_x, scale_y_or_a, a_o
   local iw, ih = atlas.image:getDimensions()
   _tex_details[1], _tex_details[2], _tex_details[3], _tex_details[4] = pos.x, pos.y, px, py
   shader:send("texture_details", _tex_details)
-  -- G.SHADERS is shared with the base game, which rewrites every uniform per sprite draw, so an
-  -- "already sent it" cache would serve the base game's values.
   _image_details[1], _image_details[2] = iw, ih
   shader:send("image_details", _image_details)
   shader:send("mouse_screen_pos", ORIGIN_2)
@@ -289,15 +246,7 @@ local function draw_mini_fallback(card, x, y, w, h, a)
     local f = love.graphics.getFont()
     local fh = f:getHeight()
     local maxw = w - 4
-    while #name > 1 and f:getWidth(name) > maxw do
-      local i = #name
-      while i > 1 do
-        local b = name:byte(i)
-        if not b or b < 0x80 or b >= 0xC0 then break end
-        i = i - 1
-      end
-      name = name:sub(1, i - 1)
-    end
+    name = fit_text(name, f, maxw, "", 1)
     love.graphics.setColor(0.9, 0.9, 0.9, a)
     love.graphics.print(name, x + 2, y + 2 + (h - fh - 4) * 0.5)
     love.graphics.setColor(1, 1, 1, 1)
@@ -312,6 +261,16 @@ local function center_atlas_key(center, fallback)
   return center.atlas or (CENTERS_SETS[center.set] and "centers") or center.set or fallback
 end
 
+local function front_sprite(front)
+  local fallback = (G.SETTINGS and G.SETTINGS.colourblind_option) and "cards_2" or "cards_1"
+  if type(_G.get_front_spriteinfo) ~= "function" then return fallback, front.pos end
+  local ok, atlas, pos = pcall(_G.get_front_spriteinfo, front)
+  if not (ok and type(atlas) == "table" and valid_pos(pos)) then return fallback, front.pos end
+  local key = atlas.key_noloc or atlas.key or atlas.name
+  if key and G.ASSET_ATLAS and G.ASSET_ATLAS[key] == atlas then return key, pos end
+  return fallback, front.pos
+end
+
 local function resolve_card_sprite(card)
   local cfg = card and card.config
   local center = cfg and cfg.center
@@ -321,8 +280,7 @@ local function resolve_card_sprite(card)
     ak = center_atlas_key(center, "Joker")
     pos = center.pos
   elseif front and valid_pos(front.pos) then
-    ak = "cards_1"
-    pos = front.pos
+    ak, pos = front_sprite(front)
     is_front = true
   else
     return nil
@@ -401,7 +359,7 @@ local function resolve_dims(card, h)
   local center = cfg and cfg.center
   local front = cfg and cfg.card
   local now = Utils.now()
-  -- These are rewritten in place on the same center table, so fingerprint values, not identity.
+  -- These centers are rewritten in place, so fingerprint their values rather than their identity.
   local ds = center and center.display_size
   local ps = center and center.pixel_size
   local dw = (ds and tonumber(ds.w)) or (ps and tonumber(ps.w)) or nil
@@ -421,7 +379,7 @@ local function resolve_dims(card, h)
   if not bucket then bucket = {}; DIMS_CACHE[card] = bucket end
   entry = bucket[h]
   if not entry then
-    -- Flight animations sweep `h` continuously, so the per-card bucket needs a cap.
+    -- Flight animations vary `h` continuously, so cap per-card buckets.
     local n = 0
     for _ in pairs(bucket) do n = n + 1 end
     if n >= DIMS_BUCKET_MAX then bucket = {}; DIMS_CACHE[card] = bucket end
@@ -478,18 +436,25 @@ local function edition_fail(key, message)
   Cards.diag_once(key, message)
 end
 
+local function edition_skip()
+  Cards._mini_edition_skip = (Cards._mini_edition_skip or 0) + 1
+  Cards.diag_once("edition_shader_missing",
+    "edition shader or atlas unavailable for mini, drawing overlay fallback")
+end
+
 local function draw_playing_card_mini(card, x, y, h, a, center, front, is_stone)
   local scale = h / 95
   local w = 71 * scale
   local ed = card.edition
-  local front_atlas = (G.SETTINGS and G.SETTINGS.colourblind_option) and "cards_2" or "cards_1"
   local has_face = front and valid_pos(front.pos)
+  local front_atlas, front_pos
+  if has_face then front_atlas, front_pos = front_sprite(front) end
 
   local center_ak = center_atlas_key(center, "centers")
   local center_atlas_obj = center_ak and G.ASSET_ATLAS and G.ASSET_ATLAS[center_ak]
   local center_ok = center_atlas_obj and center_atlas_obj.image ~= nil
 
-  local front_atlas_obj = G.ASSET_ATLAS and G.ASSET_ATLAS[front_atlas]
+  local front_atlas_obj = front_atlas and G.ASSET_ATLAS and G.ASSET_ATLAS[front_atlas]
   local front_ok = front_atlas_obj and front_atlas_obj.image ~= nil
 
   if (center and valid_pos(center.pos) and not center_ok) or (has_face and not front_ok) then
@@ -507,7 +472,7 @@ local function draw_playing_card_mini(card, x, y, h, a, center, front, is_stone)
       ok_neg, c_ok = try_shaded(center_ak, center.pos, x, y, scale, scale, a, "negative", card)
     end
     if ok_neg and want_front then
-      ok_neg, f_ok = try_shaded(front_atlas, front.pos, x, y, scale, scale, a, "negative", card)
+      ok_neg, f_ok = try_shaded(front_atlas, front_pos, x, y, scale, scale, a, "negative", card)
     end
     if ok_neg then
       neg_base = (not want_center or c_ok) and (not want_front or f_ok) and (c_ok or f_ok)
@@ -518,10 +483,10 @@ local function draw_playing_card_mini(card, x, y, h, a, center, front, is_stone)
 
   local drew = neg_base
   if not neg_base then
-    if want_center and draw_atlas_quad(center_ak, center.pos, x, y, scale, a) > 0 then
+    if want_center and draw_atlas_quad(center_ak, center.pos, x, y, scale, scale, a) > 0 then
       drew = true
     end
-    if want_front and draw_atlas_quad(front_atlas, front.pos, x, y, scale, a) > 0 then
+    if want_front and draw_atlas_quad(front_atlas, front_pos, x, y, scale, scale, a) > 0 then
       drew = true
     end
   end
@@ -542,7 +507,7 @@ local function draw_playing_card_mini(card, x, y, h, a, center, front, is_stone)
       if sh then
         local ok = true
         if want_center then ok = try_shaded(center_ak, center.pos, x, y, scale, scale, a, sh, card) end
-        if ok and want_front then ok = try_shaded(front_atlas, front.pos, x, y, scale, scale, a, sh, card) end
+        if ok and want_front then ok = try_shaded(front_atlas, front_pos, x, y, scale, scale, a, sh, card) end
         if not ok then
           Cards._mini_edition_fail = Cards._mini_edition_fail + 1
           love.graphics.setShader()
@@ -555,7 +520,7 @@ local function draw_playing_card_mini(card, x, y, h, a, center, front, is_stone)
   end
 
   if card.seal and SEAL_POS[card.seal] then
-    draw_cropped_quad("centers", SEAL_POS[card.seal], ICON_CROP.seal, x, y, scale, scale, a)
+    draw_atlas_quad("centers", SEAL_POS[card.seal], x, y, scale, scale, a, ICON_CROP.seal)
   end
 
   local ab = card.ability
@@ -615,9 +580,7 @@ local function draw_card_mini_approx(card, x, y, h, a, skip_art_badge)
           edition_fail("edition_negative_shine", "negative_shine pass failed on a joker/consumable mini")
         end
       else
-        Cards._mini_edition_skip = (Cards._mini_edition_skip or 0) + 1
-        Cards.diag_once("edition_shader_missing",
-          "edition shader or atlas unavailable for mini, drawing overlay fallback")
+        edition_skip()
       end
     else
       local sh = edition_shader(ed)
@@ -627,9 +590,7 @@ local function draw_card_mini_approx(card, x, y, h, a, skip_art_badge)
         if not ok then
           edition_fail("edition_pass_mini", "edition shader pass failed on a joker/consumable mini")
         elseif not shaded then
-          Cards._mini_edition_skip = (Cards._mini_edition_skip or 0) + 1
-          Cards.diag_once("edition_shader_missing",
-            "edition shader or atlas unavailable for mini, drawing overlay fallback")
+          edition_skip()
         end
       end
     end
@@ -669,8 +630,8 @@ local function draw_card_mini_approx(card, x, y, h, a, skip_art_badge)
   if seal then
     local drew_seal = false
     if SEAL_POS[seal] then
-      drew_seal = draw_cropped_quad("centers", SEAL_POS[seal], ICON_CROP.seal,
-        x, y, scale_x, scale_y, a) > 0
+      drew_seal = draw_atlas_quad("centers", SEAL_POS[seal], x, y, scale_x, scale_y, a,
+        ICON_CROP.seal) > 0
     end
     if not drew_seal then
       Cards.diag_once("seal_atlas_missing", "centers atlas unavailable, drawing the seal dot instead")
@@ -681,7 +642,7 @@ local function draw_card_mini_approx(card, x, y, h, a, skip_art_badge)
         local dot_y = y + render_h - dot_r - 2
         love.graphics.setColor(0, 0, 0, 0.50 * a)
         love.graphics.circle("fill", dot_x + 1, dot_y + 1, dot_r)
-        love.graphics.setColor(sc[1], sc[2], sc[3], 0.92 * a)
+        set_col(sc, 0.92 * a)
         love.graphics.circle("fill", dot_x, dot_y, dot_r)
         love.graphics.setColor(1, 1, 1, 0.40 * a)
         love.graphics.circle("fill", dot_x - dot_r * 0.3, dot_y - dot_r * 0.3, dot_r * 0.35)
@@ -716,7 +677,7 @@ local function draw_card_mini_approx(card, x, y, h, a, skip_art_badge)
       local fh, tw = f:getHeight(), f:getWidth(ed_text)
       love.graphics.setColor(0, 0, 0, 0.6 * a)
       love.graphics.rectangle("fill", x + w - tw - 3, y + 2, tw + 3, fh + 2)
-      love.graphics.setColor(ed_col[1], ed_col[2], ed_col[3], 0.97 * a)
+      set_col(ed_col, 0.97 * a)
       if f ~= f0 then love.graphics.setFont(f) end
       love.graphics.print(ed_text, x + w - tw - 1, y + 3)
       if f ~= f0 then love.graphics.setFont(f0) end
@@ -760,14 +721,7 @@ local RARITY_COLORS = {
   [4] = {0.80, 0.45, 0.95},
 }
 
--- Mirrors the engine's own normalization (dump functions/common_events.lua:2248, SMODS
--- game_object.lua:1330-1332): a modded joker's rarity can be the string key ("Legendary") rather
--- than the vanilla-assigned number.
-local RARITY_TIER = { Common = 1, Uncommon = 2, Rare = 3, Legendary = 4 }
-local function rarity_tier(rarity)
-  if type(rarity) == "string" then return RARITY_TIER[rarity] or tonumber(rarity) end
-  return tonumber(rarity)
-end
+local rarity_tier = require("facts.card_util").rarity_tier
 
 local function rarity_color(card)
   if not card then return nil end
@@ -788,7 +742,6 @@ local _vfade_mesh, _vfade_tried
 local function vfade_mesh()
   if _vfade_tried then return _vfade_mesh end
   _vfade_tried = true
-  if type(love.graphics.newMesh) ~= "function" then return nil end
   local verts = {
     { 0, 0, 0, 0, 1, 1, 1, 0.0 },
     { 1, 0, 1, 0, 1, 1, 1, 0.0 },
@@ -842,7 +795,7 @@ local EVIL_A = {
   bar_commit = 0.40,
 }
 
-local SHOP_ATTACK_GAIN = 2.2 -- shop hover alpha attack gain
+local SHOP_ATTACK_GAIN = 2.2
 
 local function shop_attack01(a, gain)
   return Prims.ease_out_cubic01(math.min(1, a * (gain or SHOP_ATTACK_GAIN)))
@@ -865,90 +818,61 @@ local function glow_alpha(a, attack, lift01)
   return shop_attack01(a, attack_gain(lift01))
 end
 
-local _glow_evil_ctx = {}
-
-local function glow_evil_scrim(c)
-  for i = 1, #EVIL_SCRIM do
-    local band = EVIL_SCRIM[i]
-    local thick = c.uu * (band[2] - band[1])
-    local mid = c.uu * (band[1] + band[2]) * 0.5
-    love.graphics.setColor(0, 0, 0, band[3] * c.a)
-    love.graphics.setLineWidth(thick)
-    love.graphics.rectangle("line", c.X0 - mid, c.Y0 - mid, c.BW + mid * 2, c.BH + mid * 2, c.rr + mid, c.rr + mid)
-  end
-  love.graphics.setColor(c.glow[1], c.glow[2], c.glow[3], (EVIL_A.wash + EVIL_A.wash_commit * c.commit01) * c.a)
-  love.graphics.rectangle("fill", c.X0, c.Y0, c.BW, c.BH, c.rr, c.rr)
-end
-
-local function glow_evil_pool(c)
-  local pool_h = c.H * 0.34
-  fill_vfade(c.X0, c.Y0 + c.BH - pool_h, c.BW, pool_h, c.ember[1], c.ember[2], c.ember[3],
-    (EVIL_A.pool + EVIL_A.pool_commit * c.commit01) * c.a)
-  if c.commit01 > 0 then
-    local bar_h = c.H * 0.05
-    local br = c.ember[1] + (c.hot[1] - c.ember[1]) * c.commit01
-    local bg = c.ember[2] + (c.hot[2] - c.ember[2]) * c.commit01
-    local bb = c.ember[3] + (c.hot[3] - c.ember[3]) * c.commit01
-    love.graphics.setColor(br, bg, bb, EVIL_A.bar_commit * c.commit01 * c.a)
-    love.graphics.rectangle("fill", c.X0, c.Y0 + c.BH - bar_h, c.BW, bar_h)
-  end
-  local by = c.Y0 + c.BH - c.uu * 1.5
-  Prims.ember_bloom(c.X0 + c.BW * 0.30, by, c.uu * 3.5, c.uu * 0.75, (c.now * 0.45) % 1, c.gold, c.a)
-  Prims.ember_bloom(c.X0 + c.BW * 0.72, by, c.uu * 3.5, c.uu * 0.75, (c.now * 0.45 + 0.53) % 1, c.gold, c.a)
-end
-
-local function glow_evil_border(c)
-  local mr = c.gold[1] + (c.ember[1] - c.gold[1]) * c.pulse * 0.6
-  local mg = c.gold[2] + (c.ember[2] - c.gold[2]) * c.pulse * 0.6
-  local mb = c.gold[3] + (c.ember[3] - c.gold[3]) * c.pulse * 0.6
-  love.graphics.setColor(mr, mg, mb,
-    (EVIL_A.border + EVIL_A.border_commit * c.commit01 + EVIL_A.border_pulse * c.pulse) * c.a)
-  love.graphics.setLineWidth(c.W * 0.030)
-  love.graphics.rectangle("line", c.X0, c.Y0, c.BW, c.BH)
-  local arm = c.W * 0.11
-  love.graphics.setColor(c.gold[1], c.gold[2], c.gold[3],
-    (EVIL_A.arms + EVIL_A.arms_commit * c.commit01 + EVIL_A.arms_pulse * c.pulse) * c.a)
-  love.graphics.setLineWidth(c.W * 0.028)
-  love.graphics.line(c.X0, c.Y0 + arm, c.X0, c.Y0, c.X0 + arm, c.Y0)
-  love.graphics.line(c.X0 + c.BW - arm, c.Y0, c.X0 + c.BW, c.Y0, c.X0 + c.BW, c.Y0 + arm)
-  love.graphics.line(c.X0, c.Y0 + c.BH - arm, c.X0, c.Y0 + c.BH, c.X0 + arm, c.Y0 + c.BH)
-  love.graphics.line(c.X0 + c.BW - arm, c.Y0 + c.BH, c.X0 + c.BW, c.Y0 + c.BH, c.X0 + c.BW, c.Y0 + c.BH - arm)
-end
-
-local function glow_evil_mark(c)
-  local bsc = 0.72 + 0.28 * c.commit01
-  local mx = c.W * 0.5
-  local mw2 = c.W * 0.065 * bsc
-  local mup = c.W * 0.18 * bsc * 0.82 * (1 + 0.4 * c.commit01)
-  local mdn = c.W * 0.18 * bsc * 0.18
-  love.graphics.setColor(c.gold[1], c.gold[2], c.gold[3], (EVIL_A.mark + EVIL_A.mark_commit * c.commit01) * c.a)
-  love.graphics.polygon("fill", mx - mw2, c.Y0, mx, c.Y0 - mup, mx + mw2, c.Y0, mx, c.Y0 + mdn)
-  love.graphics.setColor(c.hot[1], c.hot[2], c.hot[3], EVIL_A.mark_core_commit * c.commit01 * c.a)
-  love.graphics.polygon("fill", mx - mw2 * 0.46, c.Y0, mx, c.Y0 - mup * 0.52, mx + mw2 * 0.46, c.Y0, mx, c.Y0 + mdn * 0.53)
-end
-
-local GLOW_EVIL_LAYERS = {
-  { mode = "alpha", fn = glow_evil_scrim },
-  { mode = "add",   fn = glow_evil_pool },
-  { mode = "alpha", fn = glow_evil_border },
-  { mode = "add",   fn = glow_evil_mark },
-}
-
 local function glow_evil(pl, a, W, H, X0, Y0, BW, BH, pulse, commit01, now)
   local ember, gold, hot, glow = pl.D_ORANGE, pl.D_GOLD, pl.D_WHITE, pl.GLOW
   local uu = W * 0.028
   local rr = W * 0.06
 
-  local c = _glow_evil_ctx
-  c.ember, c.gold, c.hot, c.glow = ember, gold, hot, glow
-  c.uu, c.rr, c.a, c.W, c.H, c.X0, c.Y0, c.BW, c.BH = uu, rr, a, W, H, X0, Y0, BW, BH
-  c.pulse, c.commit01, c.now = pulse, commit01, now
-
-  for i = 1, 4 do
-    local L = GLOW_EVIL_LAYERS[i]
-    love.graphics.setBlendMode(L.mode)
-    L.fn(c)
+  love.graphics.setBlendMode("alpha")
+  for i = 1, #EVIL_SCRIM do
+    local band = EVIL_SCRIM[i]
+    local thick = uu * (band[2] - band[1])
+    local mid = uu * (band[1] + band[2]) * 0.5
+    love.graphics.setColor(0, 0, 0, band[3] * a)
+    love.graphics.setLineWidth(thick)
+    love.graphics.rectangle("line", X0 - mid, Y0 - mid, BW + mid * 2, BH + mid * 2, rr + mid, rr + mid)
   end
+  set_col(glow, (EVIL_A.wash + EVIL_A.wash_commit * commit01) * a)
+  love.graphics.rectangle("fill", X0, Y0, BW, BH, rr, rr)
+  love.graphics.setBlendMode("add")
+  local pool_h = H * 0.34
+  fill_vfade(X0, Y0 + BH - pool_h, BW, pool_h, ember[1], ember[2], ember[3],
+    (EVIL_A.pool + EVIL_A.pool_commit * commit01) * a)
+  if commit01 > 0 then
+    local bar_h = H * 0.05
+    local br, bg, bb = mix(ember, hot, commit01)
+    love.graphics.setColor(br, bg, bb, EVIL_A.bar_commit * commit01 * a)
+    love.graphics.rectangle("fill", X0, Y0 + BH - bar_h, BW, bar_h)
+  end
+  local by = Y0 + BH - uu * 1.5
+  Prims.ember_bloom(X0 + BW * 0.30, by, uu * 3.5, uu * 0.75, (now * 0.45) % 1, gold, a)
+  Prims.ember_bloom(X0 + BW * 0.72, by, uu * 3.5, uu * 0.75, (now * 0.45 + 0.53) % 1, gold, a)
+  love.graphics.setBlendMode("alpha")
+  local mr = gold[1] + (ember[1] - gold[1]) * pulse * 0.6
+  local mg = gold[2] + (ember[2] - gold[2]) * pulse * 0.6
+  local mb = gold[3] + (ember[3] - gold[3]) * pulse * 0.6
+  love.graphics.setColor(mr, mg, mb,
+    (EVIL_A.border + EVIL_A.border_commit * commit01 + EVIL_A.border_pulse * pulse) * a)
+  love.graphics.setLineWidth(W * 0.030)
+  love.graphics.rectangle("line", X0, Y0, BW, BH)
+  local arm = W * 0.11
+  love.graphics.setColor(gold[1], gold[2], gold[3],
+    (EVIL_A.arms + EVIL_A.arms_commit * commit01 + EVIL_A.arms_pulse * pulse) * a)
+  love.graphics.setLineWidth(W * 0.028)
+  love.graphics.line(X0, Y0 + arm, X0, Y0, X0 + arm, Y0)
+  love.graphics.line(X0 + BW - arm, Y0, X0 + BW, Y0, X0 + BW, Y0 + arm)
+  love.graphics.line(X0, Y0 + BH - arm, X0, Y0 + BH, X0 + arm, Y0 + BH)
+  love.graphics.line(X0 + BW - arm, Y0 + BH, X0 + BW, Y0 + BH, X0 + BW, Y0 + BH - arm)
+  love.graphics.setBlendMode("add")
+  local bsc = 0.72 + 0.28 * commit01
+  local mx = W * 0.5
+  local mw2 = W * 0.065 * bsc
+  local mup = W * 0.18 * bsc * 0.82 * (1 + 0.4 * commit01)
+  local mdn = W * 0.18 * bsc * 0.18
+  set_col(gold, (EVIL_A.mark + EVIL_A.mark_commit * commit01) * a)
+  love.graphics.polygon("fill", mx - mw2, Y0, mx, Y0 - mup, mx + mw2, Y0, mx, Y0 + mdn)
+  set_col(hot, EVIL_A.mark_core_commit * commit01 * a)
+  love.graphics.polygon("fill", mx - mw2 * 0.46, Y0, mx, Y0 - mup * 0.52, mx + mw2 * 0.46, Y0, mx, Y0 + mdn * 0.53)
 
   love.graphics.setBlendMode("alpha")
 end
@@ -956,11 +880,9 @@ end
 local function glow_neuro(pl, a, W, H, X0, Y0, BW, BH, pulse, commit01, now)
   local acc, gc = pl.ACCENT, pl.GLOW
   local sm = 0.5 + 0.5 * math.sin(now * 1.25)
-  local shr = acc[1] + (gc[1] - acc[1]) * sm
-  local shg = acc[2] + (gc[2] - acc[2]) * sm
-  local shb = acc[3] + (gc[3] - acc[3]) * sm
+  local shr, shg, shb = mix(acc, gc, sm)
   local rr = W * 0.06
-  love.graphics.setColor(gc[1], gc[2], gc[3], (0.05 + 0.05 * commit01) * a)
+  set_col(gc, (0.05 + 0.05 * commit01) * a)
   love.graphics.rectangle("fill", X0, Y0, BW, BH, rr, rr)
   fill_vfade(0, H * 0.55, W, H * 0.45, acc[1], acc[2], acc[3], (0.04 + 0.05 * commit01) * a)
   love.graphics.setColor(shr, shg, shb, (0.38 + 0.10 * commit01 + 0.14 * pulse) * a)
@@ -972,23 +894,23 @@ local function glow_neuro(pl, a, W, H, X0, Y0, BW, BH, pulse, commit01, now)
   local mark_a = (0.30 + 0.65 * commit01) * a
   local bx, byy = W * 0.5, Y0
   local bw2 = W * 0.13 * bsc
-  love.graphics.setColor(acc[1], acc[2], acc[3], mark_a)
+  set_col(acc, mark_a)
   love.graphics.polygon("fill", bx, byy, bx - bw2, byy - bw2 * 0.7, bx - bw2, byy + bw2 * 0.7)
   love.graphics.polygon("fill", bx, byy, bx + bw2, byy - bw2 * 0.7, bx + bw2, byy + bw2 * 0.7)
-  love.graphics.setColor(gc[1], gc[2], gc[3], mark_a)
+  set_col(gc, mark_a)
   love.graphics.circle("fill", bx, byy, bw2 * 0.32)
 end
 
 local function glow_hiyori(pl, a, W, H, X0, Y0, BW, BH, pulse)
   local pc, gc = pl.PRIMARY, pl.GLOW
-  love.graphics.setColor(pc[1], pc[2], pc[3], (0.04 + 0.03 * pulse) * a)
+  set_col(pc, (0.04 + 0.03 * pulse) * a)
   love.graphics.rectangle("fill", X0, Y0, BW, BH)
-  love.graphics.setColor(pc[1], pc[2], pc[3], (0.10 + 0.08 * pulse) * a)
+  set_col(pc, (0.10 + 0.08 * pulse) * a)
   love.graphics.rectangle("fill", 0, 0, W, H)
-  love.graphics.setColor(gc[1], gc[2], gc[3], (0.55 + 0.35 * pulse) * a)
+  set_col(gc, (0.55 + 0.35 * pulse) * a)
   love.graphics.setLineWidth(W * 0.03)
   love.graphics.rectangle("line", 0, 0, W, H)
-  love.graphics.setColor(pc[1], pc[2], pc[3], (0.25 + 0.20 * pulse) * a)
+  set_col(pc, (0.25 + 0.20 * pulse) * a)
   love.graphics.setLineWidth(W * 0.045)
   love.graphics.rectangle("line", X0, Y0, BW, BH)
 end
@@ -999,12 +921,10 @@ local GLOW_PAINTERS = {
   hiyori = glow_hiyori,
 }
 
-local GS_MIN, GS_MAX = 0.5, 4
 local EVIL_TEMPO_MIN, EVIL_TEMPO_MAX = 0.75, 2.0
 
 local function evil_tempo()
   local gs = tonumber(G and G.SETTINGS and G.SETTINGS.GAMESPEED) or 1
-  if gs < GS_MIN then gs = GS_MIN elseif gs > GS_MAX then gs = GS_MAX end
   if gs < EVIL_TEMPO_MIN then return EVIL_TEMPO_MIN end
   if gs > EVIL_TEMPO_MAX then return EVIL_TEMPO_MAX end
   return gs
@@ -1090,7 +1010,7 @@ local function hook_card_draw()
   end
   if not Card or not Card.draw then return end
   if Card.draw == _installed_card_draw then
-    -- The wrapper is still installed; re-wrapping would stack another xpcall layer per card draw.
+    -- The wrapper is already installed; wrapping again would add an `xpcall` layer on every card draw.
     S.neuro_card_draw_hooked = true
     return
   end
@@ -1103,8 +1023,7 @@ local function hook_card_draw()
   Card.draw = function(self, layer)
     local draw_ok, draw_err = xpcall(_orig_card_draw, debug.traceback, self, layer)
     if not draw_ok then
-      local drain = G and G.NEURO and G.NEURO.drain_gfx_leak
-      if type(drain) == "function" then pcall(drain) end
+      pcall(GfxGuard.drain)
       local msg = tostring(draw_err)
       if msg ~= _last_draw_err then
         _last_draw_err = msg
@@ -1159,11 +1078,7 @@ local function hook_card_draw()
     if _gc.pushed then pcall(love.graphics.pop) end
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.setLineWidth(1)
-    if prev_blend_alpha then
-      love.graphics.setBlendMode(prev_blend or "alpha", prev_blend_alpha)
-    else
-      love.graphics.setBlendMode(prev_blend or "alpha")
-    end
+    love.graphics.setBlendMode(prev_blend or "alpha", prev_blend_alpha)
     love.graphics.setShader(prev_shader)
     if not _glow_ok then
       local gmsg = tostring(_glow_err)
@@ -1183,13 +1098,12 @@ local function card_sprite(card)
   return ak, pos
 end
 
-local MINI_SETS = { Default = true, Enhanced = true, Back = true }
 
 local function art_prefers_mini(card)
   local cfg = card and card.config
   if cfg and cfg.card and (cfg.card.pos or cfg.card.suit) then return true end
   local center = cfg and cfg.center
-  return (center and MINI_SETS[center.set]) or false
+  return (center and CENTERS_SETS[center.set]) or false
 end
 
 local function draw_sprite_shaded(ak, pos, x, y, scale_x, scale_y, a, dissolve, burn1, burn2, hovering)
@@ -1212,53 +1126,22 @@ Cards.card_display_name = card_display_name
 Cards.card_description = Utils.card_description
 Cards.draw_card_mini = draw_card_mini
 Cards.draw_mini_fallback = draw_mini_fallback
--- Only the explicit teardowns free quads: the overflow flush in cached_quad can fire while a
--- caller still holds a quad from earlier in the same frame.
-function Cards.release_quad_cache(t, depth)
-  depth = depth or QUAD_CACHE_DEPTH
+function Cards.release_quad_cache(t)
   if type(t) ~= "table" then return end
-  if depth == 0 then
-    local q = t.quad
-    if q and q.release then pcall(q.release, q) end
-    return
+  for _, by_prefix in pairs(t) do
+    for _, by_cell in pairs(by_prefix) do
+      for _, rec in pairs(by_cell) do
+        local q = rec.quad
+        if q and q.release then pcall(q.release, q) end
+      end
+    end
   end
-  for _, sub in pairs(t) do Cards.release_quad_cache(sub, depth - 1) end
-end
-
-function Cards.clear_quad_cache()
-  Cards.release_quad_cache(S.quad_cache)
-  S.quad_cache = {}
-  S.quad_cache_n = 0
-end
-function Cards.reset_mini_counters()
-  Cards.clear_quad_cache()
-  Cards._mini_edition_fail = 0
-  Cards._mini_edition_skip = 0
-  Cards._mini_fallback = 0
-  Cards._badge_icon_missing = 0
-  Cards._mini_sticker_fail = 0
-  Cards._mini_quad_fail = 0
-  Cards._mini_shader_fail = 0
-  Cards._mini_mesh_fail = 0
-  Cards._pack_mini_fail = 0
 end
 Cards.rarity_color = rarity_color
-Cards.icon_crop = ICON_CROP
-Cards.seal_pos = SEAL_POS
-Cards.sticker_pos = STICKER_POS
-Cards.seal_glyphs = SEAL_GLYPH
-Cards.seal_dot_colors = SEAL_DOT_COLORS
 Cards.hook_card_draw = hook_card_draw
-Cards.glow_painters = GLOW_PAINTERS
 if _G.NEURO_TEST then
   Cards.glow_step = glow_step
   Cards.glow_window_valid = glow_window_valid
-  Cards.glow_alpha = glow_alpha
-  Cards.run_glow = run_glow
-  Cards.shop_attack01 = shop_attack01
 end
-Cards.shop_attack_gain = SHOP_ATTACK_GAIN
-Cards.evil_alphas = EVIL_A
-Cards.evil_scrim = EVIL_SCRIM
 
 return Cards
