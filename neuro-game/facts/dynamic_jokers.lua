@@ -132,16 +132,35 @@ function M.read_from(card, from, board)
   return tonumber(ability[from])
 end
 
-function M.copy_target(card, kind)
+local function copy_source(card, kind)
   local cards = G and G.jokers and G.jokers.cards
-  if type(cards) ~= "table" then return nil, false end
+  if type(cards) ~= "table" then return nil end
   local target
   if kind == "brainstorm" then
     target = cards[1]
   else
     for i = 1, #cards do if cards[i] == card then target = cards[i + 1] end end
   end
-  if type(target) ~= "table" or target == card or target.debuff then return nil, false end
+  if type(target) ~= "table" or target == card then return nil end
+  return target
+end
+
+-- Mirrors the engine's compatible/incompatible label (Card:update), which reads blueprint_compat whatever the facing.
+function M.copy_now(card, kind)
+  if card.debuff then return { status = "debuffed_self" } end
+  local target = copy_source(card, kind)
+  if not target then return { status = "none" } end
+  local center = target.config and target.config.center
+  local compatible = type(center) == "table" and center.blueprint_compat and true or false
+  if not PublicCard.is_public(target) then return { status = compatible and "hidden" or "hidden_incompatible" } end
+  if not compatible then return { status = "incompatible", target = target } end
+  if target.debuff then return { status = "debuffed", target = target } end
+  return { status = "copying", target = target }
+end
+
+function M.copy_target(card, kind)
+  local target = copy_source(card, kind)
+  if not target or target.debuff then return nil, false end
   if not PublicCard.is_public(target) then return nil, true end
   local center = target.config and target.config.center
   if not (type(center) == "table" and center.blueprint_compat) then return nil, false end

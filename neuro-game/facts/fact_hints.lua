@@ -81,32 +81,6 @@ local function flush_pending()
   return accepted
 end
 
-local function chain_visible(card, target)
-  if CardUtil.is_hidden(card) then return false end
-  return not (target and CardUtil.is_hidden(target))
-end
-
-function M.copy_chain()
-  if not (G and G.jokers and G.jokers.cards) then return nil end
-  local cards = G.jokers.cards
-  local chain_parts = {}
-  for i, card in ipairs(cards) do
-    local kind = CardUtil.copy_joker_kind(card)
-    if kind then
-      local target = (kind == "brainstorm") and cards[1] or cards[i + 1]
-      if target == card then target = nil end
-      if chain_visible(card, target) then
-        local nm = Utils.safe_name_or(card)
-        local target_nm = target and Utils.safe_name_or(target) or "none"
-        local where = (kind == "brainstorm") and "the leftmost joker" or "the joker to its right"
-        chain_parts[#chain_parts + 1] = string.format("%s (slot %d) copies %s (%s)", nm, i, where, target_nm)
-      end
-    end
-  end
-  if #chain_parts == 0 then return nil end
-  return table.concat(chain_parts, "; ")
-end
-
 function M.voucher_chains()
   local chains = {}
   for key, up in pairs(G and G.P_CENTERS or {}) do

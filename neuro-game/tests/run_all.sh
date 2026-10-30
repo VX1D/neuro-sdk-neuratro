@@ -335,6 +335,7 @@ run desc_line_joins "$LUAJIT" tests/test_description_line_joins.lua
 run item_fuzz     "$LUAJIT" tests/test_item_context_fuzz.lua
 run joker_text_once "$LUAJIT" tests/test_joker_text_once.lua
 run joker_order_f "$LUAJIT" tests/test_joker_order_fact.lua
+run copy_noop_rec  "$LUAJIT" tests/test_copy_target_and_noop_records.lua
 run hint_channel  "$LUAJIT" tests/test_hint_channel.lua
 run once_scope    "$LUAJIT" tests/test_once_scope.lua
 run offer_stickers "$LUAJIT" tests/test_offer_stickers_emitted.lua
