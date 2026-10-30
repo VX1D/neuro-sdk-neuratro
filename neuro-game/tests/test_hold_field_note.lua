@@ -56,4 +56,13 @@ do
     has(r.message, "Not saved: plan.hand_plan is not a plan field of this move"), tostring(r.message))
 end
 
+do
+  LB.load("SELECTING_HAND", "Normal: 5 cards, 4 hands, 3 discards")
+  FP.build("SELECTING_HAND")
+  G.NEURO.gates = nil
+  local r = send("discard_hand", { indices = { 99 }, boss_plan = "Lead with the pair" })
+  check("a refusal also carries the misplaced-field hint, so the retry can fix both",
+    r.ok == false and has(r.message, "send it as plan.boss_plan."), tostring(r.code) .. " " .. tostring(r.message))
+end
+
 done()

@@ -283,6 +283,7 @@ local function refuse(bridge, id, name, rejection, forced)
   end
   local success = ActionResult.terminal(code, forced)
   local message = with_remedy(code, rejection.message)
+  if rejection.note then message = message .. " " .. rejection.note end
   if code == "CONFIRMATION_REQUIRED" then
     message = Gate.result_message(rejection)
   elseif success and rejection.reasked then
@@ -422,8 +423,7 @@ local function offered(name, state_name)
   return unmodelled(state_name) and UNMODELLED_OFFER[name] == true and Actions.is_action_valid(name)
 end
 
-local function note_hold(rejection, ...)
-  if rejection.reason_code ~= "CONFIRMATION_REQUIRED" then return rejection end
+local function with_notes(rejection, ...)
   local parts = {}
   for i = 1, select("#", ...) do
     local note = select(i, ...)
@@ -436,7 +436,7 @@ end
 local function refuse_preflight(bridge, id, name, rejection, forced, tx, weak_fired, field_note)
   local proposal = rejection.proposal ~= nil and rejection.reason_code == "CONFIRMATION_REQUIRED"
   if name ~= "resolve_play" and not proposal then PlanTransaction.hold(tx) end
-  if refuse(bridge, id, name, note_hold(rejection, type(tx) == "table" and tx.ignored_note or nil, field_note),
+  if refuse(bridge, id, name, with_notes(rejection, type(tx) == "table" and tx.ignored_note or nil, field_note),
       forced) == false then
     if G and G.NEURO then G.NEURO.weak_fired_serial = weak_fired end
     return nil
@@ -487,7 +487,7 @@ local function parameters(msg, bridge, name)
   end
   local ok_schema, schema_err = SchemaValidate.validate_value(schema, data, "parameters")
   if not ok_schema then
-    return nil, ActionResult.error("SCHEMA_INVALID", "Invalid action parameters: " .. schema_err)
+    return nil, ActionResult.error("SCHEMA_INVALID", "Invalid action parameters: " .. schema_err), data
   end
   local stale = stale_hand_binding(name, data)
   if stale then return nil, ActionResult.error("STALE_TARGET", stale), data end
@@ -589,22 +589,22 @@ function M.validate(msg, bridge)
     refuse(bridge, id, name, unavailable(name, state_name), forced)
     return nil
   end
-  local data, bad = parameters(msg, bridge, name)
+  local data, bad, decoded = parameters(msg, bridge, name)
   if not data then
-    refuse(bridge, id, name, bad, forced)
+    refuse(bridge, id, name, with_notes(bad, type(decoded) == "table" and unknown_fields_note(name, decoded) or nil), forced)
     return nil
   end
   local field_note = unknown_fields_note(name, data)
   local rejection, streak = admission(name, data, forced, state_name)
   if rejection then
-    refuse(bridge, id, name, note_hold(rejection, PlanTransaction.ignored_note(name, data), field_note), forced)
+    refuse(bridge, id, name, with_notes(rejection, PlanTransaction.ignored_note(name, data), field_note), forced)
     return nil
   end
 
   data._action_id = id
   local tx, tx_err = PlanTransaction.prepare(name, data)
   if tx_err then
-    refuse(bridge, id, name, note_hold(plan_refusal(name, data, tx_err), field_note), forced)
+    refuse(bridge, id, name, with_notes(plan_refusal(name, data, tx_err), field_note), forced)
     return nil
   end
   local weak_fired = G and G.NEURO and G.NEURO.weak_fired_serial
