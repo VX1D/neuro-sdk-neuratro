@@ -25,8 +25,8 @@ b.run_generation = 1
 b:send_startup()
 b._bridge_init_complete = true
 local Orch = require("core.orchestrator")
-local registered = require("core.window").register_catalogue()
-check("setup: the hand catalogue registers play_hand",
+local registered = require("core.window").register_catalogue({ "play_hand" })
+check("setup: the offer registers play_hand",
   registered == true and b._registered_sigs.play_hand ~= nil)
 
 local withdrawal = b:withdraw_actions({ "play_hand" })

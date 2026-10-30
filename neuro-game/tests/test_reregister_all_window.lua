@@ -143,6 +143,7 @@ do
   local b = bridge()
   Dispatcher.route_message(from_bridge(1), b)
   arm_and_send()
+  G.jokers.cards = { { ability = { set = "Joker" } }, { ability = { set = "Joker" } } }
   b.register_actions = function() return false end
   Dispatcher.route_message(from_bridge(2), b)
   local ended = G.NEURO.force_window

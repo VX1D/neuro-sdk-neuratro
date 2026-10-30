@@ -732,26 +732,69 @@ do
 end
 
 do
-  local Catalogue = Actions.catalogue_signature
-  check("the catalogue exposes its signature for this check", type(Catalogue) == "function")
-  local before = Catalogue()
-  local moved = {}
-  local function mutate(label, fn)
-    fn()
-    if Catalogue() ~= before then moved[#moved + 1] = label end
+  local LB = require("tests.fixtures.live_board")
+  local Window = require("core.window")
+  local TmpWork = require("tests.tmp_workdir")
+  local dir = TmpWork.open("sdk_compliance_churn")
+  os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "'")
+  LB.load("SHOP", "Normal: affordable joker, affordable booster, $10")
+  local b = Bridge:new({ enabled = true, fs_dir = dir })
+  for key, value in pairs(G.NEURO) do b[key] = value end
+  G.NEURO = b
+  b:send_startup()
+  b._bridge_init_complete = true
+  local seen = 0
+  local function refresh(step)
+    if step then step() end
+    local frames = require("tests.helpers").outbox_frames(dir .. "/neuro_outbox.jsonl")
+    local registered, unregistered, sent = {}, {}, 0
+    for i = seen + 1, #frames do
+      local d = frames[i].data or {}
+      if frames[i].command == "actions/register" then
+        sent = sent + 1
+        for _, a in ipairs(d.actions or {}) do registered[a.name] = true end
+      elseif frames[i].command == "actions/unregister" then
+        sent = sent + 1
+        for _, name in ipairs(d.action_names or {}) do unregistered[name] = true end
+      end
+    end
+    seen = #frames
+    return sent, registered, unregistered
   end
-  local function card(name)
-    return { ability = { name = name, set = "Joker" }, sort_id = 1,
-      config = { center = { key = "j_" .. name, set = "Joker" } } }
+  local function both(registered, unregistered)
+    for name in pairs(registered) do if unregistered[name] then return name end end
+    return nil
   end
-  mutate("a card in hand", function() G.hand = { cards = { card("ten"), card("jack") } } end)
-  mutate("a joker bought", function() G.jokers = { cards = { card("blueprint") } } end)
-  local EngineCards = require("tests.engine_cards")
-  mutate("a consumable held", function() G.consumeables = { cards = { EngineCards.consumable("c_hermit") } } end)
-  mutate("shop stock", function() G.shop_jokers = { cards = { card("mime") } } end)
-  mutate("a pack opened", function() G.pack_cards = { cards = { EngineCards.consumable("c_fool") } } end)
-  check("volatile board content does not churn the registered catalogue (BEST_PRACTICES.md:16)",
-    #moved == 0, table.concat(moved, ", "))
+  G.consumeables.cards = {}
+  refresh(Window.register_catalogue)
+  check("setup: the shop registers buying", b._registered_sigs.buy_from_shop ~= nil)
+  local sent = refresh(Window.register_catalogue)
+  check("an unchanged board sends no catalogue frame (BEST_PRACTICES.md:16)", sent == 0, tostring(sent))
+  G.GAME.dollars = G.GAME.dollars + 1
+  G.jokers.cards[#G.jokers.cards + 1] = G.jokers.cards[1]
+  sent = refresh(Window.register_catalogue)
+  check("board content that flips no move's usability sends nothing", sent == 0, tostring(sent))
+  local dollars = G.GAME.dollars
+  G.GAME.dollars = 0
+  sent = refresh()
+  check("a board change between windows sends no catalogue frame (BEST_PRACTICES.md:16)", sent == 0, tostring(sent))
+  local _, registered, unregistered = refresh(Window.register_catalogue)
+  check("the next window build unregisters buying once broke, and nothing is unregistered and re-registered in one refresh",
+    unregistered.buy_from_shop and b._registered_sigs.buy_from_shop == nil and both(registered, unregistered) == nil,
+    tostring(both(registered, unregistered)))
+  G.GAME.dollars = dollars
+  _, registered, unregistered = refresh(Window.register_catalogue)
+  check("money back registers buying again at the next window build (README.md:35)",
+    registered.buy_from_shop and b._registered_sigs.buy_from_shop ~= nil and both(registered, unregistered) == nil)
+  sent = refresh(Window.register_catalogue)
+  check("and the next refresh of the same board is silent", sent == 0, tostring(sent))
+  local hermit = require("tests.engine_cards").consumable("c_hermit", { sort_id = 9911, cost = 3, sell_cost = 1 })
+  hermit.area = G.consumeables
+  G.consumeables.cards = { hermit }
+  sent = refresh()
+  _, registered = refresh(Window.register_catalogue)
+  check("a consumable arriving registers its use at the next window build, not before",
+    sent == 0 and registered.use_consumable and b._registered_sigs.use_consumable ~= nil)
 end
 
 do

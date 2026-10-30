@@ -73,6 +73,10 @@ function M.terminal(code, forced)
 end
 
 local UNRECOGNISED = { ACTION_UNKNOWN = true, ACTION_UNREGISTERED = true }
+function M.is_wait(value)
+  return M.is_error(value) and M.CODES[value.reason_code] == WAIT
+end
+
 function M.unrecognised(code)
   return UNRECOGNISED[code] == true
 end

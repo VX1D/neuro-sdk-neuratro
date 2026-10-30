@@ -13,16 +13,18 @@ local CAN = {
   ["use a consumable"] = { names = { "use_consumable", "use_directional_consumable" } },
 }
 
-local function offered_set(payload)
+local function offered_set(payload, state)
   local set = {}
   for _, a in ipairs(payload.actions or {}) do
     set[type(a) == "table" and (a.name or a[1]) or a] = true
   end
+  local force = require("force.force_router").get_force_for_state(state) or {}
+  for _, name in ipairs(force.tools or {}) do set[name] = true end
   return set
 end
 
-local function check_frame(key, payload)
-  local offered, lines = offered_set(payload), 0
+local function check_frame(key, payload, state)
+  local offered, lines = offered_set(payload, state), 0
   for label, verdict in payload.state:gmatch("Can ([%a ]-): (%a+)") do
     lines = lines + 1
     local spec = CAN[label]
@@ -41,7 +43,7 @@ local total = 0
 for _, board in ipairs(ALL_BOARDS) do
   LB.load(board.state, board.desc)
   local payload = FP.build(board.state)
-  if payload then total = total + check_frame(board.state .. "/" .. board.desc, payload) end
+  if payload then total = total + check_frame(board.state .. "/" .. board.desc, payload, board.state) end
 end
 check("the boards carry Can-lines at all", total >= 10, total)
 
@@ -51,8 +53,8 @@ for _, area in ipairs({ G.shop_booster, G.shop_vouchers }) do
   for _, c in ipairs((area and area.cards) or {}) do c.cost = 5 end
 end
 local payload = FP.build("SHOP")
-check("withdrawn reroll: reroll_shop is not offered", not offered_set(payload).reroll_shop)
-check_frame("SHOP/withdrawn reroll", payload)
+check("withdrawn reroll: reroll_shop is not offered", not offered_set(payload, "SHOP").reroll_shop)
+check_frame("SHOP/withdrawn reroll", payload, "SHOP")
 check("withdrawn reroll: the state says no and why",
   payload.state:find("Can reroll: no", 1, true) ~= nil, payload.state)
 

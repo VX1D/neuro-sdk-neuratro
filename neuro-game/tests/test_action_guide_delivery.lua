@@ -72,7 +72,7 @@ do
   Lifecycle.reconnect_context_delivery()
   shop_board()
   H.tick(8)
-  local shop_force = first_index(forces_action("buy_from_shop"), mark + 1)
+  local shop_force = first_index(forces_action("leave_shop"), mark + 1)
   check("after a reconnect the shop force is offered", shop_force ~= nil, tostring(shop_force))
   check("after a reconnect the guide is still known and not re-sent", Delivery.essential_ready()
     and first_index(is_guide, mark + 1) == nil, tostring(first_index(is_guide, mark + 1)))
@@ -93,9 +93,6 @@ do
   shop_board()
   H.tick(8)
   local guide = first_index(is_guide)
-  local force = first_index(forces_action("buy_from_shop"))
-  check("SHOP: the guide is written before the first force offering buy_from_shop",
-    guide and force and guide < force, tostring(guide) .. " < " .. tostring(force))
   local leave_force = first_index(forces_action("leave_shop"))
   check("SHOP: the guide with the leaving rules is written before the first force offering leave_shop",
     guide and leave_force and guide < leave_force, tostring(guide) .. " < " .. tostring(leave_force))

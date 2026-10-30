@@ -68,11 +68,9 @@ end
 
 function M.menu_action_tree_query(offered)
   offered = offered or {}
-  local parts = {
-    "open run setup, where the run is started",
-    "select a deck to switch the deck",
-    "select a stake to switch the stake",
-  }
+  local parts = { "open run setup, where the run is started" }
+  if offered.select_deck then parts[#parts + 1] = "select a deck to switch the deck" end
+  if offered.select_stake then parts[#parts + 1] = "select a stake to switch the stake" end
   if Actions.is_action_valid("copy_seed") then
     parts[#parts + 1] = "copy the current seed"
   end

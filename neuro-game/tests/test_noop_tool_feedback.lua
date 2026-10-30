@@ -129,8 +129,8 @@ do
   G.GAME.pseudorandom = nil
   FP.build("MENU")
   local offer = table.concat((Window.current() or { names = {} }).names, ",")
-  check("replay: the MENU force offers what the live one did",
-    offer == "open_run_setup,select_deck,select_stake", offer)
+  check("replay: the MENU force omits the stake choice that has no alternative",
+    offer == "open_run_setup,select_deck", offer)
   local LOOP = { "d", "s", "s", "s", "s", "d", "s", "s", "s", "s", "s", "s", "s", "d", "d", "s", "s", "s", "s", "d", "d" }
   G.NEURO.recent_actions = {}
   local answered_early, narrowed = {}, {}

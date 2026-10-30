@@ -26,6 +26,14 @@ function M.is_unlock_popup()
   return type(back) == "table" and type(back.config) == "table" and back.config.button == "continue_unlock"
 end
 
+-- Escape closes any overlay but a no_esc one (engine/controller.lua:801); of those only the win screen has a close button, Endless (UI_definitions.lua:2987).
+function M.is_closable_overlay()
+  local om = G and G.OVERLAY_MENU
+  if type(om) ~= "table" then return false end
+  if not (type(om.config) == "table" and om.config.no_esc) then return true end
+  return type(om.get_UIE_by_ID) == "function" and om:get_UIE_by_ID("you_win_UI") ~= nil
+end
+
 function M.is_progression_overlay()
   local om = G and G.OVERLAY_MENU
   if not (om and type(om.get_UIE_by_ID) == "function") then return false end

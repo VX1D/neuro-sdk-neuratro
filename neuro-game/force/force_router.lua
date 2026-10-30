@@ -243,6 +243,8 @@ offer = function(state_name, force)
     clear_defer("_guard_defer")
   end
 
+  -- A force lists every action usable in its window, named by its builder or not (action_window.gd _send_force).
+  absorb_fallback(true)
   if #filtered == 0 then return nil end
   local offered, accepted, settling, listed = {}, {}, {}, {}
   for _, name in ipairs(guard_pruned) do

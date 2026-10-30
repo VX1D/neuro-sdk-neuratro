@@ -57,7 +57,7 @@ do
   base("BLIND_SELECT")
   local full = signature("BLIND_SELECT")
   check("fixture reproduces the live BLIND_SELECT force, its tools offered after the decision (force_router.offer)",
-    full == "select_blind,sell_card,record_plan", tostring(full))
+    full == "select_blind,sell_card,record_plan,record_joker_roles", tostring(full))
 
   Guard.note_applied("select_blind")
   Router._guard_defer_at = nil
@@ -147,7 +147,7 @@ do
   base("SMODS_BOOSTER_OPENED")
   G.pack_cards = { cards = { tarot() }, config = {} }
   local full = signature("SMODS_BOOSTER_OPENED")
-  check("fixture builds a pack force", full == "choose_pack_card,skip_pack", tostring(full))
+  check("fixture builds a pack force", full == "choose_pack_card,skip_pack,sell_card", tostring(full))
 
   G.GAME.STOP_USE = 3
   check("a pack whose every action is settling defers", signature("SMODS_BOOSTER_OPENED") == nil)
@@ -186,14 +186,14 @@ end
 
 do
   base("ROUND_EVAL")
-  check("fixture builds a round-eval force", signature("ROUND_EVAL") == "cash_out")
+  check("fixture builds a round-eval force listing every usable action", signature("ROUND_EVAL") == "cash_out,record_plan")
   Guard.note_applied("cash_out")
   Router._guard_defer_at = nil
   Router._guard_defer_state = nil
   check("a latched cash_out defers rather than emitting an empty round-eval force",
     signature("ROUND_EVAL") == nil)
   G.TIMERS.REAL = 1000 + 1.2
-  check("cash_out comes back when its latch expires", signature("ROUND_EVAL") == "cash_out")
+  check("cash_out comes back when its latch expires", signature("ROUND_EVAL") == "cash_out,record_plan")
 end
 
 do

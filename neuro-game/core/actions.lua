@@ -6,6 +6,7 @@ local Limits = require("core.plan_limits")
 local GameFacts = require("facts.game_facts")
 local Utils = require("util.utils")
 local CardUtil = require("facts.card_util")
+local ActionResult = require("core.action_result")
 
 local function unlocked_deck_keys()
   local pool = G and G.P_CENTER_POOLS and G.P_CENTER_POOLS.Back
@@ -348,25 +349,18 @@ local STATE_ACTIONS = {
     "choose_persona",
     "open_run_setup",
     "select_deck",
-    "toggle_seeded_run",
-    "paste_seed",
-    "start_run",
   },
   MENU = {
     "choose_persona",
     "open_run_setup",
-    "toggle_seeded_run",
     "copy_seed",
-    "paste_seed",
     "select_stake",
     "select_deck",
-    "start_run",
     "select_challenge",
     "start_challenge_run",
   },
   RUN_SETUP = {
     "choose_persona",
-    "open_run_setup",
     "start_run",
     "toggle_seeded_run",
     "copy_seed",
@@ -377,11 +371,8 @@ local STATE_ACTIONS = {
   GAME_OVER = {
     "choose_persona",
     "open_run_setup",
-    "toggle_seeded_run",
     "copy_seed",
-    "paste_seed",
     "select_deck",
-    "start_run",
   },
   BLIND_SELECT = {
     "select_blind",
@@ -454,6 +445,13 @@ function Actions.get_action_names_for_state(state_name)
   return (state_action_names(state_name))
 end
 
+-- A screen is a state with its own action set; transitional states and screen wipes have none.
+function Actions.screen_action_set(state_name)
+  if G and G.screenwipe then return nil end
+  if not (STATE_ACTIONS[state_name] or StateKinds.is_pack_state(state_name)) then return nil end
+  return Actions.get_state_action_set(state_name)
+end
+
 function Actions.get_known_states()
   local states = {}
   for state_name in pairs(STATE_ACTIONS) do states[#states + 1] = state_name end
@@ -463,6 +461,14 @@ end
 
 local VALIDATORS = {}
 local CHOOSE_OFFERED = "; choose one of the actions offered now."
+
+-- A gate replaces the validator where registration must lead usability: a review is answerable once it opens.
+local REGISTRATION_GATES = {
+  resolve_play = function()
+    local Gate = Utils.lazy_require("core.gate")
+    return confirm_hand_on() and Gate ~= nil and Gate.proposal() ~= nil
+  end,
+}
 
 VALIDATORS.choose_persona = function()
   if G and G.NEURO and G.NEURO.persona and G.NEURO.persona ~= "hiyori" then
@@ -607,8 +613,20 @@ VALIDATORS.skip_blind = function()
 end
 
 VALIDATORS.exit_overlay_menu = function()
-  if not (G and G.OVERLAY_MENU) then
-    return false, "No overlay menu is open, so there is nothing to close. Choose one of the actions offered for this screen."
+  if not StateKinds.is_closable_overlay() then
+    return false, "No overlay menu that can be closed is open. Choose one of the actions offered for this screen."
+  end
+end
+
+VALIDATORS.select_deck = function()
+  if #require("facts.deck_facts").list_selectable_backs() == 1 then
+    return false, "Only one deck is unlocked, so there is no other deck to select" .. CHOOSE_OFFERED
+  end
+end
+
+VALIDATORS.select_stake = function()
+  if #require("facts.deck_facts").selectable_stakes() == 1 then
+    return false, "Only one stake is unlocked for this deck, so there is no other stake to select" .. CHOOSE_OFFERED
   end
 end
 
@@ -667,11 +685,16 @@ local function available_on_screen(action_name)
 end
 
 local function blocking_overlay_actions(state_name)
-  if not available_on_screen("exit_overlay_menu") then return nil end
+  if not (G and G.OVERLAY_MENU) then return nil end
   local unlock_popup = StateKinds.is_unlock_popup()
   if not unlock_popup
       and (state_name == "RUN_SETUP" or StateKinds.is_progression_overlay()) then
     return nil
+  end
+  if not available_on_screen("exit_overlay_menu") then
+    -- A modal she cannot close leaves no in-run move beneath it; on a menu screen its buttons are the screen's moves.
+    if StateKinds.is_menu_state(state_name) then return nil end
+    return {}
   end
   local out = { "exit_overlay_menu" }
   if not unlock_popup and (state_name == "MENU" or state_name == "SPLASH")
@@ -680,6 +703,8 @@ local function blocking_overlay_actions(state_name)
   end
   return out
 end
+
+Actions.overlay_actions = blocking_overlay_actions
 
 Actions.OVERLAY_FACT = "A popup or menu is open over the game, so nothing was applied."
 Actions.OVERLAY_RETRY = "Close the overlay, then choose again."
@@ -698,6 +723,17 @@ end
 function Actions.is_action_valid(action_name)
   if Actions.overlay_block_reason(action_name) then return false end
   return available_on_screen(action_name)
+end
+
+-- Registered only while usable at window build, like an SDK ActionWindow (README.md:35); nil while it waits on the game keeps the current registration.
+function Actions.registrable(name)
+  if Actions.overlay_block_reason(name) or proposal_blocks(name) then return false end
+  local gate = REGISTRATION_GATES[name]
+  if gate then return gate() == true end
+  local usable, reason = ActionRegistry.availability(name)
+  if usable then return true end
+  if ActionResult.is_wait(reason) then return nil end
+  return false
 end
 
 function Actions.unavailable_reason(action_name)

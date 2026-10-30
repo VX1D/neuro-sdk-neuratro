@@ -145,30 +145,60 @@ local function catalogue_complete(bridge, definitions)
   return true
 end
 
+-- Transitional states keep the last screen's set, so a play or a cash-out churns nothing mid-animation.
+local function screen_of(bridge)
+  local screen = Actions.screen_action_set(require("core.state").get_state_name())
+  if screen then bridge._catalogue_screen = screen end
+  return bridge._catalogue_screen, screen == nil
+end
+
+-- Undecidable names keep the set last wanted, which survives startup so a reconnect re-registers it at once.
+local function wanted(bridge, screen, transitional, offer, name)
+  if offer[name] then return true end
+  if screen ~= nil and not screen[name] then return false end
+  local usable
+  if not (transitional and screen ~= nil) then usable = Actions.registrable(name) end
+  if usable == nil then return (bridge._catalogue_wanted or {})[name] == true end
+  return usable
+end
+
 function M.register_catalogue(offered)
   local bridge = neuro()
   if not bridge then return false end
   local ok, delivered = pcall(function()
     Actions.get_static_actions()
-    local definitions = ActionRegistry.definitions()
+    local screen, transitional = screen_of(bridge)
+    -- Answered decisions stay off only on the screen they were answered on (README.md:23-25).
+    if bridge._held_screen ~= screen then bridge._withdrawn_held, bridge._held_screen = nil, screen end
     local held = bridge._withdrawn_held
-    local offer = offered and Utils.list_to_set(offered) or {}
-    if type(held) == "table" and next(held) then
-      local kept = {}
-      for _, definition in ipairs(definitions) do
-        if not held[definition.name] or offer[definition.name] then kept[#kept + 1] = definition end
-      end
-      definitions = kept
+    local open = M.current()
+    local offer = Utils.list_to_set(offered or (open and open.names) or {})
+    local definitions, want, names = {}, {}, {}
+    for _, definition in ipairs(ActionRegistry.definitions()) do
+      local name = definition.name
+      want[name] = wanted(bridge, screen, transitional, offer, name)
+      local released = not (type(held) == "table" and held[name]) or offer[name]
+      if want[name] then names[#names + 1] = name end
+      if want[name] and released then definitions[#definitions + 1] = definition end
     end
+    bridge._catalogue_wanted = want
     local key = registration_key(bridge)
-    local signature = Actions.catalogue_signature()
+    local signature = Actions.catalogue_signature() .. "/" .. table.concat(names, ",")
     if bridge._static_actions_registration_key == key and bridge._static_actions_catalogue_sig == signature
-        and catalogue_complete(bridge, definitions) then
+        and bridge._static_actions_screen == screen and catalogue_complete(bridge, definitions) then
       return true
     end
-    local result = bridge:register_actions(definitions)
+    local result = #definitions == 0 or bridge:register_actions(definitions)
+    if result ~= false and type(bridge.retire_actions) == "function" then
+      local stale = {}
+      for name in pairs(bridge._registered_sigs or {}) do
+        if not want[name] then stale[#stale + 1] = name end
+      end
+      if #stale > 0 then result = bridge:retire_actions(stale) end
+    end
     if result ~= false then
       bridge._static_actions_registration_key, bridge._static_actions_catalogue_sig = key, signature
+      bridge._static_actions_screen = screen
       if type(held) == "table" then
         for name in pairs(offer) do held[name] = nil end
       end

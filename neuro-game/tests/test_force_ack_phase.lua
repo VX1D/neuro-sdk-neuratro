@@ -344,9 +344,9 @@ do
   tick_for(20)
   check("F: a state change sends no withdrawal for a force success=true already resolved",
     stale_window.phase == Window.ENDED and #withdrawals == 0, tostring(#withdrawals))
-  check("F: the canonical catalogue is additive across the state change",
-    #registered == registered_before and #unregistered == 0
-      and G.NEURO._registered_sigs.play_hand ~= nil,
+  check("F: the catalogue follows the screen: the hand's moves leave, the shop's arrive",
+    #registered > registered_before and G.NEURO._registered_sigs.play_hand == nil
+      and G.NEURO._registered_sigs.leave_shop ~= nil,
     tostring(#registered) .. "/" .. tostring(#unregistered))
   check("F: the SHOP successor is offered",
     #forces == 2 and forces[2].state == "SHOP" and phase() == Window.FORCED,
@@ -524,9 +524,9 @@ do
   check("a state change withdraws the already-sent force by unregistering its names (README.md:27)",
     stale_window.phase == Window.ENDED and stale_window.ended_by == "state_changed" and #withdrawals == 1,
     tostring(stale_window.phase) .. "/" .. tostring(stale_window.ended_by) .. "/" .. #withdrawals)
-  check("the stable catalogue keeps the SHOP names without omission withdrawal",
-    #registered == registered_before and #unregistered == 0
-      and G.NEURO._registered_sigs.buy_from_shop ~= nil,
+  check("the catalogue follows the screen: the shop's moves leave, blind select's arrive",
+    #registered > registered_before and G.NEURO._registered_sigs.buy_from_shop == nil
+      and G.NEURO._registered_sigs.select_blind ~= nil,
     tostring(#registered) .. "/" .. tostring(#unregistered))
   check("the BLIND_SELECT successor is offered",
     #forces == 2 and forces[2].state == "BLIND_SELECT" and phase() == Window.FORCED,

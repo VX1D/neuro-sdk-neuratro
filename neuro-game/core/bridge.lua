@@ -642,7 +642,7 @@ function Bridge:register_actions(actions)
   return true
 end
 
-function Bridge:withdraw_actions(action_names)
+local function unregister(self, action_names, hold)
   local seen, names = {}, {}
   for _, name in ipairs(action_names or {}) do
     if type(name) == "string" and name ~= "" and not seen[name] then
@@ -662,13 +662,16 @@ function Bridge:withdraw_actions(action_names)
   local held = self._withdrawn_held or {}
   for _, name in ipairs(names) do
     self._registered_sigs[name] = nil
-    held[name] = true
+    if hold then held[name] = true end
   end
   self._last_register_key = nil
   self._withdrawn_held = held
   note_registry("note_unregistered", names)
   return true
 end
+
+function Bridge:withdraw_actions(action_names) return unregister(self, action_names, true) end
+function Bridge:retire_actions(action_names) return unregister(self, action_names, false) end
 
 function Bridge:unregister_all()
   mirror(self)

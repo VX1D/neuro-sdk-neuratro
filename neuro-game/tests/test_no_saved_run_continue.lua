@@ -51,7 +51,7 @@ for _, frame in ipairs(frames) do
     if tostring(action.name):find("continue", 1, true) then leaked[#leaked + 1] = action.name end
   end
 end
-check("the registered catalogue offers start_run", #frames > 0 and names.start_run == true, #frames)
+check("the registered catalogue offers a new run through run setup", #frames > 0 and names.open_run_setup == true, #frames)
 check("no actions/register frame carries continue_run", #leaked == 0, table.concat(leaked, ","))
 check("the local registry holds no continue_run", Registry.get("continue_run") == nil)
 

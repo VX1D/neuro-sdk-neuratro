@@ -1071,9 +1071,9 @@ do
   local f = require("force.force_router").get_force_for_state("MENU")
   check("seed chain: MENU force offers open_run_setup", f and has(f.actions, "open_run_setup"))
   check("seed chain: MENU force omits toggle_seeded_run (fails without overlay)",
-    not has((f or {}).actions, "toggle_seeded_run"))
+    not has((f or {}).actions, "toggle_seeded_run") and not has((f or {}).tools, "toggle_seeded_run"))
   check("seed chain: MENU force omits paste_seed (wiped by overlay rebuild)",
-    not has((f or {}).actions, "paste_seed"))
+    not has((f or {}).actions, "paste_seed") and not has((f or {}).tools, "paste_seed"))
   check("seed chain: MENU force omits start_run (dispatcher rejects it)",
     not has((f or {}).actions, "start_run"))
   check("seed chain: toggle_seeded_run invalid without overlay", not A.is_action_valid("toggle_seeded_run"))

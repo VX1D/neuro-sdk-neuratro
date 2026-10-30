@@ -12,7 +12,9 @@ local function force_query(state)
 end
 
 local function offers(f, name)
-  for _, n in ipairs(f and f.actions or {}) do if n == name then return true end end
+  for _, list in ipairs({ f and f.actions or {}, f and f.tools or {} }) do
+    for _, n in ipairs(list) do if n == name then return true end end
+  end
   return false
 end
 

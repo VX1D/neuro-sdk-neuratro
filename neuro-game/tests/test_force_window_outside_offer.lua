@@ -179,20 +179,23 @@ do
   tick_for(10)
   check("M: set_joker_order is valid here",
     Actions.is_action_valid("set_joker_order") == true)
-  check("M: set_joker_order is outside the offer",
-    forces[1] and forces[1].actions:find("set_joker_order", 1, true) == nil,
-    forces[1] and forces[1].actions)
+  check("M: set_joker_order is listed in the offer, like every usable action (action_window.gd _send_force)",
+    forces[#forces] and forces[#forces].actions:find("set_joker_order", 1, true) ~= nil,
+    forces[#forces] and forces[#forces].actions)
   local before = #forces
+  local mw = require("core.window").current()
   local r = answer(b, "set_joker_order", '{"from_index":1,"to_index":2}')
-  check("M: the outside action is admitted without answering the force",
-    r and r.ok == true and r.code == "ACTION_ACCEPTED",
+  check("M: the tool is admitted", r and r.ok == true and r.code == "ACTION_ACCEPTED",
     r and (tostring(r.code) .. "/" .. tostring(r.ok)))
-  check("M: the sent offer stays pending after the outside answer",
-    phase() == Window.FORCED and in_flight() and #withdrawn == 0, phase())
-  check("M: the outside action stays outside the decision",
+  check("M: its success ends the window (ActionWindowResponse.cs:20)",
+    not in_flight() and mw.ended_by == "answered", tostring(mw.ended_by))
+  check("M: the tool does not spend the decision",
     G.NEURO.decision_serial == 1, tostring(G.NEURO.decision_serial))
-  tick_for(30)
-  check("M: no replacement force lands on the pending one", #forces == before, #forces)
+  check("M: the decision is asked again with a fresh force",
+    tick_until(function() return #forces > before end, 30) and #forces == before + 1 and phase() == Window.FORCED,
+    #forces)
+  before = #forces
+  withdrawn = {}
   local r2 = answer(b, "discard_hand", '{"indices":[1,2]}')
   check("M: her answer from the offer then resolves the force",
     r2 and r2.ok == true and phase() == Window.ENDED and #withdrawn == 0, phase())

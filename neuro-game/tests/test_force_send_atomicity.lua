@@ -13,7 +13,6 @@ end })
 
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
-local Tuning = require("core.config")
 local json = require("util.neuro_json")
 
 local forces, events = {}, {}
@@ -123,7 +122,6 @@ local shop_valid = Actions.get_valid_actions_for_state("SHOP")
 local shop_set = {}
 for _, n in ipairs(shop_valid) do shop_set[n] = true end
 local mark = #events
-local moved_at = G.TIMERS.REAL
 frame()
 local stripped = {}
 for _, n in ipairs(open_names) do
@@ -144,24 +142,15 @@ local catalogue_keeps_old_offer = true
 for _, name in ipairs(open_names) do
   catalogue_keeps_old_offer = catalogue_keeps_old_offer and canonical_catalogue[name] == true
 end
-local catalogue_has_shop_actions = true
-for _, name in ipairs(shop_valid) do
-  catalogue_has_shop_actions = catalogue_has_shop_actions and canonical_catalogue[name] == true
-end
 check("the new screen does want names the dead offer held", next(stripped) ~= nil)
 check("a sent stale force is withdrawn by unregistering its whole offer, tools included (README.md:27)",
   contains_all(withdrawn) and stale_window.phase == "ended",
   tostring(stale_window.phase) .. "/" .. table.concat(withdrawn or {}, ","))
 check("the old force window is closed before the next offer", not in_flight())
-check("the canonical action catalogue is additive across the state move",
-  catalogue_keeps_old_offer and catalogue_has_shop_actions,
-  string.format("old=%s shop=%s", tostring(catalogue_keeps_old_offer),
-    tostring(catalogue_has_shop_actions)))
-check("the stable catalogue is not re-registered for a state-only move",
-  last_reg == nil and catalogue_has_shop_actions, tostring(last_reg))
-check("the refresh does not wait out the entry cooldown",
-  (G.TIMERS.REAL - moved_at) < Tuning.get("NEURO_ENTRY_CD_SHOP"),
-  string.format("%.1f", G.TIMERS.REAL - moved_at))
+check("the old offer stays in the canonical catalogue across the state move", catalogue_keeps_old_offer,
+  tostring(catalogue_keeps_old_offer))
+check("a state move registers nothing; the next window registers its screen (action_window.gd register)",
+  last_reg == nil, tostring(last_reg))
 Window.reset()
 
 local Receipt = require("core.action_result")
@@ -187,9 +176,8 @@ for i = mark_d3 + 1, #events do
     end
   end
 end
-check("a pending action result does not postpone the stable action catalogue",
-  not shop_only and canonical_catalogue.reroll_shop == true,
-  tostring(shop_only) .. "/" .. tostring(canonical_catalogue.reroll_shop))
+check("no window is built, so nothing registers, while an action is still being verified",
+  not shop_only and not in_flight(), tostring(shop_only))
 Execute.abort("test")
 
 local bridge = H.stub_bridge({ results = {},

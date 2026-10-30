@@ -317,6 +317,7 @@ end
 
 function M.unavailable_reason(name) return (select(2, availability_check(name))) end
 function M.available(name) return (availability_check(name)) end
+M.availability = availability_check
 
 function M.preflight(name, data)
   local preflight = preflights[name]
