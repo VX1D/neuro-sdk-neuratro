@@ -105,10 +105,10 @@ local function board(state_name)
     wire[#wire + 1] = { kind = "unregister", set = seen, t = G.TIMERS.REAL }
   end
   G.NEURO._registered_sigs = live
-  function G.NEURO:force_actions(_ctx, _query, actions)
+  function G.NEURO:force_actions(_ctx, query, actions)
     local w = G.NEURO.force_window
     forces[#forces + 1] = { t = G.TIMERS.REAL, state = w and w.state,
-      actions = table.concat(actions, ",") }
+      actions = table.concat(actions, ","), query = query }
     local seen = {}
     for _, n in ipairs(actions or {}) do seen[n] = true end
     wire[#wire + 1] = { kind = "force", set = seen, t = G.TIMERS.REAL }
@@ -426,19 +426,31 @@ do
   local plan_payload = '{"hand_plan":"Flush line","build_plan":"Upgrade mult","money_plan":"Save $20"}'
   for i = 1, 3 do
     local r = answer(b, "record_plan", plan_payload)
-    check("identical send " .. i .. " is admitted before execution",
-      r.ok == true and r.code == "ACTION_ACCEPTED",
+    local expected = (i == 1) and "ACTION_ACCEPTED" or "UNCHANGED"
+    check("identical send " .. i .. " is answered as a success (" .. expected .. ")",
+      r.ok == true and r.code == expected,
       tostring(r.code) .. "/" .. tostring(r.ok))
     tick_for(10)
   end
+  local Budget = require("core.decision_budget")
+  local last = forces[#forces]
+  check("after the third, the next force no longer offers recording a plan but still offers the shop's moves",
+    phase() == Window.FORCED and not (","..last.actions..","):find(",record_plan,", 1, true)
+      and (","..last.actions..","):find(",leave_shop,", 1, true) ~= nil, last.actions)
+  check("and says why, truthfully", last.query:find(Budget.reason("record_plan"), 1, true) ~= nil, last.query)
   local capped = answer(b, "record_plan", plan_payload)
-  check("the fourth trips the repeat cap and is acknowledged as a forced answer",
-    capped.code == "POLICY_ACKNOWLEDGED" and capped.ok == true, tostring(capped.code))
-  check("which resolves the shop force", phase() == Window.ENDED, phase())
+  check("a fourth sent anyway is refused with that reason and changes nothing",
+    capped.ok == false and tostring(capped.message):find(Budget.reason("record_plan"), 1, true) ~= nil,
+    tostring(capped.code) .. ": " .. tostring(capped.message))
+  check("which leaves the standing force open", phase() == Window.FORCED, phase())
 
   local parked = #forces
   tick_for(10)
-  check("and the decision is asked again by exactly one force", #forces == parked + 1, #forces)
+  check("and nothing is asked again meanwhile", #forces == parked, #forces)
+  G.FUNCS.toggle_shop = function() end
+  local left = answer(b, "leave_shop", "{}")
+  check("a move that moves the game on is still accepted", left.ok == true, tostring(left.code))
+  check("and restores the budget", not Budget.spent("record_plan", "SHOP"))
 end
 
 do

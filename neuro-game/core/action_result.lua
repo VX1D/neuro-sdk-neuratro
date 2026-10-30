@@ -7,7 +7,7 @@ local RETRY, TERMINAL, WAIT = "retry", "terminal", "wait"
 M.CODES = {
   CONFIRMATION_REQUIRED = TERMINAL,
   POLICY_ACKNOWLEDGED = TERMINAL,
-  UNCHANGED = RETRY,
+  UNCHANGED = TERMINAL,
   TRANSITION_PENDING = WAIT,
   SCHEMA_INVALID = RETRY,
   ACTION_UNAVAILABLE = RETRY,
@@ -64,7 +64,7 @@ function M.reasked_message(err)
 end
 
 function M.unchanged(fact)
-  return M.reject("UNCHANGED", fact .. "; nothing changed. Pick a different value or another offered action.")
+  return M.reject("UNCHANGED", fact .. "; nothing changed.")
 end
 
 function M.terminal(code, forced)

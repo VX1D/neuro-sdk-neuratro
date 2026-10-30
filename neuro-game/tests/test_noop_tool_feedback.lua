@@ -84,13 +84,13 @@ for _, case in ipairs(CASES) do
   if case.setup then case.setup() end
   local order = G.jokers and G.jokers.cards and { G.jokers.cards[1], G.jokers.cards[2] }
   for round = 1, 2 do
-    local results, answered, open = send(case.name, case.same)
+    local results, answered = send(case.name, case.same)
     local r = only(results)
-    check(case.name .. " no-op #" .. round .. ": one actionable failure naming the current value (BEST_PRACTICES.md:29)",
-      #results == 1 and r.ok == false and tostring(r.message):find(case.value, 1, true) ~= nil,
+    check(case.name .. " no-op #" .. round .. ": a success naming the current value, nothing to retry (SPECIFICATION.md:191-192)",
+      #results == 1 and r.ok == true and tostring(r.message):find(case.value, 1, true) ~= nil,
       tostring(r.ok) .. " " .. tostring(r.message))
     check(case.name .. " no-op #" .. round .. ": it runs nothing", #calls == 0, table.concat(calls, ","))
-    check(case.name .. " no-op #" .. round .. ": it leaves the force open for the retry", open and not answered)
+    check(case.name .. " no-op #" .. round .. ": it answers the force", answered)
     FP.build(case.state)
   end
   if case.name == "set_joker_order" then
@@ -118,7 +118,7 @@ do
   local r = only((send("copy_seed")))
   love.system = system
   check("copy_seed reads the system clipboard the engine writes without F_LOCAL_CLIPBOARD",
-    r.ok == false and tostring(r.message):find("ABC123", 1, true) ~= nil,
+    r.ok == true and tostring(r.message):find("ABC123", 1, true) ~= nil,
     tostring(r.message))
 end
 
@@ -133,7 +133,8 @@ do
     offer == "open_run_setup,select_deck", offer)
   local LOOP = { "d", "s", "s", "s", "s", "d", "s", "s", "s", "s", "s", "s", "s", "d", "d", "s", "s", "s", "s", "d", "d" }
   G.NEURO.recent_actions = {}
-  local answered_early, narrowed = {}, {}
+  local Actions = require("core.actions")
+  local lost_progress = {}
   for i, step in ipairs(LOOP) do
     local name, data
     if step == "d" then
@@ -141,15 +142,12 @@ do
     else
       name, data = "select_stake", { to_key = 1 }
     end
-    local results, _, open = send(name, data)
-    local r = only(results)
-    if r.ok ~= false or not open then answered_early[#answered_early + 1] = i .. ":" .. name end
-    local live = table.concat((Window.current() or { names = {} }).names, ",")
-    if live ~= offer then narrowed[#narrowed + 1] = i .. ":" .. live end
+    send(name, data)
+    if not Actions.is_action_valid("open_run_setup") then lost_progress[#lost_progress + 1] = i end
   end
-  check("replay: every repeated no-op stays success=false and leaves the force open (no retry budget)",
-    #answered_early == 0, table.concat(answered_early, "; "))
-  check("replay: repeated refusals never withhold a tool from the force", #narrowed == 0, table.concat(narrowed, "; "))
+  check("replay: repeated no-ops are bounded per decision, then withheld",
+    not Actions.is_action_valid("select_deck") and not Actions.registrable("select_deck"))
+  check("replay: the move that progresses stays usable throughout", #lost_progress == 0, table.concat(lost_progress, "; "))
   check("replay: the loop never reached the engine", #calls == 0, table.concat(calls, ","))
 end
 
@@ -160,15 +158,10 @@ do
   check("shop replay: the first offer carries the reorder tool",
     frame and table.concat(frame.actions, ","):find("set_joker_order", 1, true) ~= nil,
     frame and table.concat(frame.actions, ","))
-  local refused = 0
-  for _ = 1, 10 do
-    local results, _, open = send("set_joker_order", { from_index = 2, to_index = 2 })
-    if only(results).ok == false and open then refused = refused + 1 end
-  end
-  local offer = table.concat((Window.current() or { names = {} }).names, ",")
-  check("shop replay: ten no-ops stay refused and the reorder tool stays on the offer",
-    refused == 10 and offer:find("set_joker_order", 1, true) ~= nil and offer:find("leave_shop", 1, true) ~= nil,
-    refused .. " " .. offer)
+  for _ = 1, 10 do send("set_joker_order", { from_index = 2, to_index = 2 }) end
+  local Actions = require("core.actions")
+  check("shop replay: repeated reorder no-ops are withheld after the cap, leaving the shop stays usable",
+    not Actions.registrable("set_joker_order") and Actions.is_action_valid("leave_shop"))
 end
 
 done()

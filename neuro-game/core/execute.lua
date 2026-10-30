@@ -12,6 +12,7 @@ local ContextDelivery = require("core.context_delivery")
 local Staging = require("core.staging")
 local Window = require("core.window")
 local Lifecycle = require("core.neuro_lifecycle")
+local Budget = require("core.decision_budget")
 
 local job
 
@@ -243,6 +244,12 @@ function M.answer(bridge, id, name, success, message, code, group, window_id)
     return delivered, success
   end
   Tx.store(id)
+  if code == "ACTION_ACCEPTED" then
+    Lifecycle.clear_failure()
+    Budget.on_applied(name, require("core.state").get_state_name())
+  elseif code == "UNCHANGED" then
+    Budget.on_unchanged(name, require("core.state").get_state_name())
+  end
   if own_window then Window.on_result(name, success) end
   return delivered, success
 end

@@ -6,6 +6,7 @@ local S = require("hud.state")
 local Actions = require("core.actions")
 local ActionRegistry = require("core.action_registry")
 local ActionPolicy = require("core.action_policy")
+local Budget = require("core.decision_budget")
 local StateKinds = require("core.state_kinds")
 local ContextDelivery = require("core.context_delivery")
 local ContextCompact = require("context.context_compact")
@@ -416,6 +417,8 @@ local function arm(state_name)
   if refusal and refusal.state == state_name then
     force.query = "Your last answer was refused: " .. refusal.reason .. "\n\n" .. force.query
   end
+  local withheld, told = Budget.pending_note(state_name, Actions.get_action_names_for_state(state_name))
+  if withheld then force.query = force.query .. "\n\n" .. withheld end
   local ok, sent = pcall(n.force_actions, n, Utils.trim_line_ends(context), Utils.trim_line_ends(force.query),
     force.actions, { priority = ForceHelpers.force_priority(), ephemeral_context = force.ephemeral_context ~= false,
       confirmation_proposal_ref = force.confirmation_proposal_ref })
@@ -425,6 +428,7 @@ local function arm(state_name)
     return Once.rollback_journal(journal)
   end
   w.phase, w.sent_at = FORCED, Utils.gate_now("force_liveness_timeout")
+  if told then told() end
   Once.commit_journal(journal)
   DecisionDelta.commit(candidate)
 end

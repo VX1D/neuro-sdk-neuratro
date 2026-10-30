@@ -62,7 +62,22 @@ local function write_ordinal(decision)
   return log.counts[decision]
 end
 
-local function prepare_joker_intents(data)
+local function kept_note(r, prior)
+  if r.clear_note then return nil end
+  if r.note then return r.note end
+  return prior and prior.note or nil
+end
+
+local function intents_unchanged(resolved)
+  local stored = G.NEURO and G.NEURO.joker_intents or {}
+  for _, r in ipairs(resolved) do
+    local prior = r.card and r.card.sort_id and stored[r.card.sort_id]
+    if not (prior and prior.tag == r.tag and prior.note == kept_note(r, prior)) then return false end
+  end
+  return true
+end
+
+local function prepare_joker_intents(data, unchanged_is_noop)
   if not (G and G.jokers and G.jokers.cards) then
     return nil, ActionResult.wait("Your jokers are not loaded yet, so nothing was tagged.",
       "Wait until a run is in progress, then record the roles again.")
@@ -81,6 +96,9 @@ local function prepare_joker_intents(data)
     local clear_note = type(entry.note) == "string" and note == nil
     resolved[#resolved + 1] = { card = G.jokers.cards[idx], idx = idx, tag = tag, note = note,
       clear_note = clear_note }
+  end
+  if unchanged_is_noop and intents_unchanged(resolved) then
+    return ActionResult.unchanged("Those joker roles are already recorded")
   end
   local authored_ante = GameFacts.ante(0)
   local authored_decision = tonumber(G.NEURO and G.NEURO.decision_serial) or 0
@@ -104,16 +122,8 @@ local function prepare_joker_intents(data)
     for _, r in ipairs(resolved) do
       local sid = r.card and r.card.sort_id
       if sid then
-        local prior = G.NEURO.joker_intents[sid]
-        local note
-        if r.clear_note then
-          note = nil
-        elseif r.note then
-          note = r.note
-        else
-          note = prior and prior.note or nil
-        end
-        G.NEURO.joker_intents[sid] = { tag = r.tag, note = note, provenance = provenance }
+        G.NEURO.joker_intents[sid] = { tag = r.tag, note = kept_note(r, G.NEURO.joker_intents[sid]),
+          provenance = provenance }
       end
     end
     Lifecycle.sync_joker_intent_revision()
@@ -218,6 +228,41 @@ local function prepare_plan(data, required_fields, scope_snapshot, explicitly_wr
   end
 end
 M.prepare_plan = prepare_plan
+
+local function same_focus(was, focus)
+  return type(was) == "table" and was.primary == focus.primary and was.fallback == focus.fallback
+end
+
+-- A commit is a no-op only when every written field, its scope and the gates it would settle already stand.
+local function plan_unchanged(data)
+  local n = G and G.NEURO
+  local prev = n and n.plan
+  if type(prev) ~= "table" then return false end
+  local p = (type(data.plan) == "table") and data.plan or {}
+  local held = type(n.held_plan_write) == "table" and n.held_plan_write.values or {}
+  local Gate = require("core.gate")
+  local pending = Gate.pending_shop_fields()
+  local written = {}
+  for _, f in ipairs(PLAN_FIELDS) do
+    local raw = data[f.field] ~= nil and data[f.field] or p[f.field]
+    local value = clean(raw, PlanLimits.PLAN_TEXT_MAX, f.field)
+    if value ~= nil then
+      if prev[f.key] ~= value or prev[f.key .. "_scope"] ~= Gate[f.scope]()
+        or held[f.field] ~= nil or pending[f.key] then
+        return false
+      end
+      written[f.key] = true
+    end
+  end
+  if written.money and not n.econ_plan_ok then return false end
+  local focus = clean_hand_focus(data.hand_focus ~= nil and data.hand_focus or p.hand_focus)
+  if focus then
+    return same_focus(prev.hand_focus, focus) and prev.hand_focus_scope == Gate.current_blind_scope()
+      and held.hand_focus == nil
+  end
+  return not (written.hand and prev.hand_focus ~= nil)
+end
+
 local RECORD_PLAN_BOSS = "Not saved: boss_plan is not a field of a plan record; "
   .. "put a boss rule in plan.boss_plan when you select the blind, play or discard."
 
@@ -234,9 +279,12 @@ M.handle_record_plan = function(data)
   if type(data.plan) == "table" then data.plan.boss_plan = nil end
   local state_name = require("core.state").get_state_name()
   local commit, err = prepare_plan(data, require("core.plan_requirements").required(state_name, "record_plan"))
+  if type(commit) == "function" and plan_unchanged(data) then
+    return ActionResult.unchanged("Your plan already says that")
+  end
   return commit, err
 end
 M.prepare_joker_intents = prepare_joker_intents
-M.handle_record_joker_roles = prepare_joker_intents
+M.handle_record_joker_roles = function(data) return prepare_joker_intents(data, true) end
 
 return M

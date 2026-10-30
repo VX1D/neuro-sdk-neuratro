@@ -7,6 +7,7 @@ local GameFacts = require("facts.game_facts")
 local Utils = require("util.utils")
 local CardUtil = require("facts.card_util")
 local ActionResult = require("core.action_result")
+local Budget = require("core.decision_budget")
 
 local function unlocked_deck_keys()
   local pool = G and G.P_CENTER_POOLS and G.P_CENTER_POOLS.Back
@@ -683,8 +684,12 @@ local function proposal_blocks(action_name)
   return Gate ~= nil and Gate.stale_mutator(action_name)
 end
 
+local function budget_spent(action_name)
+  return Budget.spent(action_name, require("core.state").get_state_name())
+end
+
 local function available_on_screen(action_name)
-  if proposal_blocks(action_name) then return false end
+  if proposal_blocks(action_name) or budget_spent(action_name) then return false end
   return ActionRegistry.available(action_name)
 end
 
@@ -731,7 +736,7 @@ end
 
 -- Registered only while usable at window build, like an SDK ActionWindow (README.md:35); nil while it waits on the game keeps the current registration.
 function Actions.registrable(name)
-  if Actions.overlay_block_reason(name) or proposal_blocks(name) then return false end
+  if Actions.overlay_block_reason(name) or proposal_blocks(name) or budget_spent(name) then return false end
   local gate = REGISTRATION_GATES[name]
   if gate then return gate() == true end
   local usable, reason = ActionRegistry.availability(name)
@@ -747,6 +752,7 @@ function Actions.unavailable_rejection(action_name, data)
   if proposal_blocks(action_name) then
     return "A play review is open; answer it yes or no first."
   end
+  if budget_spent(action_name) then return Budget.reason(action_name) end
   return ActionRegistry.unavailable_reason(action_name, data)
 end
 

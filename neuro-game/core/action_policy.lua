@@ -8,7 +8,8 @@ local TOOLS = {
   sell_card = true, reroll_shop = true, reroll_boss = true,
   use_consumable = true, use_directional_consumable = true,
   set_joker_order = true, record_plan = true, record_joker_roles = true,
-  select_deck = true, select_stake = true, toggle_seeded_run = true, paste_seed = true, copy_seed = true,
+  select_deck = true, select_stake = true, select_challenge = true, toggle_seeded_run = true, paste_seed = true,
+  copy_seed = true,
 }
 
 local PROGRESS_TOOLS = {

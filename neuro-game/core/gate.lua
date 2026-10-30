@@ -555,6 +555,7 @@ function M.hand_focus_is_current(plan)
     and plan.hand_focus_scope == scope
 end
 M.shop_required_fields = stale_shop_fields
+M.pending_shop_fields = pending_shop_fields
 
 local function settle_pending(hand, build, money)
   local pending = pending_shop_fields()

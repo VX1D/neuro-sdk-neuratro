@@ -70,7 +70,9 @@ local ACTION_SEMANTICS_V1_TEXT =
   .. "Your move asks for plan fields, fill only the ones it names; they describe the plan from "
   .. "that action onward and are saved with it."
   .. "\n\n" .. require("core.plan_requirements").guide_section()
-  .. "\n\n## Fields\nUse each move's current schema, never an invented field."
+  .. "\n\n## Fields\nUse each move's current schema, never an invented field. "
+  .. "One action sent with the same parameters again and again on one screen is refused after a few tries, "
+  .. "and a move that does not move the game on, such as recording a plan, is offered only a few times until you make one that does."
 
 local function count_tokens(text)
   local count = 0

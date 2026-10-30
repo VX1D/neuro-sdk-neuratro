@@ -198,6 +198,7 @@ run adv_limits    "$LUAJIT" tests/test_advertised_limits.lua
 run confirm_compose "$LUAJIT" tests/test_confirm_play_compose.lua
 run play_proposal "$LUAJIT" tests/test_play_proposal.lua
 run loop_escape   "$LUAJIT" tests/test_loop_escape.lua
+run decision_budget "$LUAJIT" tests/test_decision_budget.lua
 run skip_trigger_fact "$LUAJIT" tests/test_skip_trigger_fact.lua
 run schema_gate   "$LUAJIT" tests/test_schema_gate_order.lua
 run force_ack     "$LUAJIT" tests/test_force_ack_phase.lua

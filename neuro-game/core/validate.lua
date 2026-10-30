@@ -17,6 +17,7 @@ local Window = require("core.window")
 local Execute = require("core.execute")
 local SchemaValidate = require("util.schema_validate")
 local CardArea = require("facts.card_area_util")
+local Budget = require("core.decision_budget")
 
 
 local STOP_USE_GATED = { use_consumable = true, use_directional_consumable = true,
@@ -115,64 +116,58 @@ function M.settling(name)
 end
 
 
-local DEFAULT_MAX_REPEAT = 3
+local DEFAULT_MAX_REPEAT = Budget.CAP
 local UNGATED = { exit_overlay_menu = true }
 
 local tracker = {}
 
-local ACTION_PROPS, NESTED_PROPS, PROSE_FIELDS = {}, {}, {}
-local function collect_prose(schema, out)
-  if type(schema) ~= "table" then return end
-  for key, sub in pairs(schema.properties or {}) do
-    if type(sub) == "table" and sub.type == "string" and sub.maxLength
-        and sub.enum == nil and sub.const == nil and sub.pattern == nil then
-      out[key] = true
-    end
-    collect_prose(sub, out)
-  end
-  collect_prose(schema.items, out)
-end
-for _, def in ipairs(ActionRegistry.definitions()) do
-  local props = def.schema and def.schema.properties
-  if type(props) == "table" then
-    ACTION_PROPS[def.name], NESTED_PROPS[def.name] = {}, {}
+local shapes = setmetatable({}, { __mode = "k" })
+local function schema_shape(name)
+  local def = ActionRegistry.get(name)
+  local schema = def and def.schema
+  local props = type(schema) == "table" and schema.properties
+  if type(props) ~= "table" then return nil end
+  local shape = shapes[schema]
+  if not shape then
+    shape = { declared = {}, nested = {} }
     for key, sub in pairs(props) do
-      ACTION_PROPS[def.name][key] = true
+      shape.declared[key] = true
       for inner in pairs(type(sub) == "table" and type(sub.properties) == "table" and sub.properties or {}) do
-        NESTED_PROPS[def.name][inner] = key
+        shape.nested[inner] = key
       end
     end
+    shapes[schema] = shape
   end
-  PROSE_FIELDS[def.name] = {}
-  collect_prose(def.schema, PROSE_FIELDS[def.name])
+  return shape
 end
 
-local IGNORED_FIELDS = { plan = true, name = true }
+local TARGET_CONFIRMATIONS = { name = true }
 local ORDERLESS_ARRAYS = { indices = true, hand_indices = true, intents = true }
 
-local function canonical(value, field, prose)
+local function canonical(value, field)
   if type(value) ~= "table" then return type(value) .. ":" .. tostring(value) end
   if #value > 0 then
     local parts = {}
-    for i = 1, #value do parts[i] = canonical(value[i], nil, prose) end
+    for i = 1, #value do parts[i] = canonical(value[i]) end
     if ORDERLESS_ARRAYS[field] then table.sort(parts) end
     return "[" .. table.concat(parts, ",") .. "]"
   end
   local keys = {}
   for k in pairs(value) do
-    if not IGNORED_FIELDS[k] and not prose[k] then keys[#keys + 1] = tostring(k) end
+    if not TARGET_CONFIRMATIONS[k] then keys[#keys + 1] = tostring(k) end
   end
   table.sort(keys)
-  for i, k in ipairs(keys) do keys[i] = k .. "=" .. canonical(value[k], k, prose) end
+  for i, k in ipairs(keys) do keys[i] = k .. "=" .. canonical(value[k], k) end
   return "{" .. table.concat(keys, ",") .. "}"
 end
 
 local function payload_key(name, data)
-  local declared, kept = ACTION_PROPS[name], {}
+  local shape = schema_shape(name)
+  local declared, kept = shape and shape.declared, {}
   for key, value in pairs(data) do
     if not declared or declared[key] then kept[key] = value end
   end
-  return canonical(kept, nil, PROSE_FIELDS[name] or {})
+  return canonical(kept)
 end
 
 local function max_repeat(state_name, name)
@@ -197,15 +192,8 @@ local function track_state(state_name)
   tracker.state, tracker.streak = state_name, nil
 end
 
-function M.repeat_rule(name)
-  local fields = {}
-  for key in pairs(ACTION_PROPS[name] or {}) do
-    if not (IGNORED_FIELDS[key] or (PROSE_FIELDS[name] or {})[key]) then fields[#fields + 1] = tostring(key) end
-  end
-  table.sort(fields)
-  local s = "plan and free-text fields do not make a send different; only an accepted send of another action, "
-  if #fields > 0 then s = s .. "a change to " .. table.concat(fields, "/") .. ", " end
-  return s .. "or a new screen restarts the count"
+function M.repeat_rule()
+  return "only an accepted send of another move, a change to any parameter, or a new screen restarts the count"
 end
 
 local function next_streak(state_name, name, data)
@@ -264,6 +252,7 @@ end
 
 function M.reset_run_state()
   M.reset_streaks()
+  Budget.reset()
   tracker.state = nil
   latched, lock_seen, blocked_since, engine_failsafe_open = {}, {}, {}, false
 end
@@ -504,9 +493,10 @@ local function admission(name, data, forced, state_name)
   local streak = not UNGATED[name] and next_streak(state_name, name, data) or nil
   if streak and streak.count > streak.cap then
     Metrics.set("throttle_repeat", streak.count - 1)
-    local text = string.format("Action '%s' repeated %d times (max %d) with the same parameters; "
-      .. "this send is refused and changed nothing. %s.", name, streak.count - 1, streak.cap,
-      (M.repeat_rule(name):gsub("^%l", string.upper)))
+    local text = string.format("You have made the same move (%s) with the same parameters %d times in a row "
+      .. "(max %d); this send is refused and changed nothing. %s.",
+      (ActionRegistry.phrase(name):gsub("^%u", string.lower)), streak.count - 1, streak.cap,
+      (M.repeat_rule():gsub("^%l", string.upper)))
     if forced then
       return ActionResult.error("POLICY_ACKNOWLEDGED", "Nothing happened: " .. text .. " The game state is unchanged.")
     end
@@ -528,7 +518,8 @@ local function plan_refusal(name, data, tx_err)
 end
 
 local function unknown_fields_note(name, data)
-  local declared, nested, unknown, misplaced = ACTION_PROPS[name] or {}, NESTED_PROPS[name] or {}, {}, {}
+  local shape = schema_shape(name)
+  local declared, nested, unknown, misplaced = shape and shape.declared or {}, shape and shape.nested or {}, {}, {}
   local accepted = require("handlers.plan_handlers").ACCEPTED_UNDECLARED[name] or {}
   for key in pairs(data) do
     if type(key) == "string" and key:sub(1, 1) ~= "_" and not declared[key] and not accepted[key] then

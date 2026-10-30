@@ -60,7 +60,7 @@ function M.repeat_pressure_note(offered)
     return string.format("Your last action was sent with the same parameters %s in a row; another identical send "
       .. "is refused and changes nothing. ", times)
   end
-  local rule = require("core.validate").repeat_rule(name)
+  local rule = require("core.validate").repeat_rule()
   return string.format(
     "You have made the same move (%s) with the same parameters %s in a row; another identical send is refused and changes nothing%s. ",
     (require("core.action_registry").phrase(name):gsub("^%u", string.lower)), times, rule and (" -- " .. rule) or "")
