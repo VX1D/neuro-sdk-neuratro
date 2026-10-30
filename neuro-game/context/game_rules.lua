@@ -13,7 +13,7 @@ local FRAME_HEAD =
 local FRAME_TAIL =
   "## Round loop\nEach played hand costs one hand whatever it scores; reach the target before hands hit 0. "
   .. "Blind targets rise every ante. "
-  .. "Each ante has a Small, Big, and Boss blind. You must BEAT the Boss to advance the ante; Small and Big can each be beaten OR skipped (skipping takes that blind's tag instead of its cash and the shop that would have followed). Beating the final ante's Boss wins the run (the blind line shows which ante). "
+  .. "Each ante has a Small, Big, and Boss blind, played in that fixed order: only the blind on deck can be selected, and the next one comes up after it is beaten or skipped. You must BEAT the Boss to advance the ante; Small and Big can each be beaten OR skipped (skipping takes that blind's tag instead of its cash and the shop that would have followed). Beating the final ante's Boss wins the run (the blind line shows which ante). "
   .. "Pick a blind, beat its target before hands run out, cash out, then shop before the next blind."
 
 local FRAME_ECONOMY =

@@ -224,6 +224,7 @@ run screen_catalogue "$LUAJIT" tests/test_screen_catalogue.lua
 run window_reg    "$LUAJIT" tests/test_window_registration.lua
 run overlay_trans "$LUAJIT" tests/test_overlay_transitional.lua
 run review_ack    "$LUAJIT" tests/test_review_acknowledgement.lua
+run blind_order   "$LUAJIT" tests/test_blind_order.lua
 run card_binding  "$LUAJIT" tests/test_card_binding.lua
 run sell_review_key "$LUAJIT" tests/test_sell_review_key.lua
 run mid_round_sell  "$LUAJIT" tests/test_mid_round_sell_reason.lua

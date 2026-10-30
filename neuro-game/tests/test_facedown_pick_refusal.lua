@@ -116,6 +116,6 @@ deal_hand(5)
 G.jokers = area({})
 local death_up = attempt(EC.consumable("c_death", { facing = "front" }), "pack")
 check("a face-up Death still points at the directional action",
-  type(death_up) == "string" and death_up:find("choose_directional_pack_card", 1, true) ~= nil, tostring(death_up))
+  type(death_up) == "string" and death_up:find("Take a directional pack card", 1, true) ~= nil, tostring(death_up))
 
 done()

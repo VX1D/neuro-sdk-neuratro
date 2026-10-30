@@ -40,7 +40,8 @@ local function setup_decks_section()
       local key = normalize_text(d.key)
       local name = normalize_text(d.name)
       local eff = effects[d.key] and normalize_text(effects[d.key]) or nil
-      local s = i .. ". " .. name .. " (key " .. key .. ", " .. DeckFacts.record_text(d) .. ")"
+      local selected = run_deck and d.key == run_deck.key and ", selected now" or ""
+      local s = i .. ". " .. name .. " (key " .. key .. ", " .. DeckFacts.record_text(d) .. selected .. ")"
       if eff and eff ~= "" then s = s .. " -- " .. eff end
       lines[#lines + 1] = s
     end
@@ -173,13 +174,14 @@ end
 local function stake_list_line()
   local pool = G and G.P_CENTER_POOLS and G.P_CENTER_POOLS.Stake
   if type(pool) ~= "table" or #pool == 0 then return nil end
-  local parts = {}
+  local parts, current = {}, DeckFacts.run_stake()
   for _, i in ipairs(DeckFacts.selectable_stakes()) do
     local st = pool[i]
     if type(st) == "table" then
       local name = DisplayNames.of("Stake", st.key, st)
       local eff = DeckFacts.stake_effect_text(st.key) or "-"
-      parts[#parts + 1] = i .. ". " .. normalize_text(tostring(name)) .. " -- " .. normalize_text(eff)
+      parts[#parts + 1] = i .. ". " .. normalize_text(tostring(name)) .. (i == current and " (selected now)" or "")
+        .. " -- " .. normalize_text(eff)
     end
   end
   if #parts == 0 then return nil end

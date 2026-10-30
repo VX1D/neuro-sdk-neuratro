@@ -34,6 +34,10 @@ local function is_directional_action(name)
   return name == "use_directional_consumable" or name == "choose_directional_pack_card"
 end
 
+local function move_for(area, directional)
+  return string.format('the move "%s"', require("core.action_registry").phrase(canonical_action(area, directional)))
+end
+
 local function target_request(card_name, min_targets, max_targets)
   local low = math.max(1, min_targets or 1)
   local count = low == max_targets and ("exactly " .. low) or (low .. " to " .. max_targets)
@@ -269,7 +273,7 @@ local function handle_use_card(data)
   end
   if require("facts.target_contracts").get(card) and not is_directional_action(action_name) then
     return ActionResult.reject("INVALID_SELECTION",
-      "This card has directional targets; use " .. canonical_action(data.area, true)
+      "This card has directional targets; use it with " .. move_for(data.area, true)
         .. " so source and destination are explicit.")
   end
 
@@ -478,5 +482,5 @@ local function handle_use_card(data)
   end
 end
 
-return { handle_use_card = handle_use_card, canonical_action = canonical_action, outcome_snapshot = outcome_snapshot, outcome_suffix = outcome_suffix,
+return { handle_use_card = handle_use_card, canonical_action = canonical_action, move_for = move_for, outcome_snapshot = outcome_snapshot, outcome_suffix = outcome_suffix,
   outcome_settler = outcome_settler, OUTCOME_SETTLE_MAX = OUTCOME_SETTLE_MAX }

@@ -494,7 +494,7 @@ do
   local _, ordinary = UseCard.handle_use_card({ area = "shop_jokers", index = 1, name = "Death" })
   check("directional shop rejection: ordinary use is refused with a directional remedy",
     type(ordinary) == "table" and ordinary.reason_code == "INVALID_SELECTION"
-      and tostring(ordinary.message):find("use_directional_consumable", 1, true) ~= nil,
+      and tostring(ordinary.message):find("Use a directional consumable", 1, true) ~= nil,
     ordinary and ordinary.message)
 
   local ContextCompact = require("context.context_compact")

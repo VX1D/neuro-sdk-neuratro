@@ -37,7 +37,13 @@ local function handle_select_blind(data)
   local current = sel_key and sel_key:lower() or nil
 
   if current and blind ~= current then
-    return nil, string.format("'%s' is not selectable right now. Currently selectable: %s — select it with blind='%s'.", tostring(blind), current, current)
+    local order = { small = 1, big = 2, boss = 3 }
+    local later = (order[blind] or 0) > (order[current] or 0)
+    local route = later and not Actions.blind_skip_blocker()
+      and (" Blinds come in order (small, big, then boss), so " .. current .. " comes first: select it or skip it.")
+      or ""
+    return nil, string.format("'%s' is not selectable right now. Currently selectable: %s — select it with blind='%s'.%s",
+      tostring(blind), current, current, route)
   end
 
   if not G.blind_select then

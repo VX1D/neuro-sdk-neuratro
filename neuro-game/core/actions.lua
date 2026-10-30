@@ -240,7 +240,7 @@ local function build_param_actions()
     },
     required = { "persona" }
     }),
-    set_joker_order = action_def("set_joker_order", "Move a joker from required from_index to required to_index.", {
+    set_joker_order = action_def("set_joker_order", "Take the joker at required from_index out and put it at required to_index; the jokers in between shift one place to close the gap. Positions run left to right, 1 being leftmost.", {
       type = "object",
       properties = {
         from_index = { type = "integer", minimum = 1 },
@@ -546,25 +546,6 @@ VALIDATORS.record_joker_roles = function()
   end
 end
 
-VALIDATORS.use_consumable = function()
-  local area = G and G.consumeables
-  if not (area and area.cards and #area.cards > 0) then
-    return false, "You hold no consumables to use" .. CHOOSE_OFFERED
-  end
-  for _, card in ipairs(area.cards) do
-    if not require("facts.target_contracts").get(card) and consumable_usable_now(card) then return end
-  end
-  return false, "None of your consumables can be used right now (no valid target or condition); choose another action."
-end
-
-VALIDATORS.choose_pack_card = function()
-  local area = CardUtil.pack_area()
-  for _, card in ipairs((area and area.cards) or {}) do
-    if not require("facts.target_contracts").get(card) and can_take_pack_card(card) then return end
-  end
-  return false, "No card in the open pack can be taken right now (no free slot or no valid target); skip the pack or make room first."
-end
-
 local function directional_available(area)
   local Contracts = require("facts.target_contracts")
   if not (G and G.hand and G.hand.cards and #G.hand.cards >= 2) then
@@ -575,6 +556,34 @@ local function directional_available(area)
   end
   return false, "No directional card here can be used right now; choose another action."
 end
+
+local function directional_redirect(area, area_name, subject, verb)
+  if directional_available(area) ~= nil then return nil end
+  return "Every " .. subject .. " you can " .. verb .. " right now has directional targets; " .. verb .. " it with "
+    .. require("handlers.use_card").move_for(area_name, true) .. " so source and destination are explicit."
+end
+
+VALIDATORS.use_consumable = function()
+  local area = G and G.consumeables
+  if not (area and area.cards and #area.cards > 0) then
+    return false, "You hold no consumables to use" .. CHOOSE_OFFERED
+  end
+  for _, card in ipairs(area.cards) do
+    if not require("facts.target_contracts").get(card) and consumable_usable_now(card) then return end
+  end
+  return false, directional_redirect(area, "consumables", "consumable", "use")
+    or "None of your consumables can be used right now (no valid target or condition); choose another action."
+end
+
+VALIDATORS.choose_pack_card = function()
+  local area = CardUtil.pack_area()
+  for _, card in ipairs((area and area.cards) or {}) do
+    if not require("facts.target_contracts").get(card) and can_take_pack_card(card) then return end
+  end
+  return false, directional_redirect(area, "booster_pack", "pack card", "take")
+    or "No card in the open pack can be taken right now (no free slot or no valid target); skip the pack or make room first."
+end
+
 VALIDATORS.use_directional_consumable = function() return directional_available(G and G.consumeables) end
 VALIDATORS.choose_directional_pack_card = function() return directional_available(CardUtil.pack_area()) end
 
@@ -654,7 +663,10 @@ VALIDATORS.reroll_boss = function()
   if not G or not G.GAME then
     return false, "Blind select is not open" .. CHOOSE_OFFERED
   end
-  local can, enabled = CtxEconomy.can_reroll_boss()
+  local can, enabled, spent = CtxEconomy.can_reroll_boss()
+  if spent then
+    return false, "Director's Cut allows one boss reroll per ante, and it is already used this ante" .. CHOOSE_OFFERED
+  end
   if not enabled then
     return false, "Rerolling the boss needs the Director's Cut or Retcon voucher" .. CHOOSE_OFFERED
   end

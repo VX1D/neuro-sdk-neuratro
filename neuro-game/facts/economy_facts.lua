@@ -23,7 +23,8 @@ end
 function M.can_reroll_boss()
   local boss_not_rerolled = not (G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.boss_rerolled)
   local enabled = owns_voucher("v_retcon") or (owns_voucher("v_directors_cut") and boss_not_rerolled)
-  return (enabled and spendable() >= BOSS_REROLL_COST), enabled
+  local spent = not enabled and owns_voucher("v_directors_cut")
+  return (enabled and spendable() >= BOSS_REROLL_COST), enabled, spent
 end
 
 function M.blind_remaining(blind)
