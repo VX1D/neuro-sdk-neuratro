@@ -284,6 +284,8 @@ local FNV_PRIME = U64(0x100000000) * 0x100 + 0x1b3
 local FENCE_CHUNK = 64 * 1024
 local CURSOR_WORDS = 7
 
+local TWO32 = 2 ^ 32
+
 -- os.time has whole seconds only; the outbox timestamps need milliseconds.
 local wall_ms = function() return os.time() * 1000 end
 pcall(function()
@@ -311,7 +313,13 @@ local function utc_timestamp()
   return os.date("!%Y-%m-%dT%H:%M:%S", math.floor(ms / 1000)) .. string.format(".%03dZ", ms % 1000)
 end
 
-local function mix(hash, word) return bit.bxor(hash, word) * FNV_PRIME end
+local function xor64(a, b)
+  local hi = bit.bxor(tonumber(a / TWO32), tonumber(b / TWO32)) % TWO32
+  local lo = bit.bxor(tonumber(a % TWO32), tonumber(b % TWO32)) % TWO32
+  return U64(hi) * TWO32 + lo
+end
+
+local function mix(hash, word) return xor64(hash, word) * FNV_PRIME end
 
 local function words_of(bytes)
   local n = math.ceil(#bytes / 8)
