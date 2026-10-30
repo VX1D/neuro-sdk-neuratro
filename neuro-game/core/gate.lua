@@ -565,31 +565,7 @@ local function settle_pending(hand, build, money)
 end
 
 function M.action_requirements(current_state, action_name)
-  local requirements = { plan = {} }
-  if current_state == "SHOP" then
-    if action_name == "buy_from_shop" or action_name == "reroll_shop" then
-      requirements.plan.money = true
-    elseif action_name == "sell_card" then
-      requirements.plan.build, requirements.plan.money = true, true
-    elseif action_name == "use_consumable" or action_name == "use_directional_consumable"
-        or action_name == "choose_pack_card" or action_name == "choose_directional_pack_card" then
-      requirements.plan.hand, requirements.plan.build = true, true
-    elseif action_name == "leave_shop" then
-      for field, required in pairs(stale_shop_fields()) do
-        if required then requirements.plan[field] = true end
-      end
-    end
-  elseif current_state == "BLIND_SELECT" and action_name == "select_blind" then
-    requirements.plan.hand, requirements.plan.build = true, true
-    if require("core.actions").get_selectable_blind_key() == "Boss" then
-      requirements.plan.boss = true
-    end
-  elseif current_state == "SELECTING_HAND" and (action_name == "play_hand" or action_name == "discard_hand")
-      and G.GAME and G.GAME.blind and G.GAME.blind.boss
-      and not M.boss_plan_is_current(G and G.NEURO and G.NEURO.plan) then
-    requirements.plan.boss = true
-  end
-  return requirements
+  return { plan = require("core.plan_requirements").required(current_state, action_name) }
 end
 
 function M.complete_requirements(requirements, shop_visit_epoch)
@@ -658,13 +634,6 @@ function M.mark_shop_changed(action_name)
   -- A buy carries cash but not the build plan, leaving that plan pending.
   if action_name == "buy_from_shop" then pending.build = true end
   G.NEURO.shop_plan_revision_required = next(pending) and pending or nil
-end
-
-function M.shop_revision_is_complete(has_hand, has_build, has_money)
-  local required = stale_shop_fields()
-  return (not required.hand or has_hand)
-    and (not required.build or has_build)
-    and (not required.money or has_money)
 end
 
 function M.mark_written(has_hand, has_build, has_money)

@@ -164,11 +164,10 @@ do
   send("discard_hand", "d9", { indices = { 1 }, plan = { boss_plan = "Grind Pairs anyway." } }, b)
   check("boss_plan supplied on a non-boss blind still succeeds",
     b.results[1] and b.results[1].ok == true, b.results[1])
-  check("boss_plan supplied on a non-boss blind is committed for the upcoming boss",
-    G.NEURO.plan and G.NEURO.plan.boss == "Grind Pairs anyway." and G.NEURO.plan.boss_scope == "1|bl_flint",
-    G.NEURO.plan and tostring(G.NEURO.plan.boss_scope))
+  check("boss_plan supplied with a discard on a non-boss blind is not saved",
+    not (G.NEURO.plan and G.NEURO.plan.boss), G.NEURO.plan and tostring(G.NEURO.plan.boss))
 
-  local plan = G.NEURO.plan
+  local plan = { boss = "Grind Pairs anyway.", boss_scope = "1|bl_flint" }
   base({ ante = 1 })
   G.NEURO.plan = plan
   check("the plan written ahead is current once that boss is being played",

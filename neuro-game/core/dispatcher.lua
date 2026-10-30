@@ -203,7 +203,7 @@ end)
 ActionRegistry.bind_preflight("leave_shop", function(data)
   local tag, refusal
   if data.intents ~= nil then
-    tag, refusal = PlanHandlers.handle_record_joker_roles(data)
+    tag, refusal = PlanHandlers.prepare_joker_intents(data)
     if not tag then return nil, refusal end
   end
   local covered, missing = {}, {}

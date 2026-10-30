@@ -245,7 +245,7 @@ local function build_param_actions()
       },
       required = {}
     }),
-    leave_shop = action_def("leave_shop", "Leave the shop; optional intents tags untagged jokers, and joker_order_confirmed: true keeps the order when a reorder gain is shown. The first send executes nothing and returns a review when leaving forfeits interest or your lineup changed.", {
+    leave_shop = action_def("leave_shop", "Leave the shop; intents must tag every joker that has no role yet, and joker_order_confirmed: true keeps the order when a reorder gain is shown. The first send executes nothing and returns a review when leaving forfeits interest or your lineup changed.", {
       type = "object",
       properties = {
         plan = plan_schema(),
@@ -255,14 +255,14 @@ local function build_param_actions()
       required = {}
     }),
     record_joker_roles = action_def("record_joker_roles", "Record each joker's role in your build via required intents: a list of { index, tag, optional note of up to "
-      .. Limits.JOKER_NOTE_MAX .. " characters }. Tagging never sells, buys or moves a joker.", {
+      .. Limits.JOKER_NOTE_MAX .. " characters }, each index at most once. Tagging never sells, buys or moves a joker.", {
       type = "object",
       properties = {
         intents = joker_intents_schema()
       },
       required = { "intents" }
     }),
-    record_plan = action_def("record_plan", "State committed decisions, verb first: hand_plan for this blind, build_plan for your build direction and next upgrade, money_plan for one spend-or-hold call. Optional hand_focus names an exact visible hand as primary with an optional fallback.", {
+    record_plan = action_def("record_plan", "State at least one committed decision, verb first: hand_plan for this blind, build_plan for your build direction and next upgrade, money_plan for one spend-or-hold call. Optional hand_focus names an exact visible hand as primary with an optional fallback.", {
       type = "object",
       properties = plan_schema().properties,
       required = {}

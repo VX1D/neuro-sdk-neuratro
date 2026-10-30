@@ -36,7 +36,7 @@ do
   check("leave_shop: the hold names the misplaced top-level field",
     has(r.message, "Not saved: hand_plan belongs under plan; send it as plan.hand_plan."), tostring(r.message))
   check("leave_shop: the hold names the plan field it does not take",
-    has(r.message, "Not saved: plan.fallback is not a plan field of leave_shop"), tostring(r.message))
+    has(r.message, "Not saved: plan.fallback is not a plan field of this move"), tostring(r.message))
   local review = (G.NEURO.gates and G.NEURO.gates.interest_engine_off or {}).review
   check("leave_shop: the note rides the result only, not the review the next decision repeats",
     review ~= nil and not has(review, "Not saved"), tostring(review))
@@ -53,7 +53,7 @@ do
   check("play_hand: the hold names the misplaced top-level field",
     has(r.message, "Not saved: boss_plan belongs under plan; send it as plan.boss_plan."), tostring(r.message))
   check("play_hand: the hold names the plan field it does not take",
-    has(r.message, "Not saved: plan.hand_plan is not a plan field of play_hand"), tostring(r.message))
+    has(r.message, "Not saved: plan.hand_plan is not a plan field of this move"), tostring(r.message))
 end
 
 done()

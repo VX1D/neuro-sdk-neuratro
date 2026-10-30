@@ -151,19 +151,13 @@ local function prepare_plan(data, required_fields, scope_snapshot, explicitly_wr
   }
   local Gate = require("core.gate")
   local boss_writable = M.boss_plan_writable()
-  local required = required_fields
-  if required == nil and not Gate.shop_revision_is_complete(hand ~= nil, build ~= nil, money ~= nil) then
-    required = Gate.shop_required_fields()
+  local required, missing = required_fields or {}, {}
+  for _, f in ipairs(PLAN_FIELDS) do
+    if required[f.key] and not text[f.key] then missing[#missing + 1] = f.field end
   end
-  if required then
-    local missing = {}
-    for _, f in ipairs(PLAN_FIELDS) do
-      if required[f.key] and not text[f.key] then missing[#missing + 1] = f.field end
-    end
-    if #missing > 0 then
-      return ActionResult.reject("PRECONDITION_FAILED",
-        "Provide the required plan fields with this action: " .. table.concat(missing, ", ") .. ".")
-    end
+  if #missing > 0 then
+    return ActionResult.reject("PRECONDITION_FAILED",
+      "Provide the required plan fields with this action: " .. table.concat(missing, ", ") .. ".")
   end
 
   if not hand and not build and not money and not boss and not focus then
@@ -233,22 +227,16 @@ function M.record_plan_note(data)
   return nil
 end
 
-M.ACCEPTED_UNDECLARED = { record_plan = { plan = true } }
+M.ACCEPTED_UNDECLARED = { record_plan = { plan = true, boss_plan = true } }
 
 M.handle_record_plan = function(data)
-  local nested = type(data.plan) == "table" and data.plan or nil
-  if M.record_plan_note(data) then
-    data.boss_plan = nil
-    if nested then nested.boss_plan = nil end
-    local has = function(t, key) return t and t[key] ~= nil end
-    local any = false
-    for _, key in ipairs({ "hand_plan", "build_plan", "money_plan", "hand_focus" }) do
-      any = any or has(data, key) or has(nested, key)
-    end
-    if not any then return ActionResult.reject("PRECONDITION_FAILED", RECORD_PLAN_BOSS) end
-  end
-  return prepare_plan(data)
+  data.boss_plan = nil
+  if type(data.plan) == "table" then data.plan.boss_plan = nil end
+  local state_name = require("core.state").get_state_name()
+  local commit, err = prepare_plan(data, require("core.plan_requirements").required(state_name, "record_plan"))
+  return commit, err
 end
+M.prepare_joker_intents = prepare_joker_intents
 M.handle_record_joker_roles = prepare_joker_intents
 
 return M

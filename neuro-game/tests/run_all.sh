@@ -217,6 +217,7 @@ run plan_tx       "$LUAJIT" tests/test_plan_transaction.lua
 run plan_review_commit "$LUAJIT" tests/test_plan_review_commit.lua
 run plan_provenance "$LUAJIT" tests/test_plan_provenance.lua
 run plan_gate_surv "$LUAJIT" tests/test_plan_gate_survival.lua
+run plan_guard    "$LUAJIT" tests/test_plan_contract_guard.lua
 run run_reset_hook "$LUAJIT" tests/test_run_reset_hook.lua
 run screen_catalogue "$LUAJIT" tests/test_screen_catalogue.lua
 run window_reg    "$LUAJIT" tests/test_window_registration.lua
