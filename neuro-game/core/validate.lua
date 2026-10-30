@@ -290,7 +290,6 @@ end
 local function refuse(bridge, id, name, rejection, forced)
   local code = rejection.reason_code
   if ActionResult.unrecognised(code) then
-    require("core.neuro_lifecycle").record_failure(name, rejection.message)
     return Execute.answer(bridge, id, name, false, rejection.message, code)
   end
   local success = ActionResult.terminal(code, forced)

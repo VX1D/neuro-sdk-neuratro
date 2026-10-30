@@ -155,8 +155,8 @@ do
   check("exactly one result", #results == 1, #results)
   check("paused result is acknowledged success with no mutation",
     results[1] and results[1].success == true, results[1] and tostring(results[1].success))
-  check("paused action outside the force leaves that force pending",
-    require("core.window").current() ~= nil)
+  check("the paused acknowledgement completes the force, asked again after the pause (ActionWindowResponse.cs:20)",
+    require("core.window").current() == nil)
   D.route_message({ command = "action",
     data = { id = "pause-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   check("same-session redelivery of paused id is suppressed",
@@ -191,8 +191,8 @@ do
     command = "action",
     data = { id = "foreign-setup", name = "exit_overlay_menu", data = "{}" },
   }, sending_bridge())
-  check("an accepted foreign setup action leaves the force pending",
-    require("core.window").current() ~= nil and G.NEURO.force_window.ended_by == nil,
+  check("any accepted action ends the force, listed or not (ActionWindowResponse.cs:20)",
+    require("core.window").current() == nil and G.NEURO.force_window.ended_by == "answered",
     tostring(G.NEURO.force_window and G.NEURO.force_window.ended_by))
 
   arm_foreign_force("SHOP")

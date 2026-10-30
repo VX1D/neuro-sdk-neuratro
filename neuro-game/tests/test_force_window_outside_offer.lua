@@ -100,17 +100,19 @@ do
     forces[1] and forces[1].actions)
 
   G.OVERLAY_MENU = require("tests.helpers").options_overlay()
+  local pw = require("core.window").current()
   local r = answer(b, "exit_overlay_menu", "{}")
   check("P: the out-of-offer answer is admitted", r and r.ok == true
       and r.code == "ACTION_ACCEPTED",
     r and (tostring(r.code) .. "/" .. tostring(r.ok)))
-  check("P: the accepted outside answer leaves the sent offer pending and registered",
-    phase() == Window.FORCED and in_flight() and #withdrawn == 0, phase())
+  check("P: any accepted answer ends the window (ActionWindowResponse.cs:20)",
+    not in_flight() and pw.ended_by == "answered", tostring(pw.ended_by))
   check("P: the decision was not made, so its serial does not move",
     G.NEURO.decision_serial == 1, tostring(G.NEURO.decision_serial))
   local before = #forces
-  tick_for(30)
-  check("P: no second force lands on the pending one", #forces == before, #forces)
+  G.OVERLAY_MENU = nil
+  check("P: a fresh force follows", tick_until(function() return #forces > before end, 30)
+    and #forces == before + 1, #forces)
 end
 
 do
@@ -226,15 +228,16 @@ do
   local r = answer(b, "exit_overlay_menu", "{}")
   check("S: the outside action is accepted", r and r.ok == true and r.code == "ACTION_ACCEPTED",
     r and (tostring(r.code) .. "/" .. tostring(r.ok)))
+  check("S: its success ends the shop window (ActionWindowResponse.cs:20)",
+    w.phase == Window.ENDED and w.ended_by == "answered", tostring(w.ended_by))
+  G.OVERLAY_MENU = nil
   tick_for(30)
   local missing = {}
   for _, name in ipairs(offered) do
     if not G.NEURO._registered_sigs[name] then missing[#missing + 1] = name end
   end
-  check("S: nothing is withdrawn and every offered shop action stays registered",
-    #withdrawn == 0 and #missing == 0, table.concat(missing, ","))
-  check("S: the same force stays pending and no second force is sent",
-    #forces == 1 and phase() == Window.FORCED and require("core.window").current() == w, #forces)
+  check("S: the next shop force re-registers every offered action",
+    #missing == 0 and #forces == 2 and phase() == Window.FORCED, table.concat(missing, ","))
   local per_id = 0
   for _, result in ipairs(results) do
     if result.id == id then per_id = per_id + 1 end

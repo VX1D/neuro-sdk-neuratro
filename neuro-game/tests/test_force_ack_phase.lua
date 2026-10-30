@@ -278,8 +278,8 @@ do
   end
   check("D: the first answer opens the confirmation and every resend is acknowledged",
     codes[1] == "CONFIRMATION_REQUIRED" and followups == rounds - 1, table.concat(codes, ","))
-  check("D: a resend outside the confirmation force leaves that force standing, not re-asked",
-    #forces == forces_at_start + 1, #forces)
+  check("D: each acknowledged resend completes the review force, which is asked again once (ActionWindowResponse.cs:20)",
+    #forces == forces_at_start + rounds, #forces)
   check("D: and the follow-up force is the one standing", phase() == Window.FORCED, phase())
 end
 

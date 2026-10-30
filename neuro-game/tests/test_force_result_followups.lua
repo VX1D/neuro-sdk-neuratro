@@ -74,7 +74,8 @@ do
   local State = require("core.state")
   local real_state = State.get_state_name
   State.get_state_name = function() error("state read failed", 0) end
-  Dispatcher.handle_message({ command = "action", data = { id = "crash-1", name = "play_hand", data = '{"indices":[1,2]}' } },
+  Dispatcher.handle_message(
+    { command = "action", data = { id = "crash-1", name = "play_hand", data = '{"indices":[1,2]}' } },
     G.NEURO)
   State.get_state_name = real_state
   local crash, preflight = H.result_for("crash-1"), H.result_for(pre)

@@ -88,18 +88,10 @@ function M.withdraw(reason)
   return finish(reason)
 end
 
-local function answers(w, name)
-  if not w then return false end
-  if w.set[name] then return true end
-  for _, member in ipairs(ActionPolicy.disposable_group(name) or {}) do
-    if w.set[member] then return true end
-  end
-  return false
-end
-
+-- Any success ends the window, its disposables withdrawn first so a force the action crossed is ignored (README.md:23-27).
 function M.withdrawal(name, group)
   local w = M.current()
-  if not answers(w, name) then return group end
+  if not w then return group end
   local out, seen, offered = {}, {}, false
   for _, list in ipairs({ group or {}, disposables(w.names) }) do
     for _, member in ipairs(list) do
@@ -114,7 +106,8 @@ end
 
 function M.on_result(name, success)
   local w = M.current()
-  if success == true and answers(w, name) then return finish("answered") end
+  if success == true then return finish("answered") end
+  -- The server retries only the force, so only a refused member arms the refusal re-ask clock (SPECIFICATION.md:188).
   if success == false and w and w.phase == FORCED and w.set[name] then
     w.answered_at = Utils.gate_now("force_liveness_timeout")
   end
@@ -123,8 +116,6 @@ end
 function M.on_response()
   local n = neuro()
   if n then n.force_liveness = nil end
-  local w = M.current()
-  if w then w.answered_at = nil end
 end
 
 -- If a success cannot be delivered, withdraw the force: its actions are already gone.
@@ -290,7 +281,9 @@ end
 local function liveness_timeout(w)
   local n = neuro()
   local print_key = fingerprint(w)
+  local refused = w.answered_at and n.last_failed_reason
   if not M.withdraw("liveness_timeout") then return end
+  n.reask_refusal = refused and { state = w.state, reason = refused } or nil
   local record = n.force_liveness
   local repeats = (record and record.fingerprint == print_key) and record.repeats + 1 or 1
   n.force_liveness = { fingerprint = print_key, repeats = repeats, state = w.state }
@@ -418,6 +411,11 @@ local function arm(state_name)
     names = force.actions, set = Utils.list_to_set(force.actions),
     legal = Utils.list_to_set(decisions(Actions.get_valid_actions_for_state(state_name))) }
   n.force_window_id, n.force_window = w.id, w
+  local refusal = n.reask_refusal
+  n.reask_refusal = nil
+  if refusal and refusal.state == state_name then
+    force.query = "Your last answer was refused: " .. refusal.reason .. "\n\n" .. force.query
+  end
   local ok, sent = pcall(n.force_actions, n, Utils.trim_line_ends(context), Utils.trim_line_ends(force.query),
     force.actions, { priority = ForceHelpers.force_priority(), ephemeral_context = force.ephemeral_context ~= false,
       confirmation_proposal_ref = force.confirmation_proposal_ref })
@@ -445,6 +443,7 @@ function M.step(state_name)
   local w = M.current()
   if w then
     if w.phase ~= FORCED then return end
+    -- A force is bound to its decision: leaving it, even into a transitional state, withdraws it.
     if known and state_name ~= "UNKNOWN" and state_name ~= w.state then return M.withdraw("state_changed") end
     if known and n.enabled and not n.llm_paused and widened(state_name, w) then return M.withdraw("widened") end
     if liveness_expired(w) then liveness_timeout(w) end
@@ -466,7 +465,7 @@ function M.reset()
   local n = neuro()
   finish("reset")
   ready_since = nil
-  if n then n.force_liveness = nil end
+  if n then n.force_liveness, n.reask_refusal = nil, nil end
 end
 
 if rawget(_G, "NEURO_TEST") then
