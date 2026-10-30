@@ -73,7 +73,8 @@ local function handle_change_challenge_description(data)
   local id = data.id
   local idx = nil
   if not (G and G.CHALLENGES) then
-    return nil, "The challenge list is not loaded yet, so nothing was selected. Wait for the challenge menu to be shown, then select the challenge again."
+    return nil, ActionResult.wait("The challenge list is not loaded yet, so nothing was selected.",
+      "Wait for the challenge menu to be shown, then select the challenge again.")
   end
   for _, entry in ipairs(DeckFacts.selectable_challenges()) do
     if entry.id == id then

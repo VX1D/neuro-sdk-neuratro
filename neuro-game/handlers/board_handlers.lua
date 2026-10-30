@@ -30,7 +30,8 @@ local BLIND_SLOTS = { small = { "Small", "bl_small" }, big = { "Big", "bl_big" }
 local function handle_select_blind(data)
   local blind = data.blind
   if not G or not G.P_BLINDS then
-    return nil, "The game has not finished loading, so nothing was selected. Wait for the blind selection screen, then select the blind again."
+    return nil, ActionResult.wait("The game has not finished loading, so nothing was selected.",
+      "Wait for the blind selection screen, then select the blind again.")
   end
   local sel_key = Actions.get_selectable_blind_key()
   local current = sel_key and sel_key:lower() or nil
@@ -40,28 +41,32 @@ local function handle_select_blind(data)
   end
 
   if not G.blind_select then
-    return nil, "The blind selection screen is not open, so nothing was selected. Select a blind only while it is shown."
+    return nil, ActionResult.wait("The blind selection screen is not open yet, so nothing was selected.",
+      "Wait for the blind selection screen, then select the blind again.")
   end
   if not (G.FUNCS and type(G.FUNCS.select_blind) == "function") then
-    return nil, "Blind selection cannot run right now, so nothing was selected. Wait a moment, then select the blind again."
+    return nil, ActionResult.wait("Blind selection cannot run yet, so nothing was selected.",
+      "Wait a moment, then select the blind again.")
   end
   local choices = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
   local kind, fallback = BLIND_SLOTS[blind][1], BLIND_SLOTS[blind][2]
   if sel_key ~= kind then
-    return nil, kind .. " blind is not selectable right now (selectable: " .. tostring(current or "none")
-      .. "), so nothing was selected. Wait for the blind selection screen to offer it, then select the blind again."
+    return nil, ActionResult.wait(kind .. " blind is not selectable yet (selectable: " .. tostring(current or "none")
+      .. "), so nothing was selected.", "Wait for the blind selection screen to offer it, then select the blind again.")
   end
   local key = choices and choices[kind]
   local def = (key and G.P_BLINDS[key]) or (fallback and G.P_BLINDS[fallback]) or nil
   if not def then
-    return nil, kind .. " blind's details are not loaded, so nothing was selected. Wait a moment, then select the blind again."
+    return nil, ActionResult.wait(kind .. " blind's details are not loaded yet, so nothing was selected.",
+      "Wait a moment, then select the blind again.")
   end
   return deferred_blind_selection(kind, fallback, def)
 end
 
 local function handle_set_joker_order(data)
   if not G or not G.jokers or not G.jokers.cards then
-    return nil, "Your jokers are not loaded yet, so nothing was reordered. Wait until a run is in progress, then move the joker again."
+    return nil, ActionResult.wait("Your jokers are not loaded yet, so nothing was reordered.",
+      "Wait until a run is in progress, then move the joker again.")
   end
   local from_idx = data.from_index
   local to_idx = data.to_index
@@ -99,7 +104,8 @@ local function handle_skip_blind()
 
   local opt = G.blind_select_opts and G.blind_select_opts[string.lower(on_deck)]
   if not (opt and type(opt.get_UIE_by_ID) == "function") then
-    return nil, "The skip button is not on screen, so nothing was skipped. Wait a moment, then skip the blind again, or select it to play it."
+    return nil, ActionResult.wait("The skip button is not on screen yet, so nothing was skipped.",
+      "Wait a moment, then skip the blind again, or select it to play it.")
   end
 
   return function()

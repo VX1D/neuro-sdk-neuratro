@@ -439,8 +439,8 @@ local function commit_hand(data, action, confirmed, confirmation_tx)
   end
   local function execution_failure(message) return ActionResult.outcome("failed", message) end
   if not G.hand or not G.hand.cards then
-    return ActionResult.reject("TARGET_UNAVAILABLE",
-      "Hand is not available yet. Wait for the hand screen, then select cards.")
+    return nil, ActionResult.wait("The hand is not dealt yet, so nothing was applied.",
+      "Wait for the hand screen, then select cards.")
   end
   if G.play and G.play.cards and #G.play.cards > 0 then
     return nil, ActionResult.wait("A hand is still resolving, so nothing was applied.")
@@ -746,16 +746,18 @@ local function handle_resolve_play(data)
       "The confirmed selection changed underneath the review; nothing was played. Choose a new play.")
   end
 
-  local exec_or_error = commit_hand({ indices = live_indices, _action_id = data._action_id }, "play", true, tx)
-  if type(exec_or_error) ~= "function" then
-    Gate.close_proposal(tx, "invalidated")
-    return exec_or_error
+  local exec, refusal = commit_hand({ indices = live_indices, _action_id = data._action_id }, "play", true, tx)
+  if type(exec) ~= "function" then
+    if not (type(refusal) == "table" and refusal.reason_code == "TRANSITION_PENDING") then
+      Gate.close_proposal(tx, "invalidated")
+    end
+    return exec, refusal
   end
   if not Gate.begin_commit(tx) then
     return abandon_confirmation(tx,
       "The review became stale before commit; nothing was played. Choose a new play.")
   end
-  return exec_or_error
+  return exec
 end
 
 function M.committing_indices()

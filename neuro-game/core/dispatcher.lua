@@ -95,7 +95,7 @@ local ACTION_PREFLIGHTS = {
 
 function Dispatcher.skip_pack_reject_reason()
   if require("core.validate").stop_use_active() then
-    return "The pack is still resolving the last action. Wait a moment, then skip."
+    return ActionResult.wait("The pack is still resolving the last action, so nothing was applied.")
   end
   return nil
 end
@@ -106,10 +106,12 @@ local function handle_simple_action(name)
   local refusal = ActionRegistry.unavailable_reason(name)
   if refusal then return nil, refusal end
   if name == "reroll_shop" and not G.shop then
-    return nil, "Shop is not open. Wait for the shop screen."
+    return nil, ActionResult.wait("The shop is not open yet, so nothing was applied.",
+      "Wait for the shop screen, then choose again.")
   end
   if name == "reroll_boss" and not G.blind_select then
-    return nil, "Blind select is not open. Wait for the blind select screen."
+    return nil, ActionResult.wait("The blind select screen is not open yet, so nothing was applied.",
+      "Wait for the blind select screen, then choose again.")
   end
   if name == "skip_pack" then
     local reason = Dispatcher.skip_pack_reject_reason()
@@ -319,13 +321,16 @@ end)
 local NO_CANDIDATE_REASON = {
   buy_from_shop = "Nothing on offer can be bought right now (money, free slots, or an empty shop); sell, reroll or leave instead.",
   sell_card = "Nothing you own can be sold right now; choose another action.",
-  select_blind = "No blind is selectable right now; wait for the blind select screen.",
+  select_blind = function()
+    return ActionResult.wait("No blind is selectable yet, so nothing was selected.",
+      "Wait for the blind select screen, then choose again.")
+  end,
 }
 for name, reason in pairs(NO_CANDIDATE_REASON) do
   local candidate_name, refusal = name, reason
-  ActionRegistry.bind_availability(candidate_name, function()
+  ActionRegistry.bind_availability(candidate_name, function(data)
     if #ActionRegistry.candidates(candidate_name) > 0 then return true end
-    return false, refusal
+    return false, type(refusal) == "function" and refusal(data) or refusal
   end)
 end
 

@@ -39,6 +39,23 @@ do
 end
 
 do
+  H.board({ confirm_hand = false }); H.tick(8)
+  local hand = G.hand.cards
+  G.hand.cards = {}
+  local before = H.count("actions/force")
+  H.send("play_hand", { indices = { 1, 2 } })
+  H.tick(1)
+  local r = H.results()[#H.results()]
+  check("D: a play before the draw acknowledges the force instead of failing it (SPECIFICATION.md:191-192)",
+    r.success == true and H.phase() == "ended" and tostring(r.message):find("offered again", 1, true) ~= nil,
+    tostring(r.success) .. " " .. tostring(r.message))
+  G.hand.cards = hand
+  H.tick(3)
+  check("D: the decision is asked again once the hand is dealt", H.count("actions/force") == before + 1,
+    before .. "->" .. H.count("actions/force"))
+end
+
+do
   H.board(); H.tick(8)
   local before = H.count("actions/force")
   require("core.window").on_result("play_hand", true)

@@ -64,7 +64,8 @@ end
 
 local function prepare_joker_intents(data)
   if not (G and G.jokers and G.jokers.cards) then
-    return nil, "Your jokers are not loaded yet, so nothing was tagged. Wait until a run is in progress, then record the roles again."
+    return nil, ActionResult.wait("Your jokers are not loaded yet, so nothing was tagged.",
+      "Wait until a run is in progress, then record the roles again.")
   end
   local njok = #G.jokers.cards
   if njok < 1 then return nil, "You have no jokers to tag." end

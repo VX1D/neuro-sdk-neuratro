@@ -294,7 +294,8 @@ local SKIPPABLE_BLINDS = { Small = true, Big = true }
 
 local function blind_skip_blocker()
   if not (G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states) then
-    return "The blind selection screen is not loaded yet, so nothing was skipped. Wait for it to be shown, then skip the blind again."
+    return ActionResult.wait("The blind selection screen is not loaded yet, so nothing was skipped.",
+      "Wait for it to be shown, then skip the blind again.")
   end
   local on_deck = get_selectable_blind_key()
   if on_deck == "Boss" then
@@ -478,7 +479,8 @@ end
 
 local function validate_play_or_discard(action_name)
   if not (G and G.hand and G.hand.cards and #G.hand.cards > 0) then
-    return false, "Your hand has no cards yet; wait for the draw, then choose again."
+    return false, ActionResult.wait("Your hand has no cards yet, so nothing was applied.",
+      "Wait for the draw, then choose again.")
   end
   local cr = G.GAME and G.GAME.current_round
   if action_name == "play_hand" then
@@ -589,7 +591,7 @@ VALIDATORS.reroll_shop = function()
   if not G or not G.GAME or not G.GAME.dollars then return false, "The shop is not open" .. CHOOSE_OFFERED end
   local cost = G.GAME.current_round and G.GAME.current_round.reroll_cost or 0
   if type(cost) ~= "number" or cost < 0 then
-    return false, "The reroll price is not set yet; choose another action."
+    return false, ActionResult.wait("The reroll price is not set yet, so nothing was rerolled.")
   end
   local spendable = get_spendable_dollars()
   local free = tonumber(G.GAME.current_round and G.GAME.current_round.free_rerolls or 0) or 0
@@ -646,7 +648,8 @@ end
 VALIDATORS.cash_out = function()
   if not GameFacts.cash_out_button() then
     return false, G and G.round_eval
-      and "The round summary is still counting up the payout, so there is no Cash Out button yet; cash out again once it appears."
+      and ActionResult.wait("The round summary is still counting up the payout, so there is no Cash Out button yet.",
+        "Cash out again once it appears.")
       or "There is no round payout to collect on this screen; choose one of the actions offered now."
   end
 end
@@ -669,7 +672,8 @@ for name, validator in pairs(VALIDATORS) do
   ActionRegistry.bind_availability(name, function()
     local verdict, reason = predicate(action_name)
     if verdict ~= false then return true end
-    assert(type(reason) == "string" and reason ~= "", "validator for " .. action_name .. " refused without a reason")
+    assert(ActionResult.is_error(reason) or (type(reason) == "string" and reason ~= ""),
+      "validator for " .. action_name .. " refused without a reason")
     return false, reason
   end)
 end
