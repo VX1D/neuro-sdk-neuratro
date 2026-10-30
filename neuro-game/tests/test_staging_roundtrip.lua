@@ -113,7 +113,8 @@ end
 
 local function route(Dispatcher, id, name, data, bridge)
   bridge = bridge or make_bridge()
-  Dispatcher.route_message({ command = "action", data = { id = id, name = name, data = data } }, bridge)
+  Dispatcher.route_message({ command = "action", data = { id = id, name = name,
+    data = require("tests.helpers").with_card_names(name, data) } }, bridge)
   return bridge
 end
 
@@ -229,6 +230,7 @@ function M.run()
       '{"area":"consumables","index":1,"hand_indices":[1]}')
     drive(Staging)
     if #bridge.results ~= 1 then fail(string.format("F: want 1 result, got %d", #bridge.results)) end
+    if bridge.results[1].ok ~= true then fail("F: use_consumable refused: " .. tostring(bridge.results[1].message)) end
   end
 
   do

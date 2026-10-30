@@ -920,7 +920,8 @@ do
     }, { hc[1], hc[2], hc[3], hc[6], hc[7] }, nil
   end
   local q = require("tests.helpers").force_payload("SELECTING_HAND")
-  check("force query carries ready indices", q:find("Full House (cards 1, 2, 3, 6, 7)", 1, true) ~= nil)
+  check("force query carries ready indices",
+    require("tests.helpers").index_only(q):find("Full House (cards 1, 2, 3, 6, 7)", 1, true) ~= nil)
 
   G.FUNCS.get_poker_hand_info = nil
 end

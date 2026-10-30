@@ -446,6 +446,21 @@ local function refuse_preflight(bridge, id, name, rejection, forced, tx, weak_fi
 end
 
 
+local HAND_MOVES = { play_hand = true, discard_hand = true }
+
+-- The optional cards echo binds the indices to the hand she saw; only a sent echo is checked.
+local function stale_hand_binding(name, data)
+  local cards = G and G.hand and G.hand.cards
+  if not HAND_MOVES[name] or CardArea.echo(data.cards) == nil or type(cards) ~= "table" or type(data.indices) ~= "table" then
+    return nil
+  end
+  for _, idx in ipairs(data.indices) do
+    if not cards[idx] then return nil end
+  end
+  local _, stale = CardArea.validate_hand_cards(data.indices, data.cards, cards)
+  return stale
+end
+
 local function parameters(msg, bridge, name)
   Actions.get_static_actions()
   local schema = (ActionRegistry.get(name) or {}).schema or {}
@@ -474,6 +489,8 @@ local function parameters(msg, bridge, name)
   if not ok_schema then
     return nil, ActionResult.error("SCHEMA_INVALID", "Invalid action parameters: " .. schema_err)
   end
+  local stale = stale_hand_binding(name, data)
+  if stale then return nil, ActionResult.error("STALE_TARGET", stale), data end
   strip_nulls(data, schema)
   data._action_name = name
   return data

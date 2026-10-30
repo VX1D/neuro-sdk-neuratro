@@ -38,6 +38,78 @@ local function validate_hand_indices(indices, max_cards, cap)
   return out, nil
 end
 
+local function hand_card_name(card)
+  if not require("facts.public_card_identity").is_public(card) then return "face-down" end
+  return Utils.playing_card_label(card)
+end
+
+local function name_key(text)
+  return Utils.normalize_ws(tostring(text or "")):lower()
+end
+
+local function hand_listing(cards)
+  local rows = {}
+  for i, card in ipairs(cards) do rows[i] = i .. ". " .. hand_card_name(card) end
+  return table.concat(rows, ", ")
+end
+
+-- An optional name echo; an empty one names nothing, so it is treated as absent.
+local function echo(value)
+  if value == "" or (type(value) == "table" and next(value) == nil) then return nil end
+  return value
+end
+
+local function validate_hand_cards(indices, names, cards, field)
+  field = field or "cards"
+  if type(names) ~= "table" or #names ~= #indices then
+    return nil, string.format("Send one card name per hand position in %s (%d %s, %d %s). Your hand now: %s.",
+      field, #indices, #indices == 1 and "position" or "positions", type(names) == "table" and #names or 0,
+      (type(names) == "table" and #names or 0) == 1 and "name" or "names", hand_listing(cards))
+  end
+  -- The echo names the selected cards in any order, so it is matched as a multiset (bipartite matching).
+  local actual, owner = {}, {}
+  for j, idx in ipairs(indices) do actual[j] = name_key(hand_card_name(cards[idx])) end
+  local function fits(i, j)
+    return name_key(names[i]):sub(1, #actual[j]) == actual[j]
+  end
+  local function claim(i, seen)
+    for j = 1, #indices do
+      if not seen[j] and fits(i, j) then
+        seen[j] = true
+        if not owner[j] or claim(owner[j], seen) then
+          owner[j] = i
+          return true
+        end
+      end
+    end
+    return false
+  end
+  for i = 1, #names do
+    if not claim(i, {}) then
+      local held, named, rows = 0, 0, {}
+      for j, idx in ipairs(indices) do
+        rows[j] = idx .. ". " .. hand_card_name(cards[idx])
+        if fits(i, j) then held = held + 1 end
+      end
+      for k = 1, #names do
+        if name_key(names[k]) == name_key(names[i]) then named = named + 1 end
+      end
+      local selected = table.concat(rows, ", ")
+      local fact
+      if held == 0 then
+        fact = string.format("%s is not among the cards at the positions you selected (%s)", tostring(names[i]), selected)
+      elseif named > held then
+        fact = string.format("You named %s %d times, but the positions you selected (%s) hold it %d %s",
+          tostring(names[i]), named, selected, held, held == 1 and "time" or "times")
+      else
+        fact = string.format("The names you sent do not match the cards at the positions you selected (%s)", selected)
+      end
+      return nil, string.format("%s, so nothing was done. Your hand now: %s.", fact, hand_listing(cards))
+    end
+  end
+  return true
+end
+
 local function get_area(area_name)
   if not area_name or not G then
     return nil
@@ -196,4 +268,4 @@ local function resolve_target(data, rules)
   return nil, nil, nil, "STALE_TARGET", name_err
 end
 
-return { bound_echo = bound_echo, resolve_target = resolve_target, TARGET_RULES = TARGET_RULES, validate_hand_indices = validate_hand_indices, get_area = get_area, validate_area_card = validate_area_card, validate_index = validate_index, AREA_ALIASES = AREA_ALIASES, blind_size_rule_error = blind_size_rule_error }
+return { echo = echo, bound_echo = bound_echo, resolve_target = resolve_target, TARGET_RULES = TARGET_RULES, validate_hand_indices = validate_hand_indices, validate_hand_cards = validate_hand_cards, hand_card_name = hand_card_name, get_area = get_area, validate_area_card = validate_area_card, validate_index = validate_index, AREA_ALIASES = AREA_ALIASES, blind_size_rule_error = blind_size_rule_error }

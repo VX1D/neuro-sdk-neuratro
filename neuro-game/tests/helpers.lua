@@ -411,6 +411,52 @@ function M.review(name, stage, data, ctx)
   return rejection
 end
 
+local NAMED_POSITIONS = {
+  play_hand = { indices = "cards" }, discard_hand = { indices = "cards" },
+  use_consumable = { hand_indices = "hand_cards" }, choose_pack_card = { hand_indices = "hand_cards" },
+  use_directional_consumable = { left_index = "left_card", right_index = "right_card" },
+  choose_directional_pack_card = { left_index = "left_card", right_index = "right_card" },
+}
+
+function M.with_card_names(name, data)
+  local fields = NAMED_POSITIONS[name]
+  if not fields then return data end
+  local json = require("util.neuro_json")
+  local decoded = data
+  if type(data) == "string" then
+    local ok, value = pcall(json.decode, data)
+    if not ok or type(value) ~= "table" then return data end
+    decoded = value
+  end
+  if type(decoded) ~= "table" then return data end
+  local hand = G and G.hand and G.hand.cards or {}
+  local function label(idx)
+    local card = hand[tonumber(idx)]
+    return card and require("facts.card_area_util").hand_card_name(card) or "?"
+  end
+  local changed = false
+  for positions, names in pairs(fields) do
+    local value = decoded[positions]
+    if decoded[names] == nil and value ~= nil then
+      if type(value) == "table" then
+        local out = {}
+        for i, idx in ipairs(value) do out[i] = label(idx) end
+        decoded[names] = out
+      else
+        decoded[names] = label(value)
+      end
+      changed = true
+    end
+  end
+  if not changed then return data end
+  return type(data) == "string" and json.encode(decoded) or decoded
+end
+
+function M.index_only(text)
+  return (tostring(text):gsub("(%d+): [^,()]+", "%1"))
+end
+
+-- Inbound actions carry what she sends: positions only, no card names (her real inbox); a test adds names explicitly.
 function M.inbound_action(name, id, data)
   local json = require("util.neuro_json")
   return {

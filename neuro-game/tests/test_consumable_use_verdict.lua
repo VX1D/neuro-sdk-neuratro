@@ -49,7 +49,7 @@ end
 
 local function use(payload)
   payload._action_id = payload._action_id or ("use-" .. tostring(payload.name))
-  local exec, err = UseCard.handle_use_card(payload)
+  local exec, err = UseCard.handle_use_card(require("tests.helpers").with_card_names("use_consumable", payload))
   if type(exec) == "function" then exec() end
   return exec, err
 end

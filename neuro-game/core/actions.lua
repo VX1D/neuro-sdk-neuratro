@@ -79,6 +79,10 @@ local function boss_plan_schema()
   }
 end
 
+local function card_names_schema(max_items)
+  return { type = "array", items = { type = "string", minLength = 1 }, maxItems = max_items }
+end
+
 local function confirm_hand_on()
   local HH = Utils.lazy_require("handlers.hand_handlers")
   return not (HH and HH.confirm_hand_on) or HH.confirm_hand_on()
@@ -120,13 +124,16 @@ local function card_action_schema(area, directional)
   if directional then
     properties.name.minLength = 1
     properties.left_index = { type = "integer", minimum = 1 }
+    properties.left_card = { type = "string" }
     properties.right_index = { type = "integer", minimum = 1 }
+    properties.right_card = { type = "string" }
     required = { "area", "index", "name", "left_index", "right_index" }
   else
     properties.hand_indices = {
       type = "array", items = { type = "integer", minimum = 1 },
-      minItems = 1, maxItems = Limits.hand_select_max(), uniqueItems = true,
+      maxItems = Limits.hand_select_max(), uniqueItems = true,
     }
+    properties.hand_cards = card_names_schema(Limits.hand_select_max())
   end
   return { type = "object", properties = properties, required = required }
 end
@@ -141,13 +148,13 @@ local function build_param_actions()
       },
       required = { "blind" }
     }),
-    use_consumable = action_def("use_consumable", "Use an owned consumable at required area and index (include its name, and hand_indices when it targets hand cards).",
+    use_consumable = action_def("use_consumable", "Use an owned consumable at required area and index (include its name, and hand_indices when it targets hand cards; an optional hand_cards naming them must match your hand).",
       card_action_schema("consumables")),
-    use_directional_consumable = action_def("use_directional_consumable", "Use a directional consumable with required area, index, name, left_index (the hand card it applies to), and right_index (the card it takes from).",
+    use_directional_consumable = action_def("use_directional_consumable", "Use a directional consumable with required area, index, name, left_index (the hand card it applies to), and right_index (the card it takes from); optional left_card/right_card must name those cards.",
       card_action_schema("consumables", true)),
-    choose_pack_card = action_def("choose_pack_card", "Take a card from the open, already-paid pack at required area and index (include its name, and hand_indices when it targets hand cards). A picked consumable is used at once.",
+    choose_pack_card = action_def("choose_pack_card", "Take a card from the open, already-paid pack at required area and index (include its name, and hand_indices when it targets hand cards; an optional hand_cards naming them must match your hand). A picked consumable is used at once.",
       card_action_schema("booster_pack")),
-    choose_directional_pack_card = action_def("choose_directional_pack_card", "Choose a directional card from the already-paid open pack with required area, index, name, left_index (the hand card it applies to), and right_index (the card it takes from). A picked consumable is used at once.",
+    choose_directional_pack_card = action_def("choose_directional_pack_card", "Choose a directional card from the already-paid open pack with required area, index, name, left_index (the hand card it applies to) and right_index (the card it takes from); optional left_card/right_card must name them. A picked consumable is used at once.",
       card_action_schema("booster_pack", true)),
     buy_from_shop = action_def("buy_from_shop", "Buy the shop item at required area and index (include its offered name); use=true only for a direct-use consumable. The first voucher buy executes nothing and returns a review; the next is final.",
       {
@@ -173,7 +180,7 @@ local function build_param_actions()
       required = { "area", "index" }
     }),
     play_hand = action_def("play_hand",
-      "Play the hand cards at the required 1-based indices as one poker hand. "
+      "Play the hand cards at the required 1-based indices as one poker hand; an optional cards naming them must match your hand. "
       .. (confirm_hand_on() and "A first send that returns a review plays nothing; answer the review yes or no." or "It commits on the first send, spending one hand."),
       {
       type = "object",
@@ -183,13 +190,14 @@ local function build_param_actions()
           items = { type = "integer", minimum = 1 },
           minItems = 1, maxItems = Limits.play_select_max(), uniqueItems = true
         },
+        cards = card_names_schema(Limits.play_select_max()),
         plan = boss_plan_schema()
       },
       required = { "indices" }
     }),
     resolve_play = action_def("resolve_play", "Answer the open play review with required answer: yes plays the reviewed cards, no plays nothing.",
       resolve_play_schema()),
-    discard_hand = action_def("discard_hand", "Discard distinct 1-based hand indices via required indices then draw replacement cards. It is final and spends one discard, not a hand.", {
+    discard_hand = action_def("discard_hand", "Discard distinct 1-based hand indices via required indices (an optional cards naming them must match your hand), then draw replacement cards. It is final and spends one discard, not a hand.", {
       type = "object",
       properties = {
         indices = {
@@ -197,6 +205,7 @@ local function build_param_actions()
           items = { type = "integer", minimum = 1 },
           minItems = 1, maxItems = math.max(1, Limits.discard_select_max()), uniqueItems = true
         },
+        cards = card_names_schema(math.max(1, Limits.discard_select_max())),
         plan = boss_plan_schema()
       },
       required = { "indices" }
@@ -844,6 +853,8 @@ local function narrow_prompt_schema(schema)
     end
     indices.minItems = math.max(1, lo)
     indices.maxItems = math.max(indices.minItems, hi)
+    local cards = out.properties.cards
+    if cards then cards.minItems, cards.maxItems = indices.minItems, indices.maxItems end
   end
   return out
 end
