@@ -234,8 +234,12 @@ function M.pre_action(name, data, bridge)
   end
   local Validate = require("core.validate")
   local forced = require("core.window").forced(name)
-  local refusal, streak = Validate._test.admission(name, data or {}, forced,
-    require("core.state").get_state_name(), bridge)
+  local busy, retry = Validate.busy_reason(name, bridge)
+  local refusal = busy and require("core.action_result").wait(busy, retry) or nil
+  local streak
+  if not refusal then
+    refusal, streak = Validate._test.admission(name, data or {}, forced, require("core.state").get_state_name())
+  end
   if refusal then
     if refusal.reason_code == "CONFIRMATION_REQUIRED" then require("core.gate").delivered(refusal) end
     return false, refusal.message, require("core.action_result").terminal(refusal.reason_code, forced),

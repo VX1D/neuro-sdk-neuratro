@@ -36,7 +36,7 @@ local LOCK = { leave_shop = "leave_shop", reroll_shop = "shop_reroll", skip_blin
 local LATCH = { cash_out = 1.0, select_blind = 0.8, reroll_boss = 0.5, skip_pack = 0.8 }
 local LOCK_LEAK_S = 5.0
 
-local BUSY = "That just fired and is still resolving on screen, so nothing was applied."
+local BUSY = "The game is still resolving an earlier move or effect on screen, so nothing was applied."
 local ENGINE_BUSY = "The game is busy with something on screen, so nothing was applied."
 
 local latched, lock_seen, blocked_since = {}, {}, {}
@@ -378,20 +378,60 @@ end
 local UNMODELLED_OFFER = { start_run = true, start_challenge_run = true }
 local function unmodelled(state_name) return not state_name or state_name == "UNKNOWN" end
 
-local function unavailable_message(name, state_name)
-  if Actions.get_state_action_set(state_name)[name] or (UNMODELLED_OFFER[name] and unmodelled(state_name)) then
-    return "That move can't be used right now. "
-      .. (Actions.unavailable_reason(name) or "Choose from the moves you are offered.")
+local function offered_moves(state_name, except)
+  local phrases = {}
+  for _, name in ipairs(Actions.get_valid_actions_for_state(state_name)) do
+    if name ~= except and ActionRegistry.is_registered(name) then phrases[#phrases + 1] = ActionRegistry.phrase(name) end
   end
-  return "That move isn't part of this screen. Choose from the moves you are offered."
+  return phrases
+end
+
+local OFF_SCREEN_HINT = {
+  record_plan = "Your plan is recorded at blind select, after the round or in the shop; "
+    .. "on a Boss round a play or discard can carry plan.boss_plan.",
+}
+
+local LISTS_USABLE_MOVES = { exit_overlay_menu = true }
+
+local function moves_sentence(label, moves)
+  return #moves > 0 and (" The moves " .. label .. ": " .. table.concat(moves, "; ") .. ".") or ""
+end
+
+local function screen_move(name, state_name)
+  return Actions.get_state_action_set(state_name)[name] or (UNMODELLED_OFFER[name] and unmodelled(state_name))
+end
+
+local function unavailable_message(name, state_name, data)
+  if screen_move(name, state_name) then
+    local usable = LISTS_USABLE_MOVES[name] and offered_moves(state_name, name) or {}
+    return "That move can't be used right now. "
+      .. (Actions.unavailable_reason(name, data) or "Choose from the moves you are offered.")
+      .. moves_sentence("you can use now", usable)
+  end
+  local hint = OFF_SCREEN_HINT[name] and (" " .. OFF_SCREEN_HINT[name]) or ""
+  local offer = offered_moves(state_name)
+  if #offer == 0 then return "That move isn't part of this screen." .. hint .. " Choose from the moves you are offered." end
+  return "That move isn't part of this screen." .. hint .. moves_sentence("offered now", offer)
+end
+
+local function unavailable(name, state_name, data)
+  if screen_move(name, state_name) then
+    local rejection = Actions.unavailable_rejection(name, data)
+    if ActionResult.is_error(rejection) then return rejection end
+  end
+  return ActionResult.error("ACTION_UNAVAILABLE", unavailable_message(name, state_name, data))
+end
+
+local function off_screen(name, state_name)
+  local screen = Actions.screen_action_set(state_name)
+  return screen ~= nil and not screen[name]
 end
 
 local function offered(name, state_name)
-  if unmodelled(state_name) then return UNMODELLED_OFFER[name] == true and Actions.is_action_valid(name) end
   for _, candidate in ipairs(Actions.get_valid_actions_for_state(state_name)) do
     if candidate == name then return true end
   end
-  return false
+  return unmodelled(state_name) and UNMODELLED_OFFER[name] == true and Actions.is_action_valid(name)
 end
 
 local function note_hold(rejection, ...)
@@ -451,9 +491,7 @@ local function parameters(msg, bridge, name)
   return data
 end
 
-local function admission(name, data, forced, state_name, bridge)
-  local busy, retry = M.busy_reason(name, bridge)
-  if busy then return ActionResult.wait(busy, retry) end
+local function admission(name, data, forced, state_name)
   if name ~= "resolve_play" and Gate.stale_mutator(name) then
     return ActionResult.error("POLICY_ACKNOWLEDGED",
       "A play review is awaiting your answer; this move was acknowledged without changing anything. Answer the review first.")
@@ -461,9 +499,7 @@ local function admission(name, data, forced, state_name, bridge)
   local overlay = Actions.overlay_block_reason(name)
   if overlay and forced then return ActionResult.wait(Actions.OVERLAY_FACT, Actions.OVERLAY_RETRY, Actions.OVERLAY_REASKED) end
   if overlay then return ActionResult.error("ACTION_UNAVAILABLE", overlay) end
-  if not offered(name, state_name) then
-    return ActionResult.error("ACTION_UNAVAILABLE", unavailable_message(name, state_name))
-  end
+  if not offered(name, state_name) then return unavailable(name, state_name, data) end
   local review = Gate.check("admission", name, data)
   if review then return review end
   local streak = not UNGATED[name] and next_streak(state_name, name, data) or nil
@@ -531,14 +567,28 @@ function M.validate(msg, bridge)
       "Paused by operator -- nothing happened. Wait; you will be asked again shortly.", "TRANSITION_PENDING")
     return nil
   end
+  local state_name = State.get_state_name()
+  local busy, retry = M.busy_reason(name, bridge)
+  if busy then
+    refuse(bridge, id, name, ActionResult.wait(busy, retry), forced)
+    return nil
+  end
+  local overlay_move = Utils.list_to_set(Actions.overlay_actions(state_name) or {})[name]
+  if not overlay_move and not unmodelled(state_name) and not Actions.screen_action_set(state_name) then
+    refuse(bridge, id, name, ActionResult.wait("The game is still changing screens, so nothing was applied."), forced)
+    return nil
+  end
+  if off_screen(name, state_name) then
+    refuse(bridge, id, name, unavailable(name, state_name), forced)
+    return nil
+  end
   local data, bad = parameters(msg, bridge, name)
   if not data then
     refuse(bridge, id, name, bad, forced)
     return nil
   end
   local field_note = unknown_fields_note(name, data)
-  local state_name = State.get_state_name()
-  local rejection, streak = admission(name, data, forced, state_name, bridge)
+  local rejection, streak = admission(name, data, forced, state_name)
   if rejection then
     refuse(bridge, id, name, note_hold(rejection, PlanTransaction.ignored_note(name, data), field_note), forced)
     return nil

@@ -736,13 +736,19 @@ function Actions.registrable(name)
   return false
 end
 
-function Actions.unavailable_reason(action_name)
+-- A string, or an ActionResult error such as a wait that the caller must answer as such.
+function Actions.unavailable_rejection(action_name, data)
   local overlay = Actions.overlay_block_reason(action_name)
   if overlay then return overlay end
   if proposal_blocks(action_name) then
     return "A play review is open; answer it yes or no first."
   end
-  return ActionRegistry.unavailable_reason(action_name)
+  return ActionRegistry.unavailable_reason(action_name, data)
+end
+
+function Actions.unavailable_reason(action_name, data)
+  local reason = Actions.unavailable_rejection(action_name, data)
+  return ActionResult.is_error(reason) and reason.message or reason
 end
 
 function Actions.get_valid_actions_for_state(state_name)

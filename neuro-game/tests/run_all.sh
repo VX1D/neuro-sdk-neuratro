@@ -220,6 +220,7 @@ run plan_gate_surv "$LUAJIT" tests/test_plan_gate_survival.lua
 run run_reset_hook "$LUAJIT" tests/test_run_reset_hook.lua
 run screen_catalogue "$LUAJIT" tests/test_screen_catalogue.lua
 run window_reg    "$LUAJIT" tests/test_window_registration.lua
+run overlay_trans "$LUAJIT" tests/test_overlay_transitional.lua
 run bridge_hash_lj20 "$LUAJIT" tests/test_bridge_hash_luajit20.lua
 run admission_paths "$LUAJIT" tests/test_admission_paths.lua
 run cash_out_ready "$LUAJIT" tests/test_cash_out_ready.lua
