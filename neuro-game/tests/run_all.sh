@@ -225,6 +225,8 @@ run window_reg    "$LUAJIT" tests/test_window_registration.lua
 run overlay_trans "$LUAJIT" tests/test_overlay_transitional.lua
 run review_ack    "$LUAJIT" tests/test_review_acknowledgement.lua
 run card_binding  "$LUAJIT" tests/test_card_binding.lua
+run sell_review_key "$LUAJIT" tests/test_sell_review_key.lua
+run mid_round_sell  "$LUAJIT" tests/test_mid_round_sell_reason.lua
 run stray_hand_idx  "$LUAJIT" tests/test_stray_hand_indices.lua
 run persona_memory "$LUAJIT" tests/test_persona_memory.lua
 run refused_reask "$LUAJIT" tests/test_refused_reask_clock.lua

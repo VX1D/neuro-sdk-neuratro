@@ -253,16 +253,19 @@ ActionRegistry.bind_candidates("buy_from_shop", function()
   return out
 end)
 
+local function mid_round_sell_rule(subject)
+  local reason = require("facts.boss.legality").in_round_sell_note()
+  return "Mid-round, a card can be sold only when its sale does something this round"
+    .. (reason and (": " .. reason) or "") .. ". Sell " .. subject .. " in the shop instead."
+end
+
 ActionRegistry.bind_payload_guard("sell_card", function(data)
   local Legality = require("facts.boss.legality")
   if not Legality.sell_blocked_now() then return true end
   local _, card, index = CardArea.resolve_target(data, CardArea.TARGET_RULES.sell_card)
   if not card or not Legality.sell_blocked_now(card) then return true end
-  local reason = Legality.in_round_sell_note()
   return false, ActionResult.error("ACTION_UNAVAILABLE",
-    "Mid-round, a card can be sold only when its sale does something this round"
-      .. (reason and (": " .. reason) or "") .. ". Sell " .. require("facts.public_card_identity").label(card, data.area, index)
-      .. " in the shop instead.")
+    mid_round_sell_rule(require("facts.public_card_identity").label(card, data.area, index)))
 end)
 
 ActionRegistry.bind_candidates("sell_card", function()
@@ -316,7 +319,27 @@ end)
 
 local NO_CANDIDATE_REASON = {
   buy_from_shop = "Nothing on offer can be bought right now (money, free slots, or an empty shop); sell, reroll or leave instead.",
-  sell_card = "Nothing you own can be sold right now; choose another action.",
+  sell_card = function(data)
+    local held, empty = {}, {}
+    for _, entry in ipairs({ { "jokers", G and G.jokers }, { "consumables", G and G.consumeables } }) do
+      local cards, sellable = (entry[2] and entry[2].cards) or {}, 0
+      for _, card in ipairs(cards) do
+        if not (card.ability and card.ability.eternal) then sellable = sellable + 1 end
+      end
+      if sellable > 0 then held[#held + 1] = entry[1] elseif #cards == 0 then empty[#empty + 1] = entry[1] end
+    end
+    if #held == 0 or not require("facts.boss.legality").sell_blocked_now() then
+      return "Nothing you own can be sold right now; choose another action."
+    end
+    local subject = #held > 1 and "your cards" or ("your " .. held[1])
+    if type(data) == "table" and data.area ~= nil then
+      local _, card, index, _, err = CardArea.resolve_target(data, CardArea.TARGET_RULES.sell_card)
+      if card then subject = require("facts.public_card_identity").label(card, data.area, index) end
+      return (card and "" or (err .. " ")) .. mid_round_sell_rule(subject)
+    end
+    local none = #empty > 0 and ("You hold no " .. empty[1] .. ". ") or ""
+    return none .. mid_round_sell_rule(subject)
+  end,
   select_blind = function()
     return ActionResult.wait("No blind is selectable yet, so nothing was selected.",
       "Wait for the blind select screen, then choose again.")

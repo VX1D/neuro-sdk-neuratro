@@ -72,10 +72,6 @@ local function sell_context_key()
   local n = G and G.NEURO or {}
   local parts = common_review_parts("sell_joker")
   parts[#parts + 1] = ordered_area_identity(G and G.jokers, "sell_cost")
-  parts[#parts + 1] = sorted_map_identity(n.joker_intents)
-  parts[#parts + 1] = tostring(n.joker_intent_revision or 0)
-  parts[#parts + 1] = tostring(n.plan_revision or 0)
-  parts[#parts + 1] = tostring(n.plan and n.plan.build or "")
   local sold = n.jokers_sold
   parts[#parts + 1] = tostring(type(sold) == "table" and sold.count or 0)
   return table.concat(parts, "|")
