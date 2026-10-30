@@ -217,6 +217,7 @@ run plan_tx       "$LUAJIT" tests/test_plan_transaction.lua
 run plan_review_commit "$LUAJIT" tests/test_plan_review_commit.lua
 run plan_provenance "$LUAJIT" tests/test_plan_provenance.lua
 run plan_gate_surv "$LUAJIT" tests/test_plan_gate_survival.lua
+run run_reset_hook "$LUAJIT" tests/test_run_reset_hook.lua
 run bridge_hash_lj20 "$LUAJIT" tests/test_bridge_hash_luajit20.lua
 run admission_paths "$LUAJIT" tests/test_admission_paths.lua
 run cash_out_ready "$LUAJIT" tests/test_cash_out_ready.lua
