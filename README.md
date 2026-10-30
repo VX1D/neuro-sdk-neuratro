@@ -62,7 +62,11 @@ Follow the instructions on the [Lovely](https://github.com/ethangreen-dev/lovely
 
 Should sit directly inside `Mods\`, not nested further.
 
-### 3. Build the bridge
+### 3. Get the bridge
+
+A release ships a prebuilt `neuro-bridge-<version>-windows-x86_64.exe` next to `run-bridge.ps1`; nothing to build.
+
+From a source checkout, build it once:
 
 ```powershell
 cd neuro-bridge-rs
@@ -76,7 +80,7 @@ Binary ends up at `neuro-bridge-rs\target\release\neuro-bridge.exe`.
 ```powershell
 .\run-bridge.ps1        # starts bridge, connects to ws://127.0.0.1:8000
 ```
-The launcher validates the WebSocket URL and resolves a usable IPC directory before starting the relay. It always runs `cargo build --release` and refuses to run when the build fails or the expected binary is missing.
+The launcher validates the WebSocket URL and resolves a usable IPC directory before starting the relay. In a release folder it runs the prebuilt `neuro-bridge-*-windows-x86_64.exe`; in a source checkout it runs `cargo build --release` and refuses to run when the build fails or the expected binary is missing.
 
 Then launch Balatro. The mod connects automatically.
 

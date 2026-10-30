@@ -164,6 +164,14 @@ $env:NEURO_IPC_DIR = $ipcDir
 
 Write-Host "Bridge using IPC directory: $env:NEURO_IPC_DIR"
 Write-Host "Bridge connecting to: $safeWsUrl"
+$released = Get-ChildItem -Path $stableRoot -Filter "neuro-bridge-*-windows-x86_64.exe" -File -ErrorAction SilentlyContinue |
+  Sort-Object Name | Select-Object -Last 1
+if ($null -ne $released) {
+  Write-Host "Running released bridge: $($released.Name)"
+  & $released.FullName
+  exit $LASTEXITCODE
+}
+
 Set-Location -Path (Join-Path $stableRoot "neuro-bridge-rs") -ErrorAction Stop
 
 
