@@ -22,8 +22,9 @@ function State.get_state_name()
     end
   end
   if not name then return "UNKNOWN" end
-  if (name == "SPLASH" or name == "MENU" or name == "GAME_OVER")
-      and StateKinds.is_run_setup_overlay() then
+  -- A run setup the game gives no way back from (the win screen's new run) is the screen, whatever lies beneath.
+  if StateKinds.is_run_setup_overlay()
+      and (name == "SPLASH" or name == "MENU" or name == "GAME_OVER" or not StateKinds.is_closable_overlay()) then
     return "RUN_SETUP"
   end
   return name

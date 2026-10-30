@@ -117,7 +117,7 @@ end
 
 function M.run_setup()
   local candidates = { "start_run", "select_deck", "toggle_seeded_run",
-    "paste_seed", "copy_seed", "select_stake" }
+    "paste_seed", "copy_seed", "select_stake", "exit_overlay_menu" }
   local actions, offered = offer("RUN_SETUP", candidates)
   local has_progress = false
   for _, name in ipairs(actions) do
@@ -131,6 +131,9 @@ function M.run_setup()
     query = query .. "Starting the run begins it with the current deck and stake. "
   end
   query = query .. seed_steps(offered, (DeckFacts.run_seed()))
+  if offered.exit_overlay_menu then
+    query = query .. "Closing the overlay leaves run setup for the main menu without starting a run. "
+  end
   return { query = query, actions = actions, tool_bits = key_bits() }
 end
 

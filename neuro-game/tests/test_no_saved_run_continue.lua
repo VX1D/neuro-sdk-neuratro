@@ -65,7 +65,7 @@ end
 local MENU_OK = { open_run_setup = true, select_deck = true, select_stake = true, copy_seed = true,
   select_challenge = true, start_challenge_run = true }
 local SETUP_OK = { start_run = true, select_deck = true, select_stake = true, toggle_seeded_run = true,
-  paste_seed = true, copy_seed = true }
+  paste_seed = true, copy_seed = true, exit_overlay_menu = true }
 
 menu_with_save()
 local menu = MenuFlow.menu()

@@ -143,6 +143,13 @@ do
 end
 
 do
+  win_G(overlay_with({ run_setup_seed = true }))
+  check("a run setup the win screen opened (no way back) is the RUN_SETUP screen",
+    require("core.state").get_state_name() == "RUN_SETUP", require("core.state").get_state_name())
+  check("and cash_out is not usable under it", not Actions.is_action_valid("cash_out"))
+end
+
+do
   win_G(overlay_with({}))
   local f = require("force.force_router").get_force_for_state("ROUND_EVAL")
   check("a modal with no way to close it leaves no in-run move usable or forced",
