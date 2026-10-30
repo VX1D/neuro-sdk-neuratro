@@ -3,7 +3,7 @@
 --- MOD_ID: neuro-game
 --- MOD_AUTHOR: [x264.webrip]
 --- MOD_DESCRIPTION: Neuro SDK bridge + IPC for Balatro
---- MOD_VERSION: 1.2.0
+--- MOD_VERSION: 1.2.1
 --- DEPENDENCIES: [Steamodded>=26.1002.0]
 
 if rawget(_G, "NEURO_SDK_MOD_LOADED") then
