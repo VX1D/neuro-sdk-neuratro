@@ -284,6 +284,33 @@ local FNV_PRIME = U64(0x100000000) * 0x100 + 0x1b3
 local FENCE_CHUNK = 64 * 1024
 local CURSOR_WORDS = 7
 
+-- os.time has whole seconds only; the outbox timestamps need milliseconds.
+local wall_ms = function() return os.time() * 1000 end
+pcall(function()
+  if ffi.os == "Windows" then
+    pcall(ffi.cdef, "void GetSystemTimeAsFileTime(uint64_t *filetime);")
+    local filetime = ffi.new("uint64_t[1]")
+    ffi.C.GetSystemTimeAsFileTime(filetime)
+    wall_ms = function()
+      ffi.C.GetSystemTimeAsFileTime(filetime)
+      return tonumber(filetime[0] / 10000) - 11644473600000
+    end
+  else
+    pcall(ffi.cdef, "typedef struct { long tv_sec; long tv_usec; } neuro_timeval; int gettimeofday(neuro_timeval *tv, void *tz);")
+    local tv = ffi.new("neuro_timeval")
+    ffi.C.gettimeofday(tv, nil)
+    wall_ms = function()
+      ffi.C.gettimeofday(tv, nil)
+      return tonumber(tv.tv_sec) * 1000 + math.floor(tonumber(tv.tv_usec) / 1000)
+    end
+  end
+end)
+
+local function utc_timestamp()
+  local ms = wall_ms()
+  return os.date("!%Y-%m-%dT%H:%M:%S", math.floor(ms / 1000)) .. string.format(".%03dZ", ms % 1000)
+end
+
 local function mix(hash, word) return bit.bxor(hash, word) * FNV_PRIME end
 
 local function words_of(bytes)
@@ -398,7 +425,8 @@ end
 
 local function encode(self, message)
   if message.game ~= nil and message.game ~= self.game then return nil, "ipc_game_mismatch_rejected" end
-  local ok, encoded = pcall(json.encode, { command = message.command, game = self.game, data = message.data })
+  local ok, encoded = pcall(json.encode,
+    { ts = utc_timestamp(), command = message.command, game = self.game, data = message.data })
   if not ok or type(encoded) ~= "string" then return nil, "ipc_unencodable_frame_rejected" end
   if #encoded + 1 > MAX_LINE_BYTES then return nil, "ipc_oversized_frame_rejected" end
   return encoded .. "\n"
@@ -488,7 +516,10 @@ function Bridge:send_startup(opts)
   if not opts.reconnect and not self._startup_complete then self:_skip_stale_inbox() end
   local line = encode(self, W.startup(self.game))
   local answer = W.startup_answer(self.game, self.transport_session)
-  if answer then line = json.encode(answer) .. "\n" .. line end
+  if answer then
+    answer.ts = utc_timestamp()
+    line = json.encode(answer) .. "\n" .. line
+  end
   self.session_id = (self.session_id or 0) + 1
   self.last_state = nil
   self.last_transition_at = Utils.gate_now("bridge_transition_cooldown")

@@ -109,7 +109,7 @@ end
 
 do
   local b, dir = fresh("rotate")
-  b.MAX_OUTBOX_FILE_BYTES = 400
+  b.MAX_OUTBOX_FILE_BYTES = 500
   b:send_startup()
   for i = 1, 3 do context(b, string.rep("r", 100) .. i) end
   local rotated = read_lines(dir .. "/neuro_outbox.jsonl.1")
