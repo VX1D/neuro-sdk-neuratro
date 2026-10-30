@@ -73,10 +73,12 @@ pub(crate) fn startup_answer_session_of(value: &Value) -> Option<u64> {
     if object.get("command")?.as_str()? != STARTUP_ANSWER_COMMAND {
         return None;
     }
-    if !object
-        .keys()
-        .all(|key| matches!(key.as_str(), "command" | "game" | "transport_session"))
-    {
+    if !object.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "command" | "game" | "transport_session" | "ts"
+        )
+    }) {
         return None;
     }
     object.get("transport_session")?.as_str()?.parse().ok()

@@ -34,7 +34,8 @@ do
     has(q, 'name "Pluto", area "booster_pack", index 3')
       and not has(q, 'index 3, hand_indices'), q)
   local ok_with = type(Dispatcher.preflight("choose_pack_card",
-    { name = "The Magician", area = "booster_pack", index = 1, hand_indices = { 1 } })) == "function"
+    { name = "The Magician", area = "booster_pack", index = 1, hand_indices = { 1 },
+      hand_cards = { require("facts.card_area_util").hand_card_name(G.hand.cards[1]) } })) == "function"
   local ok_without = type(Dispatcher.preflight("choose_pack_card",
     { name = "The Magician", area = "booster_pack", index = 1 })) == "function"
   check("the pick as the line names it preflights, and without hand_indices it does not",

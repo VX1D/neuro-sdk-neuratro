@@ -72,10 +72,6 @@ local function sell_context_key()
   local n = G and G.NEURO or {}
   local parts = common_review_parts("sell_joker")
   parts[#parts + 1] = ordered_area_identity(G and G.jokers, "sell_cost")
-  parts[#parts + 1] = sorted_map_identity(n.joker_intents)
-  parts[#parts + 1] = tostring(n.joker_intent_revision or 0)
-  parts[#parts + 1] = tostring(n.plan_revision or 0)
-  parts[#parts + 1] = tostring(n.plan and n.plan.build or "")
   local sold = n.jokers_sold
   parts[#parts + 1] = tostring(type(sold) == "table" and sold.count or 0)
   return table.concat(parts, "|")
@@ -345,8 +341,7 @@ local function handle_buy_from_shop(data)
         deadline = ActionResult.now() + (buy_and_use and UseCard.OUTCOME_SETTLE_MAX or 0) + math.max(3,
           shop_buy_delay
             + Utils.gate_seconds("shop_buy_watchdog_grace", "NEURO_SHOP_BUY_WATCHDOG_GRACE") + 1),
-        timeout_outcome = "failed",
-        correction = "The item is still in the shop and no money moved. Re-check money and slots, then choose again.",
+        timeout_outcome = "ambiguous",
         debug = { area = buy_area_name, index = buy_index, card = card_name },
         probe = function()
           if explicit_failure then return "failed", { cause = explicit_failure } end
@@ -493,8 +488,7 @@ local function handle_sell_card(data)
       name = "sell_card",
       run_generation = G and G.NEURO and G.NEURO.run_generation,
       deadline = ActionResult.now() + 3,
-      timeout_outcome = "failed",
-      correction = "The card is still there and was not sold. Inspect the current state and choose again.",
+      timeout_outcome = "ambiguous",
       debug = { area = data.area, index = data.index, card = card_name },
       probe = function()
         if not sell_card_is_live() then return "applied", { target_left_area = true } end

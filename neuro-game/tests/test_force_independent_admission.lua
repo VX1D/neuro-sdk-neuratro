@@ -78,17 +78,16 @@ do
   Registry.reset()
   H.stage_registered(nil, { "play_hand", "discard_hand", "buy_from_shop" })
   local free = send("frobnicate", "{}")
-  check("outside a force the unknown name lists this screen's registered actions, not the catalogue",
+  check("outside a force the unknown name gets exactly the reference SDK text, with no action list",
     free.ok == false and free.reason_code == "ACTION_UNKNOWN"
-      and free.message:find("play_hand", 1, true) ~= nil and free.message:find("discard_hand", 1, true) ~= nil
-      and free.message:find("buy_from_shop", 1, true) == nil,
+      and free.message == "Action failed. Unknown action 'frobnicate'.",
     tostring(free.message))
   H.open_force("SELECTING_HAND", { "discard_hand" })
   local forced = send("frobnicate", "{}")
   G.NEURO.force_window = nil
-  check("during a force it lists only the force's offer",
+  check("during a force it is the same text: the force's offer is not listed either",
     forced.ok == false and forced.reason_code == "ACTION_UNKNOWN"
-      and forced.message:find("discard_hand", 1, true) ~= nil and forced.message:find("play_hand", 1, true) == nil,
+      and forced.message == "Action failed. Unknown action 'frobnicate'.",
     tostring(forced.message))
 end
 

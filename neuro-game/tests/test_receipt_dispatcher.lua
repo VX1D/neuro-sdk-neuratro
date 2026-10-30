@@ -42,11 +42,11 @@ local function only_admission(bridge, id)
     and bridge.results[1].reason_code == "ACTION_ACCEPTED" and bridge.results[1].message == nil
 end
 
-local function failure_context(bridge)
-  for _, message in ipairs(bridge.contexts) do
-    if tostring(message):find("did not complete successfully", 1, true) then return message end
-  end
+local function told_once(bridge, text)
+  return #bridge.contexts == 1 and bridge.contexts[1]:find(text, 1, true) ~= nil
 end
+local function told_only_failure(bridge) return told_once(bridge, "did not take effect in the game, so nothing changed.") end
+local function told_unconfirmed(bridge) return told_once(bridge, "could not be confirmed in the game; check the current state") end
 
 do
   local bridge = setup()
@@ -100,8 +100,8 @@ do
   check("execution setup failure cannot orphan the admitted action",
     executed == false and Execute.busy() == nil)
   check("execution setup failure sends no second result", only_admission(bridge, "execution-setup-fault"))
-  check("execution setup failure is reported as context", failure_context(bridge) ~= nil,
-    table.concat(bridge.contexts, " | "))
+  check("execution setup failure tells her only that the move did not take effect",
+    told_only_failure(bridge), table.concat(bridge.contexts, " | "))
 end
 
 do
@@ -260,19 +260,15 @@ do
         started_at = 300,
         deadline = 301,
         timeout_outcome = "failed",
-        correction = "Sale was accepted but the card remained in its area.",
         probe = function() return "pending" end,
       })
     end,
   })
   Execute.step(301)
   check("deadline failure never records last action success", G.NEURO.last_action_name == nil)
-  check("deadline failure records a correction", G.NEURO.last_failed_action == "sell_card")
-  local report = failure_context(bridge)
-  check("deadline failure states the correction as context, beside the one admission result",
-    only_admission(bridge, "async-fail") and report ~= nil
-      and report:find("Sale was accepted but the card remained in its area.", 1, true) ~= nil,
-    tostring(report))
+  check("deadline failure records the failure", G.NEURO.last_failed_action == "sell_card")
+  check("deadline failure sends the admission result and one failure notice",
+    only_admission(bridge, "async-fail") and told_only_failure(bridge), table.concat(bridge.contexts, " | "))
 end
 
 do
@@ -291,11 +287,10 @@ do
     name = "record_plan",
     exec = function() return Receipt.outcome("failed", "Plan did not change.") end,
   })
-  local report = failure_context(bridge)
-  check("structural failed outcome has no success side effects and reports its reason",
+  check("structural failed outcome has no success side effects and is reported once",
     G.NEURO.last_action_name == nil and G.NEURO.last_failed_action == "record_plan"
-      and report ~= nil and report:find("Plan did not change.", 1, true) ~= nil,
-    tostring(report))
+      and told_only_failure(bridge) and only_admission(bridge, "sync-failed"),
+    table.concat(bridge.contexts, " | "))
 end
 
 do
@@ -307,7 +302,7 @@ do
   })
   check("mutating action without evidence fails closed instead of using legacy success",
     G.NEURO.last_action_name == nil and G.NEURO.last_failed_action == "record_plan"
-      and failure_context(bridge) ~= nil)
+      and told_unconfirmed(bridge))
 end
 
 do
@@ -353,15 +348,15 @@ do
     exec = function()
       return Receipt.create({
         id = "failed-with-cause", name = "buy_from_shop", run_generation = 3,
-        started_at = 100, deadline = 105, correction = "Generic correction.",
+        started_at = 100, deadline = 105,
         probe = function() return "failed", { cause = "the game refuses to use The Hermit; nothing was bought" } end,
       })
     end,
   })
   Execute.step(101)
-  local said = tostring(failure_context(bridge))
-  check("a failed receipt's cause reaches the failure context",
-    said:find("the game refuses to use The Hermit; nothing was bought", 1, true) ~= nil, said)
+  check("a failed receipt's cause is recorded and she is told the move did not take effect",
+    told_only_failure(bridge) and only_admission(bridge, "failed-with-cause")
+      and G.NEURO.last_failed_action == "buy_from_shop", table.concat(bridge.contexts, " | "))
 
   bridge = setup()
   admit(bridge, {
@@ -371,27 +366,27 @@ do
     exec = function()
       return Receipt.create({
         id = "failed-by-deadline", name = "buy_from_shop", run_generation = 3,
-        started_at = 100, deadline = 101, timeout_outcome = "failed", correction = "Generic correction.",
+        started_at = 100, deadline = 101, timeout_outcome = "failed",
         probe = function() return "pending" end,
       })
     end,
   })
   Execute.step(102)
-  said = tostring(failure_context(bridge))
-  check("a deadline failure keeps its correction and never shows the internal reason token",
-    said:find("Generic correction.", 1, true) ~= nil and said:find("deadline", 1, true) == nil, said)
+  check("a deadline failure is recorded and she is told the move did not take effect",
+    told_only_failure(bridge) and only_admission(bridge, "failed-by-deadline")
+      and G.NEURO.last_failed_action == "buy_from_shop", table.concat(bridge.contexts, " | "))
 end
 
 do
   for _, case in ipairs({
-    { id = "throws", exec = function() error("boom") end },
-    { id = "no-evidence", exec = function() return { unexpected = true } end },
+    { id = "throws", exec = function() error("boom") end, told = told_unconfirmed },
+    { id = "no-evidence", exec = function() return { unexpected = true } end, told = told_unconfirmed },
   }) do
     local bridge = setup()
     admit(bridge, { id = case.id, name = "cash_out", ack_snapshot = {}, exec = case.exec })
-    local said = tostring(failure_context(bridge))
-    local _, times = said:gsub("%(cash out%)", "")
-    check(case.id .. ": the failure context names the move once", times == 1 and not said:find("cash_out", 1, true), said)
+    check(case.id .. ": the failure is recorded, after the admission result she gets one failure notice",
+      case.told(bridge) and only_admission(bridge, case.id) and G.NEURO.last_failed_action == "cash_out",
+      table.concat(bridge.contexts, " | "))
   end
 end
 

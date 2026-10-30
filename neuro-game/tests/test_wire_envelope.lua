@@ -59,9 +59,9 @@ for i, line in ipairs(lines) do
     seen_commands[#seen_commands + 1] = tostring(frame.command)
     local extra = {}
     for _, key in ipairs(sorted_keys(frame)) do
-      if not ENVELOPE[key] then extra[#extra + 1] = key end
+      if not ENVELOPE[key] and key ~= "ts" then extra[#extra + 1] = key end
     end
-    check("outbox line " .. i .. " (" .. tostring(frame.command) .. ") carries only command/game/data",
+    check("outbox line " .. i .. " (" .. tostring(frame.command) .. ") carries only command/game/data and the relay-stripped ts",
       #extra == 0, table.concat(extra, ","))
     check("outbox line " .. i .. " names the game (SPECIFICATION.md:30)",
       frame.game == "Balatro", tostring(frame.game))

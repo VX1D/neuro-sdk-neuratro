@@ -41,7 +41,7 @@ local SLOT_CHAIN = {
 }
 local HIDDEN_ROSTER_BANNED = { "as the cards score: joker %d", "jokers left to right: joker %d" }
 local TOKEN_WHITELIST = {
-  "^%(cards [%d, ]+%)$",
+  "^%(cards %d+: [^()]+%)$",
   "^%(level [%d%.]+, [%d%.e%+]+ chips x[%d%.e%+]+ mult%)$",
   SLOT_CHAIN[1],
   SLOT_CHAIN[2],

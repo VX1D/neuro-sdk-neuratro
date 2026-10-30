@@ -6,6 +6,8 @@ local Limits = require("core.plan_limits")
 local GameFacts = require("facts.game_facts")
 local Utils = require("util.utils")
 local CardUtil = require("facts.card_util")
+local ActionResult = require("core.action_result")
+local Budget = require("core.decision_budget")
 
 local function unlocked_deck_keys()
   local pool = G and G.P_CENTER_POOLS and G.P_CENTER_POOLS.Back
@@ -77,6 +79,10 @@ local function boss_plan_schema()
   }
 end
 
+local function card_names_schema(max_items)
+  return { type = "array", items = { type = "string", minLength = 1 }, maxItems = max_items }
+end
+
 local function confirm_hand_on()
   local HH = Utils.lazy_require("handlers.hand_handlers")
   return not (HH and HH.confirm_hand_on) or HH.confirm_hand_on()
@@ -118,13 +124,16 @@ local function card_action_schema(area, directional)
   if directional then
     properties.name.minLength = 1
     properties.left_index = { type = "integer", minimum = 1 }
+    properties.left_card = { type = "string" }
     properties.right_index = { type = "integer", minimum = 1 }
+    properties.right_card = { type = "string" }
     required = { "area", "index", "name", "left_index", "right_index" }
   else
     properties.hand_indices = {
       type = "array", items = { type = "integer", minimum = 1 },
-      minItems = 1, maxItems = Limits.hand_select_max(), uniqueItems = true,
+      maxItems = Limits.hand_select_max(), uniqueItems = true,
     }
+    properties.hand_cards = card_names_schema(Limits.hand_select_max())
   end
   return { type = "object", properties = properties, required = required }
 end
@@ -139,13 +148,13 @@ local function build_param_actions()
       },
       required = { "blind" }
     }),
-    use_consumable = action_def("use_consumable", "Use an owned consumable at required area and index (include its name, and hand_indices when it targets hand cards).",
+    use_consumable = action_def("use_consumable", "Use an owned consumable at required area and index (include its name, and hand_indices when it targets hand cards; an optional hand_cards naming them must match your hand).",
       card_action_schema("consumables")),
-    use_directional_consumable = action_def("use_directional_consumable", "Use a directional consumable with required area, index, name, left_index (the hand card it applies to), and right_index (the card it takes from).",
+    use_directional_consumable = action_def("use_directional_consumable", "Use a directional consumable with required area, index, name, left_index (the hand card it applies to), and right_index (the card it takes from); optional left_card/right_card must name those cards.",
       card_action_schema("consumables", true)),
-    choose_pack_card = action_def("choose_pack_card", "Take a card from the open, already-paid pack at required area and index (include its name, and hand_indices when it targets hand cards). A picked consumable is used at once.",
+    choose_pack_card = action_def("choose_pack_card", "Take a card from the open, already-paid pack at required area and index (include its name, and hand_indices when it targets hand cards; an optional hand_cards naming them must match your hand). A picked consumable is used at once.",
       card_action_schema("booster_pack")),
-    choose_directional_pack_card = action_def("choose_directional_pack_card", "Choose a directional card from the already-paid open pack with required area, index, name, left_index (the hand card it applies to), and right_index (the card it takes from). A picked consumable is used at once.",
+    choose_directional_pack_card = action_def("choose_directional_pack_card", "Choose a directional card from the already-paid open pack with required area, index, name, left_index (the hand card it applies to) and right_index (the card it takes from); optional left_card/right_card must name them. A picked consumable is used at once.",
       card_action_schema("booster_pack", true)),
     buy_from_shop = action_def("buy_from_shop", "Buy the shop item at required area and index (include its offered name); use=true only for a direct-use consumable. The first voucher buy executes nothing and returns a review; the next is final.",
       {
@@ -171,7 +180,7 @@ local function build_param_actions()
       required = { "area", "index" }
     }),
     play_hand = action_def("play_hand",
-      "Play the hand cards at the required 1-based indices as one poker hand. "
+      "Play the hand cards at the required 1-based indices as one poker hand; an optional cards naming them must match your hand. "
       .. (confirm_hand_on() and "A first send that returns a review plays nothing; answer the review yes or no." or "It commits on the first send, spending one hand."),
       {
       type = "object",
@@ -181,13 +190,14 @@ local function build_param_actions()
           items = { type = "integer", minimum = 1 },
           minItems = 1, maxItems = Limits.play_select_max(), uniqueItems = true
         },
+        cards = card_names_schema(Limits.play_select_max()),
         plan = boss_plan_schema()
       },
       required = { "indices" }
     }),
     resolve_play = action_def("resolve_play", "Answer the open play review with required answer: yes plays the reviewed cards, no plays nothing.",
       resolve_play_schema()),
-    discard_hand = action_def("discard_hand", "Discard distinct 1-based hand indices via required indices then draw replacement cards. It is final and spends one discard, not a hand.", {
+    discard_hand = action_def("discard_hand", "Discard distinct 1-based hand indices via required indices (an optional cards naming them must match your hand), then draw replacement cards. It is final and spends one discard, not a hand.", {
       type = "object",
       properties = {
         indices = {
@@ -195,6 +205,7 @@ local function build_param_actions()
           items = { type = "integer", minimum = 1 },
           minItems = 1, maxItems = math.max(1, Limits.discard_select_max()), uniqueItems = true
         },
+        cards = card_names_schema(math.max(1, Limits.discard_select_max())),
         plan = boss_plan_schema()
       },
       required = { "indices" }
@@ -219,7 +230,7 @@ local function build_param_actions()
       properties = { seed = { type = "string", pattern = "^[A-Za-z0-9]*$", maxLength = 8 } },
       required = {}
     }),
-    choose_persona = action_def("choose_persona", "Set the persona with required persona (neuro or evil).", {
+    choose_persona = action_def("choose_persona", "Set the persona once per session with required persona (neuro or evil).", {
     type = "object",
     properties = {
       persona = {
@@ -229,7 +240,7 @@ local function build_param_actions()
     },
     required = { "persona" }
     }),
-    set_joker_order = action_def("set_joker_order", "Move a joker from required from_index to required to_index.", {
+    set_joker_order = action_def("set_joker_order", "Take the joker at required from_index out and put it at required to_index; the jokers in between shift one place to close the gap. Positions run left to right, 1 being leftmost.", {
       type = "object",
       properties = {
         from_index = { type = "integer", minimum = 1 },
@@ -244,7 +255,7 @@ local function build_param_actions()
       },
       required = {}
     }),
-    leave_shop = action_def("leave_shop", "Leave the shop; optional intents tags untagged jokers, and joker_order_confirmed: true keeps the order when a reorder gain is shown. The first send executes nothing and returns a review when leaving forfeits interest or your lineup changed.", {
+    leave_shop = action_def("leave_shop", "Leave the shop; intents must tag every joker that has no role yet, and joker_order_confirmed: true keeps the order when a reorder gain is shown. The first send executes nothing and returns a review when leaving forfeits interest or your lineup changed.", {
       type = "object",
       properties = {
         plan = plan_schema(),
@@ -254,14 +265,14 @@ local function build_param_actions()
       required = {}
     }),
     record_joker_roles = action_def("record_joker_roles", "Record each joker's role in your build via required intents: a list of { index, tag, optional note of up to "
-      .. Limits.JOKER_NOTE_MAX .. " characters }. Tagging never sells, buys or moves a joker.", {
+      .. Limits.JOKER_NOTE_MAX .. " characters }, each index at most once. Tagging never sells, buys or moves a joker.", {
       type = "object",
       properties = {
         intents = joker_intents_schema()
       },
       required = { "intents" }
     }),
-    record_plan = action_def("record_plan", "State committed decisions, verb first: hand_plan for this blind, build_plan for your build direction and next upgrade, money_plan for one spend-or-hold call. Optional hand_focus names an exact visible hand as primary with an optional fallback.", {
+    record_plan = action_def("record_plan", "State at least one committed decision, verb first: hand_plan for this blind, build_plan for your build direction and next upgrade, money_plan for one spend-or-hold call. Optional hand_focus names an exact visible hand as primary with an optional fallback.", {
       type = "object",
       properties = plan_schema().properties,
       required = {}
@@ -293,7 +304,8 @@ local SKIPPABLE_BLINDS = { Small = true, Big = true }
 
 local function blind_skip_blocker()
   if not (G and G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states) then
-    return "The blind selection screen is not loaded yet, so nothing was skipped. Wait for it to be shown, then skip the blind again."
+    return ActionResult.wait("The blind selection screen is not loaded yet, so nothing was skipped.",
+      "Wait for it to be shown, then skip the blind again.")
   end
   local on_deck = get_selectable_blind_key()
   if on_deck == "Boss" then
@@ -348,25 +360,18 @@ local STATE_ACTIONS = {
     "choose_persona",
     "open_run_setup",
     "select_deck",
-    "toggle_seeded_run",
-    "paste_seed",
-    "start_run",
   },
   MENU = {
     "choose_persona",
     "open_run_setup",
-    "toggle_seeded_run",
     "copy_seed",
-    "paste_seed",
     "select_stake",
     "select_deck",
-    "start_run",
     "select_challenge",
     "start_challenge_run",
   },
   RUN_SETUP = {
     "choose_persona",
-    "open_run_setup",
     "start_run",
     "toggle_seeded_run",
     "copy_seed",
@@ -377,11 +382,8 @@ local STATE_ACTIONS = {
   GAME_OVER = {
     "choose_persona",
     "open_run_setup",
-    "toggle_seeded_run",
     "copy_seed",
-    "paste_seed",
     "select_deck",
-    "start_run",
   },
   BLIND_SELECT = {
     "select_blind",
@@ -454,6 +456,13 @@ function Actions.get_action_names_for_state(state_name)
   return (state_action_names(state_name))
 end
 
+-- A screen is a state with its own action set; transitional states and screen wipes have none.
+function Actions.screen_action_set(state_name)
+  if G and G.screenwipe then return nil end
+  if not (STATE_ACTIONS[state_name] or StateKinds.is_pack_state(state_name)) then return nil end
+  return Actions.get_state_action_set(state_name)
+end
+
 function Actions.get_known_states()
   local states = {}
   for state_name in pairs(STATE_ACTIONS) do states[#states + 1] = state_name end
@@ -464,15 +473,32 @@ end
 local VALIDATORS = {}
 local CHOOSE_OFFERED = "; choose one of the actions offered now."
 
+local function persona_chosen()
+  return G and G.NEURO and G.NEURO.persona and G.NEURO.persona ~= "hiyori" or false
+end
+
+function Actions.awaiting_persona()
+  return G and G.NEURO and G.NEURO.persona == "hiyori" or false
+end
+
+-- A gate replaces the validator where registration must lead usability: a review is answerable once it opens.
+local REGISTRATION_GATES = {
+  resolve_play = function()
+    local Gate = Utils.lazy_require("core.gate")
+    return confirm_hand_on() and Gate ~= nil and Gate.proposal() ~= nil
+  end,
+}
+
 VALIDATORS.choose_persona = function()
-  if G and G.NEURO and G.NEURO.persona and G.NEURO.persona ~= "hiyori" then
+  if persona_chosen() then
     return false, "Your persona is already set for this session; continue with the actions offered now."
   end
 end
 
 local function validate_play_or_discard(action_name)
   if not (G and G.hand and G.hand.cards and #G.hand.cards > 0) then
-    return false, "Your hand has no cards yet; wait for the draw, then choose again."
+    return false, ActionResult.wait("Your hand has no cards yet, so nothing was applied.",
+      "Wait for the draw, then choose again.")
   end
   local cr = G.GAME and G.GAME.current_round
   if action_name == "play_hand" then
@@ -520,25 +546,6 @@ VALIDATORS.record_joker_roles = function()
   end
 end
 
-VALIDATORS.use_consumable = function()
-  local area = G and G.consumeables
-  if not (area and area.cards and #area.cards > 0) then
-    return false, "You hold no consumables to use" .. CHOOSE_OFFERED
-  end
-  for _, card in ipairs(area.cards) do
-    if not require("facts.target_contracts").get(card) and consumable_usable_now(card) then return end
-  end
-  return false, "None of your consumables can be used right now (no valid target or condition); choose another action."
-end
-
-VALIDATORS.choose_pack_card = function()
-  local area = CardUtil.pack_area()
-  for _, card in ipairs((area and area.cards) or {}) do
-    if not require("facts.target_contracts").get(card) and can_take_pack_card(card) then return end
-  end
-  return false, "No card in the open pack can be taken right now (no free slot or no valid target); skip the pack or make room first."
-end
-
 local function directional_available(area)
   local Contracts = require("facts.target_contracts")
   if not (G and G.hand and G.hand.cards and #G.hand.cards >= 2) then
@@ -549,6 +556,34 @@ local function directional_available(area)
   end
   return false, "No directional card here can be used right now; choose another action."
 end
+
+local function directional_redirect(area, area_name, subject, verb)
+  if directional_available(area) ~= nil then return nil end
+  return "Every " .. subject .. " you can " .. verb .. " right now has directional targets; " .. verb .. " it with "
+    .. require("handlers.use_card").move_for(area_name, true) .. " so source and destination are explicit."
+end
+
+VALIDATORS.use_consumable = function()
+  local area = G and G.consumeables
+  if not (area and area.cards and #area.cards > 0) then
+    return false, "You hold no consumables to use" .. CHOOSE_OFFERED
+  end
+  for _, card in ipairs(area.cards) do
+    if not require("facts.target_contracts").get(card) and consumable_usable_now(card) then return end
+  end
+  return false, directional_redirect(area, "consumables", "consumable", "use")
+    or "None of your consumables can be used right now (no valid target or condition); choose another action."
+end
+
+VALIDATORS.choose_pack_card = function()
+  local area = CardUtil.pack_area()
+  for _, card in ipairs((area and area.cards) or {}) do
+    if not require("facts.target_contracts").get(card) and can_take_pack_card(card) then return end
+  end
+  return false, directional_redirect(area, "booster_pack", "pack card", "take")
+    or "No card in the open pack can be taken right now (no free slot or no valid target); skip the pack or make room first."
+end
+
 VALIDATORS.use_directional_consumable = function() return directional_available(G and G.consumeables) end
 VALIDATORS.choose_directional_pack_card = function() return directional_available(CardUtil.pack_area()) end
 
@@ -583,7 +618,7 @@ VALIDATORS.reroll_shop = function()
   if not G or not G.GAME or not G.GAME.dollars then return false, "The shop is not open" .. CHOOSE_OFFERED end
   local cost = G.GAME.current_round and G.GAME.current_round.reroll_cost or 0
   if type(cost) ~= "number" or cost < 0 then
-    return false, "The reroll price is not set yet; choose another action."
+    return false, ActionResult.wait("The reroll price is not set yet, so nothing was rerolled.")
   end
   local spendable = get_spendable_dollars()
   local free = tonumber(G.GAME.current_round and G.GAME.current_round.free_rerolls or 0) or 0
@@ -607,8 +642,20 @@ VALIDATORS.skip_blind = function()
 end
 
 VALIDATORS.exit_overlay_menu = function()
-  if not (G and G.OVERLAY_MENU) then
-    return false, "No overlay menu is open, so there is nothing to close. Choose one of the actions offered for this screen."
+  if not StateKinds.is_closable_overlay() then
+    return false, "No overlay menu that can be closed is open. Choose one of the actions offered for this screen."
+  end
+end
+
+VALIDATORS.select_deck = function()
+  if #require("facts.deck_facts").list_selectable_backs() == 1 then
+    return false, "Only one deck is unlocked, so there is no other deck to select" .. CHOOSE_OFFERED
+  end
+end
+
+VALIDATORS.select_stake = function()
+  if #require("facts.deck_facts").selectable_stakes() == 1 then
+    return false, "Only one stake is unlocked for this deck, so there is no other stake to select" .. CHOOSE_OFFERED
   end
 end
 
@@ -616,7 +663,10 @@ VALIDATORS.reroll_boss = function()
   if not G or not G.GAME then
     return false, "Blind select is not open" .. CHOOSE_OFFERED
   end
-  local can, enabled = CtxEconomy.can_reroll_boss()
+  local can, enabled, spent = CtxEconomy.can_reroll_boss()
+  if spent then
+    return false, "Director's Cut allows one boss reroll per ante, and it is already used this ante" .. CHOOSE_OFFERED
+  end
   if not enabled then
     return false, "Rerolling the boss needs the Director's Cut or Retcon voucher" .. CHOOSE_OFFERED
   end
@@ -628,7 +678,8 @@ end
 VALIDATORS.cash_out = function()
   if not GameFacts.cash_out_button() then
     return false, G and G.round_eval
-      and "The round summary is still counting up the payout, so there is no Cash Out button yet; cash out again once it appears."
+      and ActionResult.wait("The round summary is still counting up the payout, so there is no Cash Out button yet.",
+        "Cash out again once it appears.")
       or "There is no round payout to collect on this screen; choose one of the actions offered now."
   end
 end
@@ -645,13 +696,27 @@ VALIDATORS.leave_shop = function()
   end
 end
 
+-- The menu forces ask for the persona first; outside a force these moves are unavailable until it is chosen.
+local PERSONA_FIRST = { "open_run_setup", "select_deck", "select_stake", "select_challenge", "start_challenge_run",
+  "toggle_seeded_run", "paste_seed", "copy_seed", "start_run" }
+for _, name in ipairs(PERSONA_FIRST) do
+  local own = VALIDATORS[name]
+  VALIDATORS[name] = function(action_name)
+    if Actions.awaiting_persona() then
+      return false, "Your persona is not chosen yet; choose a persona first."
+    end
+    if own then return own(action_name) end
+  end
+end
+
 for name, validator in pairs(VALIDATORS) do
   local predicate = validator
   local action_name = name
   ActionRegistry.bind_availability(name, function()
     local verdict, reason = predicate(action_name)
     if verdict ~= false then return true end
-    assert(type(reason) == "string" and reason ~= "", "validator for " .. action_name .. " refused without a reason")
+    assert(ActionResult.is_error(reason) or (type(reason) == "string" and reason ~= ""),
+      "validator for " .. action_name .. " refused without a reason")
     return false, reason
   end)
 end
@@ -661,17 +726,26 @@ local function proposal_blocks(action_name)
   return Gate ~= nil and Gate.stale_mutator(action_name)
 end
 
+local function budget_spent(action_name)
+  return Budget.spent(action_name, require("core.state").get_state_name())
+end
+
 local function available_on_screen(action_name)
-  if proposal_blocks(action_name) then return false end
+  if proposal_blocks(action_name) or budget_spent(action_name) then return false end
   return ActionRegistry.available(action_name)
 end
 
 local function blocking_overlay_actions(state_name)
-  if not available_on_screen("exit_overlay_menu") then return nil end
+  if not (G and G.OVERLAY_MENU) then return nil end
   local unlock_popup = StateKinds.is_unlock_popup()
   if not unlock_popup
       and (state_name == "RUN_SETUP" or StateKinds.is_progression_overlay()) then
     return nil
+  end
+  if not available_on_screen("exit_overlay_menu") then
+    -- A modal she cannot close leaves no in-run move beneath it; on a menu screen its buttons are the screen's moves.
+    if StateKinds.is_menu_state(state_name) then return nil end
+    return {}
   end
   local out = { "exit_overlay_menu" }
   if not unlock_popup and (state_name == "MENU" or state_name == "SPLASH")
@@ -680,6 +754,8 @@ local function blocking_overlay_actions(state_name)
   end
   return out
 end
+
+Actions.overlay_actions = blocking_overlay_actions
 
 Actions.OVERLAY_FACT = "A popup or menu is open over the game, so nothing was applied."
 Actions.OVERLAY_RETRY = "Close the overlay, then choose again."
@@ -700,13 +776,31 @@ function Actions.is_action_valid(action_name)
   return available_on_screen(action_name)
 end
 
-function Actions.unavailable_reason(action_name)
+-- Registered only while usable at window build, like an SDK ActionWindow (README.md:35); nil while it waits on the game keeps the current registration.
+function Actions.registrable(name)
+  if Actions.overlay_block_reason(name) or proposal_blocks(name) or budget_spent(name) then return false end
+  local gate = REGISTRATION_GATES[name]
+  if gate then return gate() == true end
+  local usable, reason = ActionRegistry.availability(name)
+  if usable then return true end
+  if ActionResult.is_wait(reason) then return nil end
+  return false
+end
+
+-- A string, or an ActionResult error such as a wait that the caller must answer as such.
+function Actions.unavailable_rejection(action_name, data)
   local overlay = Actions.overlay_block_reason(action_name)
   if overlay then return overlay end
   if proposal_blocks(action_name) then
     return "A play review is open; answer it yes or no first."
   end
-  return ActionRegistry.unavailable_reason(action_name)
+  if budget_spent(action_name) then return Budget.reason(action_name) end
+  return ActionRegistry.unavailable_reason(action_name, data)
+end
+
+function Actions.unavailable_reason(action_name, data)
+  local reason = Actions.unavailable_rejection(action_name, data)
+  return ActionResult.is_error(reason) and reason.message or reason
 end
 
 function Actions.get_valid_actions_for_state(state_name)
@@ -747,6 +841,7 @@ local function caps_signature()
     table.concat(challenge_ids() or {}, ","),
     table.concat(GameFacts.visible_hand_names() or {}, ","),
     confirm_hand_on() and "1" or "0",
+    persona_chosen() and "1" or "0",
   }, "/")
 end
 
@@ -792,6 +887,8 @@ local function narrow_prompt_schema(schema)
     end
     indices.minItems = math.max(1, lo)
     indices.maxItems = math.max(indices.minItems, hi)
+    local cards = out.properties.cards
+    if cards then cards.minItems, cards.maxItems = indices.minItems, indices.maxItems end
   end
   return out
 end

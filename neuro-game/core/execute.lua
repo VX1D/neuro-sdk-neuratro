@@ -12,6 +12,7 @@ local ContextDelivery = require("core.context_delivery")
 local Staging = require("core.staging")
 local Window = require("core.window")
 local Lifecycle = require("core.neuro_lifecycle")
+local Budget = require("core.decision_budget")
 
 local job
 
@@ -207,7 +208,6 @@ function M.wrap(name, data, exec)
       deadline = ActionResult.now() + (RUN_STARTS[name] and 15 or 6),
       timeout_outcome = "ambiguous",
       allow_generation_change = RUN_STARTS[name] == true,
-      correction = "It did not reach its requested state before the verification deadline. Inspect the current state and choose again.",
       debug = { contract = "async", goal = name },
       probe = function()
         if exact_goal(name, data, before) then return "applied", { goal = name } end
@@ -221,10 +221,10 @@ function M.busy()
   return job and job.phase or nil
 end
 
-function M.answer(bridge, id, name, success, message, code, group, window_id, keep)
+function M.answer(bridge, id, name, success, message, code, group, window_id)
   local current = Window.current()
   local own_window = window_id == nil or (current ~= nil and current.id == window_id)
-  local names = (success == true and own_window and not keep) and Window.withdrawal(name, group) or nil
+  local names = (success == true and own_window) and Window.withdrawal(name, group) or nil
   if names and bridge and type(bridge.withdraw_actions) == "function" then
     local ok, withdrawn = pcall(bridge.withdraw_actions, bridge, names)
     if not ok or withdrawn == false then
@@ -244,6 +244,12 @@ function M.answer(bridge, id, name, success, message, code, group, window_id, ke
     return delivered, success
   end
   Tx.store(id)
+  if code == "ACTION_ACCEPTED" then
+    Lifecycle.clear_failure()
+    Budget.on_applied(name, require("core.state").get_state_name())
+  elseif code == "UNCHANGED" then
+    Budget.on_unchanged(name, require("core.state").get_state_name())
+  end
   if own_window then Window.on_result(name, success) end
   return delivered, success
 end
@@ -293,23 +299,22 @@ local function steps(kind, done, list)
   end
 end
 
-local function report(done, message)
-  local move = require("core.action_registry").phrase(done.name):gsub("^%u", string.lower)
-  local text = "Your accepted move (" .. move .. ") did not complete successfully. "
-    .. tostring(message or "Inspect the current state and choose again.")
-  ContextDelivery.event_at("action_failed", ContextDelivery.here(),
-    text, { bridge = done.bridge, occurrence = done.id })
+local function report_failure(done, outcome, cause)
+  print("[neuro-game] Action " .. tostring(done.name) .. " (" .. tostring(done.id) .. ") did not apply: "
+    .. tostring(outcome) .. (cause and (": " .. Utils.safe_tostring(cause)) or ""))
+  if not done.bridge then return end
+  local move = "Your move (" .. require("core.action_registry").phrase(done.name):gsub("^%u", string.lower) .. ")"
+  ContextDelivery.event_at("action_failed", ContextDelivery.here(), outcome == "ambiguous"
+      and move .. " could not be confirmed in the game; check the current state before choosing again."
+      or move .. " did not take effect in the game, so nothing changed.",
+    { bridge = done.bridge, occurrence = done.id })
 end
 
-local function finalize_failed(done, outcome, details, message)
+local function finalize_failed(done, outcome, details)
   if job == done then job = nil end
   Staging.finish(done, false)
-  local cause = type(details) == "table" and type(details.cause) == "string" and details.cause or nil
-  local correction = cause and ("Cause: " .. cause .. ". Inspect the current state and choose again.")
-    or message or "It did not produce a verified result. Inspect the current state and choose again."
   local declined = type(details) == "table" and details.terminal_class == "DECLINED_NOOP"
   steps("failed", done, {
-    { "report", function() report(done, correction) end },
     { "restore", function() restore(done) end },
     { "hand transaction", function()
       local tx = own_proposal(done)
@@ -319,6 +324,10 @@ local function finalize_failed(done, outcome, details, message)
       if not declined then
         Lifecycle.record_failure(done.name, outcome == "ambiguous" and "execution outcome is ambiguous" or "action did not apply")
       end
+    end },
+    { "failure report", function()
+      if declined then return end
+      report_failure(done, outcome, type(details) == "table" and (details.error or details.cause or details.reason) or nil)
     end },
   })
 end
@@ -372,20 +381,19 @@ local function settle(done, now)
   if receipt.phase == "applied" then
     finalize_applied(done, receipt.applied_message, receipt.details)
   else
-    finalize_failed(done, receipt.phase, receipt.details, receipt.correction)
+    finalize_failed(done, receipt.phase, receipt.details)
   end
 end
 
 local function run(done)
-  done.phase = "executing"
   Staging.take(done)
   Metrics.time_begin("action_exec")
+  done.phase = "executing"
   local ok, result = xpcall(done.exec, Utils.safe_tostring)
   Metrics.time_end("action_exec")
   if not ok then
     Metrics.incr("action_fail")
-    return finalize_failed(done, "failed", { error = tostring(result) },
-      "It failed during execution. Inspect the current state and choose again.")
+    return finalize_failed(done, "ambiguous", { error = tostring(result) })
   end
   if ActionResult.is_receipt(result) then
     done.phase, done.receipt = "verifying", result
@@ -393,24 +401,30 @@ local function run(done)
   end
   if ActionResult.is_outcome(result) then
     if result.status == "applied" then return finalize_applied(done) end
-    return finalize_failed(done, result.status, result.details, result.message)
+    local details = type(result.details) == "table" and result.details or {}
+    if details.reason == nil and result.message then details.reason = result.message end
+    return finalize_failed(done, result.status, details)
   end
   Metrics.incr("action_contract_violation")
-  finalize_failed(done, "ambiguous", { reason = "missing_execution_evidence", result_type = type(result) },
-    "It returned without verifiable execution evidence. Inspect the current state and choose again.")
+  finalize_failed(done, "ambiguous", { reason = "missing_execution_evidence", result_type = type(result) })
 end
 
-function M.abort(reason, announce)
+local function pipeline_failed(done, err)
+  finalize_failed(done, done.phase == "staged" and "failed" or "ambiguous", { error = err })
+end
+
+function M.abort(reason, report)
   local done = job
   if not done then return false end
   job = nil
   Staging.finish(done, false)
   if done.receipt then ActionResult.finish(done.receipt, "ambiguous", { reason = reason }, true) end
-  if announce and done.phase == "staged" then
-    report(done, "It was cancelled (" .. reason .. ") before it ran; choose again from the current state.")
-  end
   restore(done)
   Lifecycle.record_failure(done.name, reason)
+  if report then
+    local ok, err = pcall(report_failure, done, done.receipt and "ambiguous" or "failed", reason)
+    if not ok then print("[neuro-game] Warning: abort report for action " .. tostring(done.id) .. " failed: " .. tostring(err)) end
+  end
   return true
 end
 
@@ -443,8 +457,7 @@ function M.admit(done, staged)
   local ok, err = xpcall(run, Utils.safe_tostring, done)
   if not ok then
     Metrics.incr("action_pipeline_fail")
-    finalize_failed(done, "ambiguous", { error = err },
-      "It failed in the execution pipeline. Inspect the current state and choose again.")
+    pipeline_failed(done, err)
   end
 end
 
@@ -458,10 +471,10 @@ function M.step(now)
     elseif current ~= done.state then
       return M.abort("Action cancelled: game state changed", true)
     elseif Staging.stalled(done) then
-      return M.abort("Action cancelled: staging timeout")
+      return M.abort("Action cancelled: staging timeout", true)
     elseif Staging.ready(done) then
       local ok, err = xpcall(run, Utils.safe_tostring, done)
-      if not ok then finalize_failed(done, "ambiguous", { error = err }) end
+      if not ok then pipeline_failed(done, err) end
     end
   elseif done.phase == "verifying" then
     settle(done, now or ActionResult.now())

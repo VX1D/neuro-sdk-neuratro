@@ -278,9 +278,9 @@ do
   local spellings = { '{"indices":[1,2]}', '{"indices": [1, 2]}', '{ "indices":[1,2] }' }
   check("whitespace variants of one selection still reach the cap",
     blocked_over(function(i) return spellings[(i % 3) + 1] end) > 0)
-  check("a re-worded plan on one selection still reaches the cap",
+  check("a re-worded plan is a different send, never refused as a repeat",
     blocked_over(function(i)
-      return '{"indices":[1,2],"plan":{"hand_plan":"variant ' .. i .. '"}}' end) > 0)
+      return '{"indices":[1,2],"plan":{"hand_plan":"variant ' .. i .. '"}}' end) == 0)
   check("an undeclared field does not split the streak",
     blocked_over(function(i) return '{"indices":[1,2],"zz":' .. i .. '}' end) > 0)
   check("key order does not split the streak",

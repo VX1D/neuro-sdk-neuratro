@@ -23,8 +23,8 @@ local READABLE_JOKER_TAGS =
   .. "\n\n## Notes on a joker\nAny tag can carry an optional `note` (your own words, why; up to 256 characters) -- it shows on that joker's row while shopping and is echoed back if you try to sell it later; a note persists across shop visits until you overwrite it or clear it with note: ''. If notes on several jokers would together run long, later-slot jokers may drop theirs from this view (the note itself is not lost, and still applies when you try to sell that joker)."
   .. "\n\n## Sold count\nYour joker list header also carries a running count, e.g. '2 sold this run' -- jokers you have sold since this run began; it does not reset between shops or antes, only when a new run starts."
 local ACTION_SEMANTICS_V1_KEY = "permanent_rule:action_semantics:v1"
-local ACTION_SEMANTICS_V1_MAX_BYTES = 4096
-local ACTION_SEMANTICS_V1_MAX_TOKENS = 768
+local ACTION_SEMANTICS_V1_MAX_BYTES = 5120
+local ACTION_SEMANTICS_V1_MAX_TOKENS = 896
 local ACTION_SEMANTICS_V1_TEXT =
   "## Command channel\nStructured actions are the only command channel: call exactly one "
   .. "registered action and put its values in the fields required by that action's schema; prose in "
@@ -41,7 +41,8 @@ local ACTION_SEMANTICS_V1_TEXT =
   .. "answer yes to commit the exact named hand indices, or no to cancel without playing, "
   .. "discarding, or drawing. After no, the next play is the final choice and commits "
   .. "immediately; discard for a redraw. Discards are the cheap redraw resource: throw away "
-  .. "weak cards to draw toward a better hand, only while you have discards left."
+  .. "weak cards to draw toward a better hand, only while you have discards left. "
+  .. "During a round only a card whose sale does something this round can be sold."
   .. "\n\n## Shop\nIn SHOP, a buy targets the exact area and index (include name when offered). "
   .. "Use use=false for a normal targeted shop buy (especially a consumable kept in inventory); "
   .. "use=true is only for a direct-use consumable; a targeted consumable is bought with use=false and "
@@ -50,26 +51,31 @@ local ACTION_SEMANTICS_V1_TEXT =
   .. "for a voucher is FINAL even if it names a different voucher. Selling a joker is guarded the same "
   .. "way: the first joker sale opens a review without selling, and the next legal sale "
   .. "commits immediately, including a different joker. Selling a consumable never opens a review. "
+  .. "A paid reroll is refused when it would leave you unable to afford the cheapest pack or voucher on offer. "
   .. "Leaving the shop may first return a review when it would forfeit interest or your joker lineup changed; "
   .. "leaving again leaves. Every joker needs a role tag before you leave."
   .. "\n\n## Packs\nAn open pack is already paid for: take a card from it, "
   .. "do not buy it. A pack pick directly uses the picked "
   .. "card when the card is a consumable; it has no use=true field. In a directional action "
   .. "left_index is the hand card the effect applies to and right_index the card it takes from; any two different "
-  .. "positions work, and the hand is rearranged for you when the effect needs the other order."
+  .. "positions work, and the hand is rearranged for you when the effect needs the other order. "
+  .. "A directional card is used only through a directional action."
   .. "\n\n## Joker roles\nRecording joker roles takes a 1-based joker index, tag CORE, SCALING, HOLD, or CHANGE, and an "
   .. "optional note; tags follow the card, and notes persist until overwritten or cleared. Leaving note "
-  .. "out keeps the note on file and an empty note clears it."
+  .. "out keeps the note on file and an empty note clears it. A call names each joker index at most once."
   .. "\n\n## Plan fields\nDirect plan fields are structured under plan: hand_plan, build_plan, money_plan, and "
   .. "hand_focus; each states a committed decision, not analysis or a copy of the board, and hand_focus "
   .. "records your declaration without ever blocking a different play. "
-  .. "Playing, discarding and selecting a blind advertise boss_plan; it records your plan for this "
-  .. "ante's boss once that boss is shown and stops applying when the boss changes, so do not use it "
-  .. "to carry an ordinary plan. Never restate live facts such as cash, "
+  .. "boss_plan records your plan for this ante's boss: selecting a blind saves it once that boss is shown, "
+  .. "and playing or discarding saves it only on the Boss round. It stops applying when the boss changes, so "
+  .. "do not use it to carry an ordinary plan. Never restate live facts such as cash, "
   .. "the joker roster or the boss text in a plan field -- those are refreshed separately. When "
   .. "Your move asks for plan fields, fill only the ones it names; they describe the plan from "
   .. "that action onward and are saved with it."
-  .. "\n\n## Fields\nUse each move's current schema, never an invented field."
+  .. "\n\n" .. require("core.plan_requirements").guide_section()
+  .. "\n\n## Fields\nUse each move's current schema, never an invented field. "
+  .. "One action sent with the same parameters again and again on one screen is refused after a few tries, "
+  .. "and a move that does not move the game on, such as recording a plan, is offered only a few times until you make one that does."
 
 local function count_tokens(text)
   local count = 0

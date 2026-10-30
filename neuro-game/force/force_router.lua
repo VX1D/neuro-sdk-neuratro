@@ -163,14 +163,11 @@ offer = function(state_name, force)
   local filtered = {}
   local guard_pruned = {}
   local tools = {}
-  local spent = require("core.validate").decision_spent()
-  local withheld = {}
 
   local function take_tool(name)
     if not seen[name] then
       seen[name] = true
-      local list = (spent and ActionPolicy.NON_PROGRESS[name]) and withheld or tools
-      list[#list + 1] = name
+      tools[#tools + 1] = name
     end
   end
 
@@ -246,6 +243,8 @@ offer = function(state_name, force)
     clear_defer("_guard_defer")
   end
 
+  -- A force lists every action usable in its window, named by its builder or not (action_window.gd _send_force).
+  absorb_fallback(true)
   if #filtered == 0 then return nil end
   local offered, accepted, settling, listed = {}, {}, {}, {}
   for _, name in ipairs(guard_pruned) do
@@ -262,12 +261,6 @@ offer = function(state_name, force)
     force.query = prepend(force.query, ForceReferences.settling_note(accepted, settling))
   end
 
-  if #withheld > 0 then
-    local notes = {}
-    for i, name in ipairs(withheld) do notes[i] = ForceReferences.withheld(name, "the game moves on") end
-    force.query = prepend(force.query, "NOTE: " .. table.concat(notes, "; ")
-      .. " -- this decision has had its share of answers that changed nothing. ")
-  end
   force.actions = offered
   force.tools = tools
   force.tools_text = ForceHelpers.tools_section(tools, force.tool_bits)

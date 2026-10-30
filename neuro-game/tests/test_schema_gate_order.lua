@@ -53,7 +53,7 @@ local function run_stream(state_name, action, gen, count)
     G.TIMERS.REAL = G.TIMERS.REAL + 100
     G.NEURO.force_window = nil
     require("core.execute").abort("stream")
-    if state_name ~= "SHOP" and #G.hand.cards < 2 then
+    if state_name ~= "SHOP" then
       G.hand.cards = { play_card(1), play_card(2), play_card(3), play_card(4), play_card(5) }
       G.hand.highlighted = {}
     end
@@ -105,15 +105,14 @@ do
   check("an oversized selection is answered by the schema, every single time",
     count_matching(log, "at most 5") == 40, count_matching(log, "at most 5") .. "/" .. #log)
   check("it is never answered with the repeat cap instead",
-    count_matching(log, "repeated") == 0, count_matching(log, "repeated"))
+    count_matching(log, "with the same parameters") == 0, count_matching(log, "with the same parameters"))
   check("the first refusal is SCHEMA_INVALID and unsuccessful",
     log[1] and log[1].ok == false and log[1].code == "SCHEMA_INVALID",
     log[1] and tostring(log[1].code) .. "/" .. tostring(log[1].ok))
-  check("an invalid payload gets a bounded SDK retry budget",
-    count_failed(log) == 3, count_failed(log))
-  check("identical failures become terminal acknowledgements without execution",
-    count_ok(log) == 37,
-    count_ok(log))
+  check("an invalid payload is refused success=false every time: there is no retry budget",
+    count_failed(log) == 40, count_failed(log))
+  check("identical failures are never turned into terminal acknowledgements",
+    count_ok(log) == 0, count_ok(log))
   check("the refusal never relabels its failure class",
     count_code(log, "SCHEMA_INVALID") == 40 and count_code(log, "POLICY_ACKNOWLEDGED") == 0,
     count_code(log, "SCHEMA_INVALID") .. "/" .. count_code(log, "POLICY_ACKNOWLEDGED"))
@@ -147,10 +146,10 @@ local VECTORS = {
 do
   local base_log = run_stream("SELECTING_HAND", "discard_hand", function() return BASELINE end, 40)
   check("an identical selection still reaches the repeat cap",
-    count_matching(base_log, "repeated") == 10, count_matching(base_log, "repeated"))
+    count_matching(base_log, "with the same parameters") == 10, count_matching(base_log, "with the same parameters"))
   for _, vector in ipairs(VECTORS) do
     local log = run_stream("SELECTING_HAND", "discard_hand", vector[2], 80)
-    local blocked = count_matching(log, "repeated")
+    local blocked = count_matching(log, "with the same parameters")
     check(vector[1] .. " interleaved does not launder the streak", blocked == 10, blocked)
   end
 end
@@ -160,20 +159,20 @@ do
   local SELL = '{"area":"consumeables","index":1' .. PLAN .. '}'
   local base_log = run_stream("SHOP", "sell_card", function() return SELL end, 80)
   check("an identical sell still reaches the repeat cap",
-    count_matching(base_log, "repeated") == 60, count_matching(base_log, "repeated"))
+    count_matching(base_log, "with the same parameters") == 60, count_matching(base_log, "with the same parameters"))
 
   local alias_log = run_stream("SHOP", "sell_card", function(i)
     return (i % 2 == 0) and SELL or ('{"area":"consumables","index":1' .. PLAN .. '}')
   end, 80)
   check("the accepted spelling of one area does not split the streak",
-    count_matching(alias_log, "repeated") == 60, count_matching(alias_log, "repeated"))
+    count_matching(alias_log, "with the same parameters") == 60, count_matching(alias_log, "with the same parameters"))
 
   local name_log = run_stream("SHOP", "sell_card", function(i)
     return (i % 2 == 0) and SELL
       or ('{"area":"consumeables","index":1,"name":"The Fool"' .. PLAN .. '}')
   end, 80)
   check("the optional target confirmation does not split the streak",
-    count_matching(name_log, "repeated") == 60, count_matching(name_log, "repeated"))
+    count_matching(name_log, "with the same parameters") == 60, count_matching(name_log, "with the same parameters"))
 end
 
 done()

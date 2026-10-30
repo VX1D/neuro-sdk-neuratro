@@ -135,7 +135,12 @@ end
 do
   fresh()
   local STAKES = {}
-  for i = 1, 8 do STAKES[i] = { key = "stake_" .. i, order = i, applied_stakes = {} } end
+  local P_STAKES = {}
+  for i = 1, 8 do
+    STAKES[i] = { key = "stake_" .. i, order = i, applied_stakes = {} }
+    P_STAKES[STAKES[i].key] = STAKES[i]
+  end
+  local function stake_key(n) return n and STAKES[n].key or nil end
 
   local started, drawn
   local function run_select(opts)
@@ -143,7 +148,7 @@ do
     local pages = { deck_choice = { key = "deck_choice", automatic_preview = true },
       stake_choice = { key = "stake_choice", include_deck_preview = true, include_stake_tower = true } }
     return { RunSelect = {
-      Setup = { choices = { deck_choice = opts.screen_deck, stake_choice = opts.screen_stake } },
+      Setup = { choices = { deck_choice = opts.screen_deck, stake_choice = stake_key(opts.screen_stake) } },
       Pages = pages,
       Internals = { pages = { "deck_choice", "stake_choice" }, current_page = opts.page or 2,
         preview_area = {}, stake_tower = {} },
@@ -180,15 +185,15 @@ do
           G.OVERLAY_MENU = overlay
           local last = G.PROFILES[1].last_choices
           SMODS.RunSelect.Setup.choices = { deck_choice = last.deck_choice or "b_red",
-            stake_choice = last.stake_choice or 1 }
+            stake_choice = last.stake_choice or "stake_1" }
         end,
       },
       GAME = { stake = opts.old_run_stake or 1, selected_back = { name = "Red Deck", effect = { center = RED } } },
       SETTINGS = { profile = 1 },
       PROFILES = { [1] = { deck_usage = {}, MEMORY = { deck = "Red Deck", stake = opts.memory_stake },
-        last_choices = { deck_choice = opts.last_deck, stake_choice = opts.last_stake } } },
+        last_choices = { deck_choice = opts.last_deck, stake_choice = stake_key(opts.last_stake) } } },
       P_CENTERS = { b_red = RED, b_green = GREEN },
-      P_CENTER_POOLS = { Back = { RED, GREEN }, Stake = STAKES },
+      P_CENTER_POOLS = { Back = { RED, GREEN }, Stake = STAKES }, P_STAKES = P_STAKES,
       OVERLAY_MENU = opts.closed and nil or overlay,
     }
   end
@@ -221,9 +226,9 @@ do
   do
     board({ screen_deck = "b_red", screen_stake = 1, memory_stake = 1 })
     run("select_stake", { to_key = 5 })
-    check("select_stake moves the screen's stake choice", SMODS.RunSelect.Setup.choices.stake_choice == 5,
+    check("select_stake moves the screen's stake choice", SMODS.RunSelect.Setup.choices.stake_choice == "stake_5",
       SMODS.RunSelect.Setup.choices.stake_choice)
-    check("and redraws the stake tower the open page shows", drawn.tower[#drawn.tower] == 5,
+    check("and redraws the stake tower the open page shows", drawn.tower[#drawn.tower] == "stake_5",
       table.concat(drawn.tower, ","))
     run("select_deck", { back = "b_green" })
     check("select_deck moves the screen's deck choice", SMODS.RunSelect.Setup.choices.deck_choice == "b_green")
@@ -252,7 +257,7 @@ do
     run("open_run_setup")
     local choices = SMODS.RunSelect.Setup.choices
     check("opening run setup shows Neuro's deck and stake, not last_choices",
-      choices.deck_choice == "b_green" and choices.stake_choice == 4,
+      choices.deck_choice == "b_green" and choices.stake_choice == "stake_4",
       tostring(choices.deck_choice) .. "/" .. tostring(choices.stake_choice))
   end
 
@@ -261,8 +266,8 @@ do
     run("select_stake", { to_key = 5 })
     run("select_deck", { back = "b_green" })
     check("a stake locked for the new deck falls back to 1", DeckFacts.run_stake() == 1, DeckFacts.run_stake())
-    check("the screen follows", SMODS.RunSelect.Setup.choices.stake_choice == 1
-      and drawn.tower[#drawn.tower] == 1, table.concat(drawn.tower, ","))
+    check("the screen follows", SMODS.RunSelect.Setup.choices.stake_choice == "stake_1"
+      and drawn.tower[#drawn.tower] == "stake_1", table.concat(drawn.tower, ","))
     run("start_run")
     check("and the run starts on it", started and started.stake == 1, started and started.stake)
   end

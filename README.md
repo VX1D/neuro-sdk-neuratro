@@ -7,7 +7,7 @@
 Lua mod hooks into the game, Rust bridge relays messages over WebSocket,
 Neuro gets game state and responds with actions.
 
-[![Version](https://img.shields.io/badge/version-1.1.0-ff4d94?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.1-ff4d94?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-80dfff?style=flat-square)](LICENSE)
 [![Balatro](https://img.shields.io/badge/Balatro-1.0.1-9b72e6?style=flat-square)](https://store.steampowered.com/app/2379780/Balatro/)
 [![Lua](https://img.shields.io/badge/Lua-5.1-ffd700?style=flat-square)](https://www.lua.org/)
@@ -43,7 +43,7 @@ The Lua mod reads game state, figures out valid actions, and sends a force reque
 |---|---|
 | [Balatro](https://store.steampowered.com/app/2379780/Balatro/) | Steam version |
 | [Lovely injector v0.9.0](https://github.com/ethangreen-dev/lovely-injector/releases/tag/v0.9.0) | Drop `version.dll` into the Balatro game folder |
-| [Steamodded](https://github.com/Steamodded/smods) | Mod framework |
+| [Steamodded 26.1002.0 or newer](https://github.com/Steamodded/smods/releases/tag/26.1002.0) | Mod framework |
 | [Rust toolchain](https://rustup.rs/) | To build the bridge |
 
 ---
@@ -62,7 +62,11 @@ Follow the instructions on the [Lovely](https://github.com/ethangreen-dev/lovely
 
 Should sit directly inside `Mods\`, not nested further.
 
-### 3. Build the bridge
+### 3. Get the bridge
+
+A release ships a prebuilt `neuro-bridge-<version>-windows-x86_64.exe` next to `run-bridge.ps1`; nothing to build.
+
+From a source checkout, build it once:
 
 ```powershell
 cd neuro-bridge-rs
@@ -76,7 +80,7 @@ Binary ends up at `neuro-bridge-rs\target\release\neuro-bridge.exe`.
 ```powershell
 .\run-bridge.ps1        # starts bridge, connects to ws://127.0.0.1:8000
 ```
-The launcher validates the WebSocket URL and resolves a usable IPC directory before starting the relay. It always runs `cargo build --release` and refuses to run when the build fails or the expected binary is missing.
+The launcher validates the WebSocket URL and resolves a usable IPC directory before starting the relay. In a release folder it runs the prebuilt `neuro-bridge-*-windows-x86_64.exe`; in a source checkout it runs `cargo build --release` and refuses to run when the build fails or the expected binary is missing.
 
 Then launch Balatro. The mod connects automatically.
 

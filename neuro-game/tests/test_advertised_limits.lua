@@ -107,7 +107,7 @@ local function scenario(label, opts, play_max, discard_max)
   local base_hi = live_schema(defs.use_consumable, "hand_indices")
   local live_hi = live_schema(Registry.get("use_consumable"), "hand_indices")
   check(label .. ": the registered consumable catalogue advertises the hand target bound",
-    base_hi and base_hi.minItems == 1 and base_hi.maxItems == Limits.hand_select_max(),
+    base_hi and base_hi.minItems == nil and base_hi.maxItems == Limits.hand_select_max(),
     schema_detail(base_hi))
   check(label .. ": live consumable targeting reaches the hand selection cap",
     live_hi and live_hi.maxItems == Limits.hand_select_max(), live_hi and tostring(live_hi.maxItems))

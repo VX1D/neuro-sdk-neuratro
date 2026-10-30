@@ -1,5 +1,42 @@
 # Changelog
 
+### 1.2.1 -- 2026-10-30
+
+<details>
+<summary><strong>Actions and forces</strong></summary>
+
+- Each screen registers only the actions usable on it, and its force lists all of them, following the reference ActionWindow.
+- A move from another screen is refused with the moves offered now; a move refused only because the screen is still changing is answered as a wait and asked again.
+- Any successful action ends the force; a re-asked force says why the last answer was refused.
+- Repeating a move that changes nothing is acknowledged as unchanged instead of retried, and moves that never progress the game are withheld after a few tries.
+- Optional card names next to hand positions let a stale index be refused instead of playing or targeting the wrong card.
+- An accepted action that fails or cannot be confirmed in the game now says so.
+- A play review is answered only after the review itself has been delivered.
+
+</details>
+
+<details>
+<summary><strong>Plans, persona and prose</strong></summary>
+
+- Required plan fields come from one table, and the action guide lists them.
+- The persona follows the server's startup acknowledgement and is remembered for the next launch; the login animation still plays.
+- Mid-round sell refusals explain why; tagging roles or recording a plan no longer reopens a sell review.
+- The jokers list shows what each copy joker (Blueprint, Brainstorm) is copying now.
+- Clearer blind order, deck and stake selection, and directional card moves.
+
+</details>
+
+<details>
+<summary><strong>Compatibility and relay</strong></summary>
+
+- Supports Steamodded 26.x.
+- The game-over and win screens' run setup are handled without offering an overlay that cannot be closed.
+- A quick restart resets run state.
+- IPC frames carry UTC timestamps in both directions; the outbox fence hash is correct on LuaJIT 2.0.
+- `run-bridge.ps1` runs the prebuilt bridge from a release folder.
+
+</details>
+
 ### 1.2.0 -- 2026-10-26
 
 // TODO

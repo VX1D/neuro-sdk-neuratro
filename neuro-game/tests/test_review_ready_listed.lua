@@ -68,7 +68,9 @@ local function send(name, data)
   pcall(require("core.execute").step, G.TIMERS.REAL)
 end
 
-local function ready_line(state) return tostring(state):match("%- Ready to play now: ([^\n]*)") or "" end
+local function ready_line(state)
+  return require("tests.helpers").index_only(tostring(state):match("%- Ready to play now: ([^\n]*)") or "")
+end
 
 local function claims(text)
   local out = {}
@@ -98,6 +100,9 @@ setup()
 local first = FP.build("SELECTING_HAND") or { state = "", query = "" }
 local line = ready_line(first.state)
 check("the board: the Pair is Ready", line:find("Pair (cards 7, 8)", 1, true) ~= nil, line)
+check("the Ready line names the cards she would play, as Your hand names them",
+  tostring(first.state):find("Pair (cards 7: 3 of Hearts, 8: 3 of Clubs)", 1, true) ~= nil,
+  tostring(first.state):match("%- Ready to play now: ([^\n]*)"))
 check("the board: High Card is Ready beside the Pair, naming its card", line:find("High Card (cards 1)", 1, true) ~= nil, line)
 
 send("play_hand", { indices = { 7, 8 } })

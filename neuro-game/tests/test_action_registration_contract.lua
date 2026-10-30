@@ -194,14 +194,15 @@ do
   require("tests.helpers").open_force("SELECTING_HAND", { "play_hand" })
   local results = {}
   local b = {
-    send_action_result = require("tests.helpers").result_log(results, { "_", "ok", "_", "reason" }),
+    send_action_result = require("tests.helpers").result_log(results, { "_", "ok", "msg", "reason" }),
     send_context = require("tests.helpers").yes,
   }
   Dispatcher.route_message({ command = "action", run_generation = 1,
     data = { id = "why-it-matters", name = "play_hand", data = '{"indices":[1]}' } }, b)
   check("an empty registry rejects a forced action while its window is open",
-    results[1] and results[1].ok == false and results[1].reason == "ACTION_UNREGISTERED",
-    results[1] and tostring(results[1].reason))
+    results[1] and results[1].ok == false and results[1].reason == "ACTION_UNKNOWN"
+      and results[1].msg == "Action failed. Unknown action 'play_hand'.",
+    results[1] and (tostring(results[1].reason) .. " " .. tostring(results[1].msg)))
   check("the force window survives the rejection for a valid retry",
     require("core.window").current() ~= nil)
 end

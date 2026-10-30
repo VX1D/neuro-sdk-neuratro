@@ -68,13 +68,14 @@ do
   spy()
   local function joker(key, name)
     return { ability = { name = name, set = "Joker" },
-      config = { center = { key = key, set = "Joker" } } }
+      config = { center = { key = key, set = "Joker", blueprint_compat = true } } }
   end
   G.jokers = { cards = { joker("j_blueprint", "Blueprint"), joker("j_cavendish", "Cavendish") } }
-  local bp1 = (FactHints.copy_chain() or "")
-  local bp2 = (FactHints.copy_chain() or "")
+  local CtxJokers = require("context.ctx_jokers")
+  local bp1 = tostring(CtxJokers.jokers_section(nil))
+  local bp2 = tostring(CtxJokers.jokers_section(nil))
   check("current copy target is restated inline on re-ask",
-    bp1:find("Blueprint", 1, true) and bp1:find("Cavendish", 1, true) and bp2 == bp1, bp1)
+    bp1:find("copying now: Cavendish", 1, true) ~= nil and bp2 == bp1 and FactHints.pending_count() == 0, bp1)
   G.shop_jokers = { cards = { {
     ability = { name = "Baron", set = "Joker" }, edition = { polychrome = true },
     config = { center = { key = "j_baron", set = "Joker" } },

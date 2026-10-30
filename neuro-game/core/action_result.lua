@@ -7,7 +7,7 @@ local RETRY, TERMINAL, WAIT = "retry", "terminal", "wait"
 M.CODES = {
   CONFIRMATION_REQUIRED = TERMINAL,
   POLICY_ACKNOWLEDGED = TERMINAL,
-  UNCHANGED = RETRY,
+  UNCHANGED = TERMINAL,
   TRANSITION_PENDING = WAIT,
   SCHEMA_INVALID = RETRY,
   ACTION_UNAVAILABLE = RETRY,
@@ -64,7 +64,7 @@ function M.reasked_message(err)
 end
 
 function M.unchanged(fact)
-  return M.reject("UNCHANGED", fact .. "; nothing changed. Pick a different value or another offered action.")
+  return M.reject("UNCHANGED", fact .. "; nothing changed.")
 end
 
 function M.terminal(code, forced)
@@ -73,6 +73,10 @@ function M.terminal(code, forced)
 end
 
 local UNRECOGNISED = { ACTION_UNKNOWN = true, ACTION_UNREGISTERED = true }
+function M.is_wait(value)
+  return M.is_error(value) and M.CODES[value.reason_code] == WAIT
+end
+
 function M.unrecognised(code)
   return UNRECOGNISED[code] == true
 end
@@ -130,7 +134,6 @@ function M.create(opts)
     deadline = deadline,
     timeout_outcome = timeout_outcome,
     allow_generation_change = opts.allow_generation_change == true,
-    correction = tostring(opts.correction or "It could not be verified. Inspect the current state and choose again."),
     applied_message = type(opts.applied_message) == "string" and opts.applied_message or nil,
     debug = clean_value(opts.debug, 0),
     probe = opts.probe,

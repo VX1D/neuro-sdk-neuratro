@@ -84,13 +84,13 @@ for _, case in ipairs(CASES) do
   if case.setup then case.setup() end
   local order = G.jokers and G.jokers.cards and { G.jokers.cards[1], G.jokers.cards[2] }
   for round = 1, 2 do
-    local results, answered, open = send(case.name, case.same)
+    local results, answered = send(case.name, case.same)
     local r = only(results)
-    check(case.name .. " no-op #" .. round .. ": one actionable failure naming the current value (BEST_PRACTICES.md:29)",
-      #results == 1 and r.ok == false and tostring(r.message):find(case.value, 1, true) ~= nil,
+    check(case.name .. " no-op #" .. round .. ": a success naming the current value, nothing to retry (SPECIFICATION.md:191-192)",
+      #results == 1 and r.ok == true and tostring(r.message):find(case.value, 1, true) ~= nil,
       tostring(r.ok) .. " " .. tostring(r.message))
     check(case.name .. " no-op #" .. round .. ": it runs nothing", #calls == 0, table.concat(calls, ","))
-    check(case.name .. " no-op #" .. round .. ": it leaves the force open for the retry", open and not answered)
+    check(case.name .. " no-op #" .. round .. ": it answers the force", answered)
     FP.build(case.state)
   end
   if case.name == "set_joker_order" then
@@ -118,7 +118,7 @@ do
   local r = only((send("copy_seed")))
   love.system = system
   check("copy_seed reads the system clipboard the engine writes without F_LOCAL_CLIPBOARD",
-    r.ok == false and tostring(r.message):find("ABC123", 1, true) ~= nil,
+    r.ok == true and tostring(r.message):find("ABC123", 1, true) ~= nil,
     tostring(r.message))
 end
 
@@ -129,13 +129,12 @@ do
   G.GAME.pseudorandom = nil
   FP.build("MENU")
   local offer = table.concat((Window.current() or { names = {} }).names, ",")
-  check("replay: the MENU force offers what the live one did",
-    offer == "open_run_setup,select_deck,select_stake", offer)
+  check("replay: the MENU force omits the stake choice that has no alternative",
+    offer == "open_run_setup,select_deck", offer)
   local LOOP = { "d", "s", "s", "s", "s", "d", "s", "s", "s", "s", "s", "s", "s", "d", "d", "s", "s", "s", "s", "d", "d" }
   G.NEURO.recent_actions = {}
-  local early, unrecorded, wide = {}, {}, {}
-  local spent_at
-  local frame = FP.build("MENU")
+  local Actions = require("core.actions")
+  local lost_progress = {}
   for i, step in ipairs(LOOP) do
     local name, data
     if step == "d" then
@@ -143,30 +142,12 @@ do
     else
       name, data = "select_stake", { to_key = 1 }
     end
-    local results, _, open = send(name, data)
-    local r = only(results)
-    if r.ok == true then
-      spent_at = spent_at or i
-    elseif not open then
-      early[#early + 1] = i .. ":" .. name
-    end
-    if not open then frame = FP.next() end
-    if r.ok == true and not open then
-      local said = name:gsub("_", " ") .. " (no change)"
-      if not (frame and frame.state:find(said, 1, true)) then unrecorded[#unrecorded + 1] = i .. ":" .. name end
-    end
-    if spent_at then
-      local live = table.concat((Window.current() or { names = {} }).names, ",")
-      if not (frame and table.concat(frame.actions, ",") == "open_run_setup" and live == "open_run_setup") then
-        wide[#wide + 1] = i .. ":" .. (frame and table.concat(frame.actions, ",") or "nil") .. "/" .. live
-      end
-    end
+    send(name, data)
+    if not Actions.is_action_valid("open_run_setup") then lost_progress[#lost_progress + 1] = i end
   end
-  check("replay: a refusal leaves the force open until the budget is spent", #early == 0, table.concat(early, "; "))
-  check("replay: the budget is spent within the first few answers, not never", spent_at ~= nil and spent_at <= 7,
-    tostring(spent_at))
-  check("replay: once spent, every force offers only open_run_setup", #wide == 0, table.concat(wide, "; "))
-  check("replay: each spent no-op shows in the next force's history", #unrecorded == 0, table.concat(unrecorded, "; "))
+  check("replay: repeated no-ops are bounded per decision, then withheld",
+    not Actions.is_action_valid("select_deck") and not Actions.registrable("select_deck"))
+  check("replay: the move that progresses stays usable throughout", #lost_progress == 0, table.concat(lost_progress, "; "))
   check("replay: the loop never reached the engine", #calls == 0, table.concat(calls, ","))
 end
 
@@ -177,14 +158,10 @@ do
   check("shop replay: the first offer carries the reorder tool",
     frame and table.concat(frame.actions, ","):find("set_joker_order", 1, true) ~= nil,
     frame and table.concat(frame.actions, ","))
-  local spent
-  for _ = 1, 8 do
-    local results, _, open = send("set_joker_order", { from_index = 2, to_index = 2 })
-    if only(results).ok == true and not open then spent = FP.next() break end
-  end
-  local offer = spent and table.concat(spent.actions, ",") or ""
-  check("shop replay: once spent, the reorder tool is off the offer and the shop's own choices stay",
-    spent ~= nil and not offer:find("set_joker_order", 1, true) and offer:find("leave_shop", 1, true) ~= nil, offer)
+  for _ = 1, 10 do send("set_joker_order", { from_index = 2, to_index = 2 }) end
+  local Actions = require("core.actions")
+  check("shop replay: repeated reorder no-ops are withheld after the cap, leaving the shop stays usable",
+    not Actions.registrable("set_joker_order") and Actions.is_action_valid("leave_shop"))
 end
 
 done()

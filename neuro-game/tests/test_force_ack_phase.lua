@@ -34,7 +34,6 @@ end
 
 local Dispatcher = require("core.dispatcher")
 local Actions = require("core.actions")
-local Utils = require("util.utils")
 local Win = require("core.window")
 local Window = { REGISTERED = "registered", FORCED = "forced", ENDED = "ended" }
 
@@ -106,10 +105,10 @@ local function board(state_name)
     wire[#wire + 1] = { kind = "unregister", set = seen, t = G.TIMERS.REAL }
   end
   G.NEURO._registered_sigs = live
-  function G.NEURO:force_actions(_ctx, _query, actions)
+  function G.NEURO:force_actions(_ctx, query, actions)
     local w = G.NEURO.force_window
     forces[#forces + 1] = { t = G.TIMERS.REAL, state = w and w.state,
-      actions = table.concat(actions, ",") }
+      actions = table.concat(actions, ","), query = query }
     local seen = {}
     for _, n in ipairs(actions or {}) do seen[n] = true end
     wire[#wire + 1] = { kind = "force", set = seen, t = G.TIMERS.REAL }
@@ -123,10 +122,6 @@ require("core.orchestrator")
 
 local T = require("tests.helpers").orch_ticker(function() return CLOCK end, function(t) CLOCK = t end)
 local tick_for = T.tick_for
-local function liveness_remaining()
-  local w = G.NEURO.force_window
-  return Win.liveness_timeout(w) - (Utils.gate_now("force_liveness_timeout") - w.sent_at)
-end
 
 local answer_n = 0
 local function frame(name, payload)
@@ -164,6 +159,12 @@ local function shop_board()
   G.FUNCS.toggle_shop = function() end
 end
 
+local function end_window(b)
+  b.is_transition_cooldown = function() return true end
+  answer(b, "play_hand", '{"indices":[1,2]}')
+  b.is_transition_cooldown = function() return false end
+end
+
 local BAD_PLAY = '{"indices":[1,2,99]}'
 local BAD_BUY = '{"area":"shop_jokers","index":99,"plan":{"money_plan":"save up"}}'
 local STREAK = 3
@@ -185,25 +186,23 @@ do
       phase() == Window.FORCED, phase())
   end
 
-  local acked = answer(b, "play_hand", BAD_PLAY)
-  check("A: past the streak the same refusal acknowledges (SPEC:187-188 -- success plus the reason)",
-    acked.ok == true and acked.code == "INVALID_SELECTION",
-    tostring(acked.code) .. "/" .. tostring(acked.ok))
-  check("A: the acknowledged answer still carries the refusal prose",
-    type(acked.message) == "string" and acked.message ~= "", tostring(acked.message))
-  check("A: success=true ends the window", phase() == Window.ENDED, phase())
+  local still = answer(b, "play_hand", BAD_PLAY)
+  check("A: past the old streak the same refusal is still unsuccessful: there is no retry budget",
+    still.ok == false and still.code == "INVALID_SELECTION",
+    tostring(still.code) .. "/" .. tostring(still.ok))
+  check("A: the refusal still carries its prose",
+    type(still.message) == "string" and still.message ~= "", tostring(still.message))
+  check("A: the force stays standing", phase() == Window.FORCED, phase())
   check("A: the decision was never made, so its serial does not move",
     G.NEURO.decision_serial == 1, tostring(G.NEURO.decision_serial))
-  check("A: an answered offer is not withdrawn on the wire", #withdrawals == 0, #withdrawals)
+  check("A: a refused offer is not withdrawn on the wire", #withdrawals == 0, #withdrawals)
 
   local before = #forces
   tick_for(5)
-  check("A: once the game settles the decision is asked again, with no idle timer",
-    #forces == before + 1 and phase() == Window.FORCED, #forces .. " forces after " .. before)
-  check("A: and still decides nothing, so the serial stays put",
-    G.NEURO.decision_serial == 1, tostring(G.NEURO.decision_serial))
-  check("A: and the fresh offer carries the full action list, not a narrowed one",
-    forces[#forces] and forces[#forces].actions == forces[before].actions,
+  check("A: Neuro retries the standing force, so nothing new is asked",
+    #forces == before and phase() == Window.FORCED, #forces .. " forces after " .. before)
+  check("A: and the offer still carries the full action list",
+    forces[#forces] and forces[#forces].actions == forces[1].actions,
     forces[#forces] and forces[#forces].actions)
 end
 
@@ -217,19 +216,17 @@ do
     local r = answer(b, "play_hand", '{"indices":[1,2,3,4,5,6]}')
     if r and r.ok == false and r.code == "SCHEMA_INVALID" then refused = refused + 1 end
   end
-  check("identical invalid payloads receive only the bounded SDK retry budget", refused == 3, refused)
-  check("the bounded streak terminally acknowledges nonexecution and closes the retrying force",
-    phase() ~= Window.FORCED, phase())
-  tick_for(60)
-  check("after bounded acknowledgement the game may issue one fresh force, not livelock the old one",
-    #forces == before + 1, #forces)
+  check("identical invalid payloads are refused success=false every time", refused == 47, refused)
+  check("the standing force is not closed by the repeats", phase() == Window.FORCED, phase())
+  tick_for(Win.REFUSED_LIVENESS - 10)
+  check("and no fresh force is issued on top of it", #forces == before, #forces)
 end
 
 do
   board("SELECTING_HAND")
   local b = bridge_stub()
   tick_for(10)
-  for _ = 1, STREAK + 1 do answer(b, "play_hand", BAD_PLAY) end
+  end_window(b)
   check("B: the fixture ended the window", phase() == Window.ENDED, phase())
 
   local serial_before = G.NEURO.decision_serial
@@ -281,8 +278,8 @@ do
   end
   check("D: the first answer opens the confirmation and every resend is acknowledged",
     codes[1] == "CONFIRMATION_REQUIRED" and followups == rounds - 1, table.concat(codes, ","))
-  check("D: a resend outside the confirmation force leaves that force standing, not re-asked",
-    #forces == forces_at_start + 1, #forces)
+  check("D: each acknowledged resend completes the review force, which is asked again once (ActionWindowResponse.cs:20)",
+    #forces == forces_at_start + rounds, #forces)
   check("D: and the follow-up force is the one standing", phase() == Window.FORCED, phase())
 end
 
@@ -336,7 +333,7 @@ do
   board("SELECTING_HAND")
   local b = bridge_stub()
   tick_for(10)
-  for _ = 1, STREAK + 1 do answer(b, "play_hand", BAD_PLAY) end
+  end_window(b)
   check("F: the fixture ended the window", phase() == Window.ENDED, phase())
 
   local stale_window = G.NEURO.force_window
@@ -347,9 +344,9 @@ do
   tick_for(20)
   check("F: a state change sends no withdrawal for a force success=true already resolved",
     stale_window.phase == Window.ENDED and #withdrawals == 0, tostring(#withdrawals))
-  check("F: the canonical catalogue is additive across the state change",
-    #registered == registered_before and #unregistered == 0
-      and G.NEURO._registered_sigs.play_hand ~= nil,
+  check("F: the catalogue follows the screen: the hand's moves leave, the shop's arrive",
+    #registered > registered_before and G.NEURO._registered_sigs.play_hand == nil
+      and G.NEURO._registered_sigs.leave_shop ~= nil,
     tostring(#registered) .. "/" .. tostring(#unregistered))
   check("F: the SHOP successor is offered",
     #forces == 2 and forces[2].state == "SHOP" and phase() == Window.FORCED,
@@ -360,7 +357,7 @@ do
   board("SELECTING_HAND")
   local b = bridge_stub()
   tick_for(10)
-  for _ = 1, STREAK + 1 do answer(b, "play_hand", BAD_PLAY) end
+  end_window(b)
   unregistered = {}
   require("core.neuro_lifecycle").bump_run_generation("transport reconnected")
   check("F: a reconnect leaves no window", phase() == Window.ENDED, phase())
@@ -397,23 +394,19 @@ do
     tick_for(1)
   end
 
-  local acked = answer(b, "buy_from_shop", BAD_BUY)
-  check("the fourth refusal acknowledges even though they were not consecutive",
-    acked.ok == true and acked.code == "TARGET_UNAVAILABLE",
-    tostring(acked.code) .. "/" .. tostring(acked.ok))
-  check("and ends the window", phase() == Window.ENDED, phase())
+  local still = answer(b, "buy_from_shop", BAD_BUY)
+  check("the fourth refusal is still unsuccessful even though they were not consecutive",
+    still.ok == false and still.code == "TARGET_UNAVAILABLE",
+    tostring(still.code) .. "/" .. tostring(still.ok))
+  check("and the window stays open", phase() == Window.FORCED, phase())
 
   local parked = #forces
   tick_for(5)
-  check("once the game settles the decision is asked again",
-    #forces == parked + 1, #forces .. " forces after " .. parked)
-  check("with the full action list it opened with, not a narrowed one",
-    forces[#forces].actions == forces[parked].actions, forces[#forces].actions)
-  check("and the re-ask is the one force in flight", phase() == Window.FORCED, phase())
+  check("nothing new is asked while the force stands", #forces == parked, #forces .. " forces after " .. parked)
   local reasked = #forces
   local reasked_window = G.NEURO.force_window
-  tick_for(math.max(0, liveness_remaining() - 5))
-  check("the re-ask churns nothing for the whole liveness bound it is given",
+  tick_for(Win.REFUSED_LIVENESS - 5)
+  check("the standing force churns nothing for the whole liveness bound it is given",
     #forces == reasked, #forces .. " forces after " .. reasked)
   tick_for(6)
   check("past that bound the unanswered force is withdrawn (README.md:27)",
@@ -433,19 +426,31 @@ do
   local plan_payload = '{"hand_plan":"Flush line","build_plan":"Upgrade mult","money_plan":"Save $20"}'
   for i = 1, 3 do
     local r = answer(b, "record_plan", plan_payload)
-    check("identical send " .. i .. " is admitted before execution",
-      r.ok == true and r.code == "ACTION_ACCEPTED",
+    local expected = (i == 1) and "ACTION_ACCEPTED" or "UNCHANGED"
+    check("identical send " .. i .. " is answered as a success (" .. expected .. ")",
+      r.ok == true and r.code == expected,
       tostring(r.code) .. "/" .. tostring(r.ok))
     tick_for(10)
   end
+  local Budget = require("core.decision_budget")
+  local last = forces[#forces]
+  check("after the third, the next force no longer offers recording a plan but still offers the shop's moves",
+    phase() == Window.FORCED and not (","..last.actions..","):find(",record_plan,", 1, true)
+      and (","..last.actions..","):find(",leave_shop,", 1, true) ~= nil, last.actions)
+  check("and says why, truthfully", last.query:find(Budget.reason("record_plan"), 1, true) ~= nil, last.query)
   local capped = answer(b, "record_plan", plan_payload)
-  check("the fourth trips the repeat cap and is acknowledged as a forced answer",
-    capped.code == "POLICY_ACKNOWLEDGED" and capped.ok == true, tostring(capped.code))
-  check("which resolves the shop force", phase() == Window.ENDED, phase())
+  check("a fourth sent anyway is refused with that reason and changes nothing",
+    capped.ok == false and tostring(capped.message):find(Budget.reason("record_plan"), 1, true) ~= nil,
+    tostring(capped.code) .. ": " .. tostring(capped.message))
+  check("which leaves the standing force open", phase() == Window.FORCED, phase())
 
   local parked = #forces
   tick_for(10)
-  check("and the decision is asked again by exactly one force", #forces == parked + 1, #forces)
+  check("and nothing is asked again meanwhile", #forces == parked, #forces)
+  G.FUNCS.toggle_shop = function() end
+  local left = answer(b, "leave_shop", "{}")
+  check("a move that moves the game on is still accepted", left.ok == true, tostring(left.code))
+  check("and restores the budget", not Budget.spent("record_plan", "SHOP"))
 end
 
 do
@@ -462,18 +467,18 @@ do
 
   local forces_after, unregister_calls_after = #forces, unregister_calls
   local serial_before = G.NEURO.decision_serial
-  local acks = 0
+  local refused_n = 0
   for _ = 1, 20 do
     local r = answer(b, "buy_from_shop", BAD_BUY)
-    if r and r.ok == true then acks = acks + 1 end
+    if r and r.ok == false then refused_n = refused_n + 1 end
     tick_for(1)
   end
-  local reasks = #forces - forces_after
-  check("each success=true acknowledgement is followed by exactly one fresh question",
-    acks == 20 and reasks == acks, reasks .. " re-asks for " .. acks .. " acknowledgements")
-  check("canonical action registration is not torn down per re-ask",
+  check("twenty more refusals are all success=false and ask nothing new",
+    refused_n == 20 and #forces == forces_after and phase() == Window.FORCED,
+    refused_n .. " refused, " .. (#forces - forces_after) .. " new forces")
+  check("canonical action registration is not torn down by repeated refusals",
     unregister_calls - unregister_calls_after == 0 and #withdrawals == 0,
-    (unregister_calls - unregister_calls_after) .. " teardowns for " .. reasks .. " re-asks")
+    (unregister_calls - unregister_calls_after) .. " teardowns")
   check("still nothing was decided, so the serial stays put",
     G.NEURO.decision_serial == serial_before, tostring(G.NEURO.decision_serial))
 end
@@ -512,8 +517,8 @@ do
   end
   for i = STREAK + 1, 10 do
     local r = answer(b, "play_hand", BAD_PLAY)
-    check("send " .. i .. " is refused below the gate, success=false until the streak acknowledges",
-      r.code == "INVALID_SELECTION" and r.ok == (i > STREAK), tostring(r.code) .. "/" .. tostring(r.ok))
+    check("send " .. i .. " is still refused below the gate with success=false",
+      r.code == "INVALID_SELECTION" and r.ok == false, tostring(r.code) .. "/" .. tostring(r.ok))
   end
 end
 
@@ -531,9 +536,9 @@ do
   check("a state change withdraws the already-sent force by unregistering its names (README.md:27)",
     stale_window.phase == Window.ENDED and stale_window.ended_by == "state_changed" and #withdrawals == 1,
     tostring(stale_window.phase) .. "/" .. tostring(stale_window.ended_by) .. "/" .. #withdrawals)
-  check("the stable catalogue keeps the SHOP names without omission withdrawal",
-    #registered == registered_before and #unregistered == 0
-      and G.NEURO._registered_sigs.buy_from_shop ~= nil,
+  check("the catalogue follows the screen: the shop's moves leave, blind select's arrive",
+    #registered > registered_before and G.NEURO._registered_sigs.buy_from_shop == nil
+      and G.NEURO._registered_sigs.select_blind ~= nil,
     tostring(#registered) .. "/" .. tostring(#unregistered))
   check("the BLIND_SELECT successor is offered",
     #forces == 2 and forces[2].state == "BLIND_SELECT" and phase() == Window.FORCED,
@@ -554,32 +559,28 @@ do
   local b = bridge_stub()
   tick_for(10)
   local opened, teardowns = #forces, unregister_calls
-  local last_new_force_at = 0
-  for i = 1, 40 do
-    local before = #forces
-    answer(b, "play_hand", BAD_PLAY)
+  local refused_n = 0
+  for _ = 1, 40 do
+    local r = answer(b, "play_hand", BAD_PLAY)
+    if r and r.ok == false then refused_n = refused_n + 1 end
     tick_for(1)
-    if #forces > before then last_new_force_at = i end
   end
   local asked = #forces - opened
   check("forty identical refusals decide nothing", G.NEURO.decision_serial == 1,
     tostring(G.NEURO.decision_serial))
-  check("the game keeps asking past the budget instead of going quiet for good",
-    last_new_force_at > 5, "last question after answer " .. last_new_force_at)
-  check("every acknowledged answer is asked again once, as the reference opens its next window",
-    asked == 40 - STREAK, asked .. " questions for 40 answers")
-  check("canonical action registration is not torn down for each acknowledgement",
+  check("every one of them is success=false: there is no retry budget", refused_n == 40, refused_n)
+  check("Neuro retries the standing force, so nothing new is asked", asked == 0, asked .. " questions for 40 answers")
+  check("canonical action registration is not torn down by repeated refusals",
     unregister_calls - teardowns == 0 and #withdrawals == 0,
-    (unregister_calls - teardowns) .. " teardowns for " .. asked .. " questions")
-  check("and when the answers stop the last question is the one force in flight",
-    phase() == Window.FORCED, phase())
+    (unregister_calls - teardowns) .. " teardowns")
+  check("and the standing force is the one force in flight", phase() == Window.FORCED, phase())
   local reasked = #forces
   local reasked_window = G.NEURO.force_window
-  tick_for(math.max(0, liveness_remaining() - 5))
-  check("the re-ask costs nothing further before its liveness bound",
+  tick_for(Win.REFUSED_LIVENESS - 5)
+  check("the standing force costs nothing further before its liveness bound",
     #forces == reasked, #forces .. " forces after " .. reasked)
   tick_for(6)
-  check("past that bound the re-ask is withdrawn instead of remaining latched",
+  check("past that bound the standing force is withdrawn instead of remaining latched",
     reasked_window.phase == Window.ENDED and reasked_window.ended_by == "liveness_timeout"
       and #withdrawals == 1,
     tostring(reasked_window.phase) .. "/" .. tostring(reasked_window.ended_by))

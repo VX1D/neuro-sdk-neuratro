@@ -157,7 +157,6 @@ do
   Staging.reset_run_state()
   require("core.bridge").tx.reset()
   local b = result_bridge()
-  function b:confirmation_proposal_ref(_) return hand_tx.ref end
   local played = false
   G.FUNCS.play_cards_from_highlighted = function() played = true apply_play() end
   require("tests.helpers").stage_registered(nil, { "resolve_play" })

@@ -10,8 +10,6 @@ local ActionResult = require("core.action_result")
 local Protocol = require("core.bridge").wire
 local Helpers = require("tests.helpers")
 
-local STREAK_FAILURES = 3
-
 local play_card = require("tests.helpers").play_card
 
 local tarot = require("tests.fake_cards").fool
@@ -67,21 +65,13 @@ for _, case in ipairs(CASES) do
 
   check(label .. ": every send in the stream is answered", #log == SENDS, #log)
 
-  local pre_ok, pre_at = all_of(log, 1, STREAK_FAILURES, function(entry)
+  local all_ok, all_at = all_of(log, 1, SENDS, function(entry)
     return entry.ok == false and entry.code == case.code
   end)
-  check(label .. ": below the streak the answer stays unsuccessful and keeps its class",
-    pre_ok, "send " .. tostring(pre_at) .. " -> "
-      .. tostring(log[pre_at] and log[pre_at].code) .. "/"
-      .. tostring(log[pre_at] and log[pre_at].ok))
-
-  local post_ok, post_at = all_of(log, STREAK_FAILURES + 1, SENDS, function(entry)
-    return entry.ok == true and entry.code == case.code
-  end)
-  check(label .. ": past the streak the answer is successful and STILL carries its class",
-    post_ok, "send " .. tostring(post_at) .. " -> "
-      .. tostring(log[post_at] and log[post_at].code) .. "/"
-      .. tostring(log[post_at] and log[post_at].ok))
+  check(label .. ": every send stays unsuccessful and keeps its class: there is no retry budget",
+    all_ok, "send " .. tostring(all_at) .. " -> "
+      .. tostring(log[all_at] and log[all_at].code) .. "/"
+      .. tostring(log[all_at] and log[all_at].ok))
 
   local no_overwrite = all_of(log, 1, SENDS, function(entry)
     return entry.code ~= "POLICY_ACKNOWLEDGED"
@@ -89,29 +79,9 @@ for _, case in ipairs(CASES) do
   check(label .. ": the acknowledgement never overwrites the class with POLICY_ACKNOWLEDGED",
     no_overwrite, tostring(log[SENDS] and log[SENDS].code))
 
-  check(label .. ": terminal prose preserves the refusal",
+  check(label .. ": the last refusal says what the first one said",
     log[SENDS].message:find(log[1].message, 1, true) ~= nil,
     tostring(log[SENDS] and log[SENDS].message))
-end
-
-local SUCCESS_MESSAGE_MAX = require("tests.helpers").SUCCESS_MESSAGE_MAX
-do
-  local worst, worst_case, offenders = 0, nil, {}
-  for _, case in ipairs(CASES) do
-    for _, entry in ipairs(run_stream(case.state, case.action, case.payload, SENDS)) do
-      local text = entry.ok and entry.message or nil
-      if type(text) == "string" then
-        if #text > worst then worst, worst_case = #text, case.tag end
-        if #text > SUCCESS_MESSAGE_MAX then
-          offenders[#offenders + 1] = case.tag .. " (" .. #text .. ")"
-        end
-      end
-    end
-  end
-  check("a successful result stays small (SPECIFICATION.md:189)",
-    #offenders == 0,
-    string.format("max %d bytes on %s; budget %d; over: %s", worst, tostring(worst_case),
-      SUCCESS_MESSAGE_MAX, table.concat(offenders, ", ")))
 end
 
 do
@@ -120,10 +90,10 @@ do
   local first = Protocol.result(log[1].id, log[1].ok, log[1].message)
   check("the class rides beside the frame, never inside it -- the model reads id/success/message",
     frame.data.reason_code == nil and frame.reason_code == nil
-      and frame.data.success == true
+      and frame.data.success == false
       and frame.data.message:find(first.data.message, 1, true) ~= nil,
     tostring(frame.data.message))
-  check("the same message before the streak was unsuccessful",
+  check("the first refusal was unsuccessful too",
     first.data.success == false, tostring(first.data.success))
 end
 

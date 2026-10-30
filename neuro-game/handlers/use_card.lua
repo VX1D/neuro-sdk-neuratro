@@ -34,6 +34,31 @@ local function is_directional_action(name)
   return name == "use_directional_consumable" or name == "choose_directional_pack_card"
 end
 
+local function move_for(area, directional)
+  return string.format('the move "%s"', require("core.action_registry").phrase(canonical_action(area, directional)))
+end
+
+local function target_request(card_name, min_targets, max_targets)
+  local low = math.max(1, min_targets or 1)
+  local count = low == max_targets and ("exactly " .. low) or (low .. " to " .. max_targets)
+  local indices = {}
+  for i = 1, math.min(low, #G.hand.cards) do indices[i] = tostring(i) end
+  return string.format("'%s' needs %s card(s) selected in hand: send their 1-based positions in hand_indices, "
+    .. "e.g. {\"hand_indices\":[%s]}.", card_name, count, table.concat(indices, ","))
+end
+
+local function target_names(data, hand_indices)
+  if not is_directional_action(trusted_action_name(data)) then
+    return hand_indices, CardArea.echo(data.hand_cards), "hand_cards"
+  end
+  local indices, names = {}, {}
+  for i, field in ipairs({ "left_card", "right_card" }) do
+    local named = CardArea.echo(data[field])
+    if named ~= nil then indices[#indices + 1], names[#names + 1] = hand_indices[i], named end
+  end
+  return indices, #names > 0 and names or nil, "left_card and right_card"
+end
+
 local function unusable_reason(card, card_name, hand_indices, targets)
   local minimum, maximum
   if not CardUtil.is_hidden(card) then minimum, maximum = CardUtil.consumable_target_range(card) end
@@ -192,9 +217,16 @@ local function outcome_settler(resolved)
   return settler
 end
 
-local function selection_failure(card, card_name, targets)
+local function selection_failure(card, card_name, targets, indices)
   if targets then
     if not (G and G.hand and G.hand.cards) then return "the hand is no longer available" end
+    local missing = {}
+    for i, target in ipairs(targets) do
+      if not Utils.index_in(G.hand.cards, target) then missing[#missing + 1] = tostring(indices and indices[i] or i) end
+    end
+    if #missing > 0 then
+      return "the selected card(s) at hand index " .. table.concat(missing, ", ") .. " are no longer in the hand"
+    end
     if not GameActions.highlight_exactly(G.hand, targets) then
       clear_area_highlight(G.hand)
       return "the game did not select exactly the requested hand cards for " .. card_name
@@ -241,7 +273,7 @@ local function handle_use_card(data)
   end
   if require("facts.target_contracts").get(card) and not is_directional_action(action_name) then
     return ActionResult.reject("INVALID_SELECTION",
-      "This card has directional targets; use " .. canonical_action(data.area, true)
+      "This card has directional targets; use it with " .. move_for(data.area, true)
         .. " so source and destination are explicit.")
   end
 
@@ -282,7 +314,7 @@ local function handle_use_card(data)
     end
     if type(data.hand_indices) ~= "table" or #data.hand_indices == 0 then
       return ActionResult.reject("INVALID_SELECTION",
-        string.format("'%s' needs up to %d card(s) selected in hand — provide hand_indices (1-based positions), e.g. {\"hand_indices\":[1,2]}.", card_name, max_targets))
+        target_request(card_name, min_targets, max_targets))
     end
     local verr
     hand_indices, verr = validate_hand_indices(data.hand_indices, #G.hand.cards, max_targets)
@@ -293,6 +325,11 @@ local function handle_use_card(data)
       return ActionResult.reject("INVALID_SELECTION",
         string.format("Too few cards: '%s' needs at least %d selected, you provided %d.", card_name, min_targets, #hand_indices))
     end
+    local named, names, field = target_names(data, hand_indices)
+    if names ~= nil and not (G.NEURO and G.NEURO._candidate_probe) then
+      local _, stale = CardArea.validate_hand_cards(named, names, G.hand.cards, field)
+      if stale then return ActionResult.reject("STALE_TARGET", stale) end
+    end
     prepared_hand_cards = {}
     for i = 1, #hand_indices do prepared_hand_cards[i] = G.hand.cards[hand_indices[i]] end
   end
@@ -302,8 +339,10 @@ local function handle_use_card(data)
   local lock_index = prepared_hand_cards and not probing and HandHandlers.omitted_forced_index(hand_indices)
   if lock_index then
     return ActionResult.reject("INVALID_SELECTION", string.format(
-      "BOSS (Cerulean Bell): hand card %d is +LOCK (force-selected) -- the engine keeps it selected, so '%s' would target it too. Add index %d to hand_indices.",
-      lock_index, card_name, lock_index))
+      "BOSS (Cerulean Bell): hand card %d is +LOCK (force-selected) -- the engine keeps it selected, so '%s' would target it too. %s",
+      lock_index, card_name, is_directional_action(action_name)
+        and string.format("Make index %d your left_index or right_index.", lock_index)
+        or string.format("Add index %d to hand_indices.", lock_index)))
   end
   if (area == (G and G.consumeables) or from_pack) and not (prepared_hand_cards and probing)
       and not GameActions.consumable_usable(card, prepared_hand_cards) then
@@ -361,7 +400,7 @@ local function handle_use_card(data)
       local captured_hand_cards = needs_hand_sel and prepared_hand_cards or nil
       -- Restore the prepared hand selection because the card callback reads it.
       local function restore_hand_selection()
-        return selection_failure(card, card_name, captured_hand_cards)
+        return selection_failure(card, card_name, captured_hand_cards, hand_indices)
       end
 
       G.E_MANAGER:add_event(Event({
@@ -393,7 +432,7 @@ local function handle_use_card(data)
         end,
       }))
     else
-      local refused = selection_failure(card, card_name, prepared_hand_cards)
+      local refused = selection_failure(card, card_name, prepared_hand_cards, hand_indices)
       if refused then
         return ActionResult.outcome("failed", "Could not use " .. card_name .. ": " .. refused
           .. "; nothing was used. Inspect your hand and choose again.")
@@ -410,7 +449,6 @@ local function handle_use_card(data)
       deadline = ActionResult.now() + OUTCOME_SETTLE_MAX
         + math.max(4, (pack_pick_delay or Utils.gate_seconds("pack_pick_block", "NEURO_PACK_PICK_DELAY")) + 1),
       timeout_outcome = "ambiguous",
-      correction = "Its outcome could not be verified. Inspect the consumable, pack, hand, and resulting state before choosing again.",
       debug = { area = data.area, index = data.index, card = card_name, from_pack = from_pack },
       probe = function()
         if explicit_failure then return "failed", { cause = explicit_failure } end
@@ -444,5 +482,5 @@ local function handle_use_card(data)
   end
 end
 
-return { handle_use_card = handle_use_card, canonical_action = canonical_action, outcome_snapshot = outcome_snapshot, outcome_suffix = outcome_suffix,
+return { handle_use_card = handle_use_card, canonical_action = canonical_action, move_for = move_for, outcome_snapshot = outcome_snapshot, outcome_suffix = outcome_suffix,
   outcome_settler = outcome_settler, OUTCOME_SETTLE_MAX = OUTCOME_SETTLE_MAX }

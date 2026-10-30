@@ -206,7 +206,7 @@ do
   check("engine: discard and play both raise remove_playing_cards", n_state >= 2, n_state)
   check("engine: consumable destruction raises remove_playing_cards",
     card:find("SMODS%.calculate_context%(%{ remove_playing_cards = true, removed = destroyed_cards %}%)") ~= nil)
-  local _, n_joker = card:gsub("if self%.getting_sliced and not %(self%.ability%.set == 'Default' or self%.ability%.set == 'Enhanced'%) then%s+local flags = SMODS%.calculate_context%(%{joker_type_destroyed = true, card = self", "")
+  local _, n_joker = card:gsub("if self%.getting_sliced and not SMODS%.is_playing_card%(self%)[^\n]*then%s+local flags = SMODS%.calculate_context%(%{joker_type_destroyed = true, card = self", "")
   check("engine: shatter and start_dissolve raise joker_type_destroyed for sliced non-playing cards",
     n_joker == 2, n_joker)
   check("engine: extinction goes through SMODS.destroy_cards on the joker itself",

@@ -9,27 +9,31 @@ local Vanilla = require("tests.fixtures.vanilla_jokers")
 local card = require("tests.fake_cards").held_maker()
 
 local card_lua = H.read_lines(os.getenv("BALATRO_DUMP"), "card.lua")
-if #card_lua == 0 then require("tests.skip_ledger").bail("shape-joker-review", 22, "game dump not found; set BALATRO_DUMP") end
-local function engine(line, ...)
-  local text = card_lua[line] or ""
-  for _, needle in ipairs({ ... }) do
-    if not text:find(needle, 1, true) then return false end
+if #card_lua == 0 then require("tests.skip_ledger").bail("shape-joker-review", 19, "game dump not found; set BALATRO_DUMP") end
+local function engine(head, follow, span)
+  for i, text in ipairs(card_lua) do
+    local hit = true
+    for _, needle in ipairs(head) do hit = hit and text:find(needle, 1, true) ~= nil end
+    if hit then
+      local window = table.concat(card_lua, "\n", i, math.min(#card_lua, i + (span or 0)))
+      for _, needle in ipairs(follow or {}) do
+        if not window:find(needle, 1, true) then return false end
+      end
+      return true
+    end
   end
-  return true
+  return false
 end
-check("engine: DNA copies only on the round's first hand (card.lua:3887)",
-  engine(3887, "'DNA'", "G.GAME.current_round.hands_played == 0"))
-check("engine: and only a single played card (card.lua:3888)", engine(3888, "#context.full_hand == 1"))
-check("engine: Sixth Sense takes a lone 6 as the first hand (card.lua:2987)",
-  engine(2987, "'Sixth Sense'", "#context.full_hand == 1", "get_id() == 6", "hands_played == 0"))
-check("engine: Half Joker pays on size or fewer cards (card.lua:4046)",
-  engine(4046, "'Half Joker'", "#context.full_hand <= self.ability.extra.size"))
-check("engine: Square Joker grows on exactly 4 cards (card.lua:3811)",
-  engine(3811, "'Square Joker'", "#context.full_hand == 4"))
-check("engine: Card Sharp pays on a type played before this round (card.lua:4388)",
-  engine(4388, "'Card Sharp'", "played_this_round > 1"))
-check("engine: Obelisk grows unless the type is the most played (card.lua:3935-3940)",
-  engine(3935, "'Obelisk'") and engine(3939, "v.played >= play_more_than"))
+check("engine: DNA copies only on the round's first hand, and only a single played card",
+  engine({ "'DNA'", "G.GAME.current_round.hands_played == 0" }, { "#context.full_hand == 1" }, 1))
+check("engine: Sixth Sense takes a lone 6 as the first hand",
+  engine({ "'Sixth Sense'", "#context.full_hand == 1", "get_id() == 6", "hands_played == 0" }))
+check("engine: Half Joker pays on size or fewer cards",
+  engine({ "'Half Joker'", "#context.full_hand <= self.ability.extra.size" }))
+check("engine: Square Joker grows on exactly 4 cards", engine({ "'Square Joker'", "#context.full_hand == 4" }))
+check("engine: Card Sharp pays on a type played before this round", engine({ "'Card Sharp'", "played_this_round > 1" }))
+check("engine: Obelisk grows unless the type is the most played",
+  engine({ "'Obelisk'", "not context.blueprint" }, { "v.played >= play_more_than" }, 6))
 
 local function setup(jokers, opts)
   opts = opts or {}

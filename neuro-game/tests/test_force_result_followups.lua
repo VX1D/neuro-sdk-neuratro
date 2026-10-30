@@ -43,26 +43,23 @@ end
 do
   H.board({ confirm_hand = false })
   check("F9: fixture forced", H.wait_force(), H.phase())
-  local churn, spent = {}, 0
+  local churn, refused = {}, 0
   for i = 1, 8 do
     if not H.wait_force() then break end
     local mark = #H.frames()
     local id = H.send("play_hand", { indices = { 1, 90 + i } })
     H.tick(0.3)
     local r = H.result_for(id)
-    if r and r.success == true then
-      spent = spent + 1
-      H.wait_force()
-      for _, f in ipairs(frames_from(mark)) do
-        if f.command == "actions/unregister" or f.command == "actions/register" then
-          churn[#churn + 1] = i .. ":" .. f.command .. " " .. table.concat(H.names_of(f), ",")
-        end
+    if r and r.success == false then refused = refused + 1 end
+    for _, f in ipairs(frames_from(mark)) do
+      if f.command == "actions/unregister" or f.command == "actions/register" then
+        churn[#churn + 1] = i .. ":" .. f.command .. " " .. table.concat(H.names_of(f), ",")
       end
     end
   end
-  check("F9: the budget is spent within the sends", spent >= 3, tostring(spent))
-  check("F9: a spent answer neither unregisters nor re-registers the offer", #churn == 0, table.concat(churn, "; "))
-  check("F9: each spent answer is still asked again (BEST_PRACTICES.md:35)", H.phase() == "forced", H.phase())
+  check("F9: every one of the eight refusals is success=false: there is no retry budget", refused == 8, tostring(refused))
+  check("F9: a refusal neither unregisters nor re-registers the offer", #churn == 0, table.concat(churn, "; "))
+  check("F9: the same force keeps standing for the retry", H.phase() == "forced", H.phase())
 end
 
 do
@@ -77,7 +74,8 @@ do
   local State = require("core.state")
   local real_state = State.get_state_name
   State.get_state_name = function() error("state read failed", 0) end
-  Dispatcher.handle_message({ command = "action", data = { id = "crash-1", name = "play_hand", data = '{"indices":[1,2]}' } },
+  Dispatcher.handle_message(
+    { command = "action", data = { id = "crash-1", name = "play_hand", data = '{"indices":[1,2]}' } },
     G.NEURO)
   State.get_state_name = real_state
   local crash, preflight = H.result_for("crash-1"), H.result_for(pre)

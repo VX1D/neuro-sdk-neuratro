@@ -43,7 +43,7 @@ local function handle_paste_seed(data)
     end
   end
 
-  local cleaned = Filtered.sanitize(tostring(raw or ""), true)
+  local cleaned = tostring(raw or "")
   if not from_param then
     cleaned = cleaned:match("^%s*(.-)%s*$")
   end
@@ -62,6 +62,9 @@ local function handle_paste_seed(data)
       return nil, "Seed is too long (max 8 characters). Provide a seed parameter (1-8 letters/digits)."
     end
     return nil, "Clipboard seed is too long (max 8 characters). Copy just the seed, or pass it as a seed parameter."
+  end
+  if Filtered.sanitize(cleaned, true) ~= cleaned then
+    return nil, "That seed is not allowed (the game's word filter blocks it), so nothing was set. Choose a different seed."
   end
 
   local seed_val = cleaned:upper()

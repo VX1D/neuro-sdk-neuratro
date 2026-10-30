@@ -48,6 +48,30 @@ local function joker_row_prose(card, idx, name, effect_str, flags, sell, tag, no
   return s
 end
 
+local function copy_now_text(card)
+  local kind = CardUtil.copy_joker_kind(card)
+  if not kind then return nil end
+  local now = require("facts.dynamic_jokers").copy_now(card, kind)
+  local status = now.status
+  local target = now.target and normalize_text(safe_name_or(now.target))
+  local why
+  if status == "copying" then return "copying now: " .. target end
+  if status == "hidden" then return "copying now: a face-down joker" end
+  if status == "debuffed_self" then
+    why = "it is debuffed"
+  elseif status == "none" then
+    why = (kind == "brainstorm") and "it is your leftmost joker" or "no joker to its right"
+  elseif status == "hidden_incompatible" then
+    why = (kind == "brainstorm") and "the face-down leftmost joker can't be copied"
+      or "the face-down joker to its right can't be copied"
+  elseif status == "incompatible" then
+    why = target .. " can't be copied"
+  elseif status == "debuffed" then
+    why = target .. " is debuffed"
+  end
+  return "copying now: nothing (" .. why .. ")"
+end
+
 local function copied_numbers(card)
   if not CardUtil.copy_joker_kind(card) then return nil end
   local info = Utils.card_info_text(card)
@@ -329,7 +353,7 @@ local function jokers_section(state_name)
     .. (tonumber(G.NEURO and G.NEURO.jokers_sold_run) or 0) .. " sold this run)"
   if #G.jokers.cards == 0 then return head .. ": none." end
 
-  local lines = { "## " .. head }
+  local lines = { "## " .. head:sub(1, -2) .. "; 1 = leftmost, they trigger left to right)" }
   local in_shop = require("core.state").get_state_name() == "SHOP"
   local has_hidden = false
   local rows = {}
@@ -344,6 +368,10 @@ local function jokers_section(state_name)
       local effect_str = clause_separators(SemanticRegistry.render("owned_joker_row", card))
       local copied = copied_numbers(card)
       if copied then effect_str = effect_str .. "; copying " .. copied end
+      local copy_now = copy_now_text(card)
+      if copy_now then
+        effect_str = (effect_str == "-" or effect_str == "") and copy_now or (effect_str .. "; " .. copy_now)
+      end
       local flg = joker_tags(card)
       local entry = G.NEURO and G.NEURO.joker_intents and G.NEURO.joker_intents[card.sort_id]
       local tag = entry and entry.tag or nil
@@ -364,8 +392,6 @@ local function jokers_section(state_name)
   local observed = JokerObservations.roster_line(G.jokers.cards)
   if observed then lines[#lines + 1] = observed end
 
-  local chain = FactHints.copy_chain()
-  if chain then lines[#lines + 1] = "- Joker copy order: " .. chain .. ". Order matters." end
   if (Scoring.owned_xmult_state() or "none") == "none" then
     lines[#lines + 1] = "- Of the jokers here, none is an xMult."
   end

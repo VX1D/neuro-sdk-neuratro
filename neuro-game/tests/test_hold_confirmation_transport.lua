@@ -68,7 +68,7 @@ check("hold settlement closes both force lifecycles and unregisters the offer",
   bridge._force_open == nil and Window.current() == nil and bridge._registered_sigs.leave_shop == nil)
 
 check("the next shop force can be offered exactly once",
-  arm({ confirmation_proposal_ref = "hold-proposal" }) and force_count + 1 == 2)
+  arm() and force_count + 1 == 2)
 
 G.NEURO.llm_paused = true
 local paused_id = "hold-paused-queued"

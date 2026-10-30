@@ -67,6 +67,14 @@ function M.stamp(coords)
   return "[" .. table.concat(parts, ", ") .. "] "
 end
 
+-- Rules are repeated once per ante of a run (BEST_PRACTICES.md:9); outside a run they go once per startup.
+function M.rules_scope()
+  local run, game = run_coordinate(), live_game()
+  local ante = game and game.round_resets and game.round_resets.ante
+  if not (run and ante ~= nil) then return nil end
+  return run .. " ante " .. tostring(ante)
+end
+
 function M.here(...)
   local gm = live_game()
   local ante = gm and gm.round_resets and gm.round_resets.ante
@@ -108,6 +116,7 @@ end
 local enqueue
 
 local guide_retry_pending = true
+local guide_delivered = false
 
 local function revive_essential_guide(entry)
   if not entry.essential or not guide_retry_pending then return end
@@ -130,6 +139,7 @@ local function evict_pending_overflow()
 end
 
 local function commit(entry)
+  if entry.essential then guide_delivered = true end
   remember(entry)
   remove_pending(entry)
   if type(entry.on_written) == "function" then
@@ -250,7 +260,7 @@ function M.prompt_at(prefix, coords, text, opts)
 end
 
 function M.essential_ready()
-  return delivered[identity("rule", ESSENTIAL_GUIDE_KEY)] ~= nil
+  return guide_delivered
 end
 
 function M.step()
@@ -272,6 +282,7 @@ M.reconnect_transport = open_transport_epoch
 
 function M.reset_transport()
   open_transport_epoch()
+  guide_delivered = false
   delivered = {}
   orders = { transient = {}, hint = {}, rule = {} }
 end

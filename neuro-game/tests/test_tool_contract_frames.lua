@@ -172,4 +172,33 @@ check("that holds in every force state of the corpus that offers a tool",
   #states >= 7, table.concat(states, ","))
 check("and on most boards, not a handful", covered >= 15 and resolved >= 12, covered .. "/" .. resolved)
 
+do
+  local DeckFacts = require("facts.deck_facts")
+  local real_stakes = DeckFacts.selectable_stakes
+  LB.load("RUN_SETUP", "Run setup overlay active")
+  local multi = DeckFacts.list_selectable_backs()[2].key
+  DeckFacts.selectable_stakes = function() return DeckFacts.viewed_deck_key() == multi and { 1, 2 } or { 1 } end
+  FP.build("RUN_SETUP")
+  local before = G.NEURO._registered_sigs.select_stake ~= nil
+  local bridge = G.NEURO
+  local real_result = bridge.send_action_result
+  bridge.send_action_result = Helpers.result_log({}, { "id", "ok", "message", "code" }, true)
+  Helpers.stage_registered(nil, { "select_deck" })
+  TxCache.open("deck-tool", "select_deck", G.TIMERS.REAL)
+  pcall(require("core.dispatcher").handle_message, Helpers.inbound_action("select_deck", "deck-tool", { back = multi }), bridge)
+  for _ = 1, 8 do
+    G.TIMERS.REAL = G.TIMERS.REAL + 0.25
+    pcall(require("core.execute").step, G.TIMERS.REAL)
+  end
+  local between = G.NEURO._registered_sigs.select_stake ~= nil
+  local payload = FP.build("RUN_SETUP")
+  local listed = false
+  for _, name in ipairs(payload and payload.actions or {}) do listed = listed or name == "select_stake" end
+  check("a tool that makes another move usable: the next window registers and lists it (action_window.gd add_action)",
+    not before and not between and DeckFacts.viewed_deck_key() == multi and listed
+      and G.NEURO._registered_sigs.select_stake ~= nil,
+    tostring(before) .. " " .. tostring(between) .. " " .. tostring(DeckFacts.viewed_deck_key()) .. " " .. tostring(listed))
+  bridge.send_action_result, DeckFacts.selectable_stakes = real_result, real_stakes
+end
+
 done()

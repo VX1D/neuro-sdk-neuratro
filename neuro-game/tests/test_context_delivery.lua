@@ -298,7 +298,7 @@ do
       end
     end
     files:close()
-    check("the scan found the production emitters", calls >= 8, calls)
+    check("the scan found the production emitters", calls >= 7, calls)
     check("every production event or prompt names its occurrence", #bare == 0, table.concat(bare, ", "))
   end
 end

@@ -62,7 +62,7 @@ local function use_card_payload(card, i, area)
     for k = 1, math.min(m, n) do hi[k] = k end
     p.hand_indices = hi
   end
-  return p
+  return require("tests.helpers").with_card_names("use_consumable", p)
 end
 local function has(v) for _, x in ipairs(v or {}) do if x == true then return true end end return false end
 

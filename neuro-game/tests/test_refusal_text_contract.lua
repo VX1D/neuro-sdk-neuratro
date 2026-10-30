@@ -47,10 +47,12 @@ require("core.validate").reset_streaks()
 
 local spent
 for _ = 1, 5 do spent = send("set_joker_order", "{}") end
-check("a spent budget after a missing field settles as success", spent.success == true, tostring(spent.message))
+check("a repeated missing field is still refused with success=false and names the fields",
+  spent.success == false and tostring(spent.message):find("from_index", 1, true) ~= nil, tostring(spent.message))
 require("core.validate").reset_streaks()
 for _ = 1, 5 do spent = send("buy_from_shop", '{"area":"nowhere","index":1}') end
-check("a spent budget after an enum miss settles as success", spent.success == true, tostring(spent.message))
+check("a repeated enum miss is still refused with success=false",
+  spent.success == false and tostring(spent.message):find("shop_jokers", 1, true) ~= nil, tostring(spent.message))
 require("core.validate").reset_streaks()
 
 Registry.reset(); require("core.window").reset()

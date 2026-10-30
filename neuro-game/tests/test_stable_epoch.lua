@@ -9,6 +9,11 @@ local ActionGuide = require("facts.token_legends").ACTION_SEMANTICS_V1
 
 local wire = {}
 
+local function guide_key()
+  local scope = Delivery.rules_scope()
+  return "rule\1" .. ActionGuide.key .. (scope and ("\1" .. scope) or "")
+end
+
 local N = { enabled = true, stable_refresh_due = true, run_generation = 1,
   once_serials = {}, session_once_serials = {} }
 N.send_context = require("tests.helpers").wire_context(wire)
@@ -18,7 +23,7 @@ local function world(dollars, joker_name)
     P_CENTERS = require("tests.engine_centers").centers(),
     STATE = ES.SELECTING_HAND, STATES = ES,
     STAGES = { MAIN_MENU = 1, RUN = 2, SANDBOX = 3 }, STAGE = 2, GAME = {
-      dollars = dollars, chips = 0, used_vouchers = {}, modifiers = {},
+      dollars = dollars, chips = 0, used_vouchers = {}, modifiers = {}, pseudorandom = { seed = "STABLE" },
       current_round = { hands_left = 3, discards_left = 2 }, round_resets = { ante = 2 },
       blind = { name = "Small Blind", chips = 300 },
     },
@@ -35,7 +40,7 @@ require("core.window").emit_rules("SELECTING_HAND")
 check("first eligible state writes immutable rules plus the canonical action guide",
   #wire == 2
     and wire[2] and wire[2].silent == true and wire[2].msg == ActionGuide.text
-    and Delivery._delivered()["rule\1" .. ActionGuide.key] == ActionGuide.text,
+    and Delivery._delivered()[guide_key()] == ActionGuide.text,
   tostring(#wire) .. " " .. tostring(wire[2] and wire[2].msg))
 check("retained frame is silent", wire[1] and wire[1].silent == true)
 check("retained frame contains no run cash or roster", wire[1]
@@ -50,7 +55,7 @@ require("core.neuro_lifecycle").reset_context_delivery()
 require("core.window").emit_rules("SELECTING_HAND")
 check("a new transport view replays the same immutable rule and guide",
   #wire == 4 and wire[3].msg == wire[1].msg and wire[4].msg == wire[2].msg
-    and Delivery._delivered()["rule\1" .. ActionGuide.key] == ActionGuide.text,
+    and Delivery._delivered()[guide_key()] == ActionGuide.text,
   tostring(#wire))
 
 local function play_deck(key, display)
@@ -180,16 +185,19 @@ do
     tostring(after_menu))
   play_deck("b_green", "Green Deck")
   require("core.window").emit_rules("SELECTING_HAND")
-  check("the run that commits to that deck retains its rules once",
-    #wire == after_menu + 1
-      and wire[#wire].msg:find("Deck rules -- Green Deck", 1, true) ~= nil, tostring(#wire))
+  local green_deck_at
+  for i = after_menu + 1, #wire do
+    if wire[i].msg:find("Deck rules -- Green Deck", 1, true) then green_deck_at = i end
+  end
+  check("the run that commits to that deck retains its rules, now scoped to the run, once",
+    #wire == after_menu + 3 and green_deck_at ~= nil and wire[#wire].msg == ActionGuide.text, tostring(#wire))
   require("core.window").emit_rules("BLIND_SELECT")
-  check("R20b and every later screen of that run restates nothing", #wire == after_menu + 1,
+  check("R20b and every later screen of that ante restates nothing", #wire == after_menu + 3,
     tostring(#wire))
   play_deck("b_yellow", "Yellow Deck")
   require("core.window").emit_rules("SELECTING_HAND")
   check("a run on another deck still appends its own frame",
-    #wire == after_menu + 2
+    #wire == after_menu + 4
       and wire[#wire].msg:find("Deck rules -- Yellow Deck", 1, true) ~= nil, tostring(#wire))
 end
 

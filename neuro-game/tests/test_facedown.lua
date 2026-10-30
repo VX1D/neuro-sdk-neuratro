@@ -4,7 +4,9 @@ _G.G = { GAME = { current_round = {}, blind = nil }, FUNCS = {} }
 local CardUtil = require("facts.card_util")
 local CtxHand = require("context.ctx_hand")
 local HandFacts = require("facts.hand_facts")
-local function prose() return require("context.context_readable").structure_prose(HandFacts.structure()) end
+local function prose()
+  return require("tests.helpers").index_only(require("context.context_readable").structure_prose(HandFacts.structure()))
+end
 
 local check, done = require("tests.helpers").harness("facedown")
 
@@ -14,6 +16,9 @@ local up = card("King", "Hearts")
 local dn = card("Queen", "Spades"); dn.facing = "back"
 check("is_face_down: front/nil -> false", CardUtil.is_face_down(up) == false)
 check("is_face_down: facing 'back' -> true", CardUtil.is_face_down(dn) == true)
+check("a face-down card's name never names its rank or suit",
+  require("facts.card_area_util").hand_card_name(dn) == "face-down",
+  require("facts.card_area_util").hand_card_name(dn))
 
 local tok_up = CtxHand.card_token(up, false)
 local tok_dn = CtxHand.card_token(dn, false)

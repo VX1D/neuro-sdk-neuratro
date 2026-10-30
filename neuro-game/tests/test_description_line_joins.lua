@@ -49,6 +49,8 @@ _G.number_format = function(v) return tostring(v) end
 assert((loadstring or load)(engine_fn(misc_src, "function loc_colour(_c, _default)", "loc_colour")
   .. engine_fn(misc_src, "function loc_parse_string(line)", "loc_parse_string")
   .. engine_fn(smods_src, "function format_ui_value(value)", "format_ui_value")
+  .. engine_fn(smods_src, "function SMODS.get_loc_colour(ctrl, vars)", "SMODS.get_loc_colour")
+  .. engine_fn(smods_src, "function SMODS.merge_defaults(t, defaults)", "SMODS.merge_defaults")
   .. engine_fn(smods_src, "function SMODS.localize_box(lines, args)", "SMODS.localize_box")))()
 
 local Utils = require("util.utils")

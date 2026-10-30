@@ -15,11 +15,13 @@ check("the reconnect cancels it before it runs", H.calls.discard == 0, tostring(
 local told
 for i = mark + 1, #H.frames() do
   local f = H.frames()[i]
-  if f.command == "context" and f.data.message:find("did not complete successfully", 1, true) then
+  if f.command == "context" and (f.data.message:find("did not complete", 1, true)
+      or f.data.message:find("cancelled", 1, true)) then
     told = true
   end
 end
-check("and tells her it was not carried out", told == true, "")
+check("and says nothing about it (the reference SDK sends no failure report after an accepted action)",
+  told == nil, tostring(told))
 
 mark = #H.frames()
 H.tick(8)

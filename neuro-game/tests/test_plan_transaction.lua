@@ -286,9 +286,9 @@ do
   local off_boss_tx, off_boss_err = PlanTransaction.prepare("discard_hand", { plan = {
     boss_plan = "Pace discards through this boss.",
   } })
-  check("a boss_plan outside the Boss blind is saved for the upcoming boss, with no note",
-    off_boss_err == nil and off_boss_tx and not off_boss_tx.note_only and off_boss_tx.ignored_note == nil
-      and off_boss_tx.plan_values.boss_plan == "Pace discards through this boss.",
+  check("a boss_plan with a discard outside the Boss blind is not saved, and the result says so",
+    off_boss_err == nil and (off_boss_tx == nil or not (off_boss_tx.plan_values and off_boss_tx.plan_values.boss_plan))
+      and PlanTransaction.ignored_note("discard_hand", { plan = { boss_plan = "Pace discards through this boss." } }) ~= nil,
     off_boss_tx and tostring(off_boss_tx.ignored_note) or (off_boss_err and off_boss_err.message))
   G.GAME.round_resets.blind_choices = saved_choices
 
@@ -383,8 +383,8 @@ do
   for _, text in ipairs(b.contexts) do
     if tostring(text):find("(reroll the shop)", 1, true) then told = true end
   end
-  check("and the failure after admission reaches her as a context frame, not a later force",
-    told, table.concat(b.contexts, " || "))
+  check("and the failure after admission is reported to her once",
+    told and #b.contexts == 1, table.concat(b.contexts, " || "))
   check("throw path commits no plan", G.NEURO.plan == nil)
 end
 

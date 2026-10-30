@@ -10,6 +10,9 @@ local Receipt = require("core.action_result")
 local Config = require("core.config")
 local Hand = require("handlers.hand_handlers")
 local UseCard = require("handlers.use_card")
+local function use_card(data)
+  return UseCard.handle_use_card(require("tests.helpers").with_card_names("use_consumable", data))
+end
 
 local captured, calls
 
@@ -108,7 +111,7 @@ end
 do
   board({ forced = 3 })
   G.consumeables.cards = { magician() }
-  local exec, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician",
+  local exec, err = use_card({ area = "consumables", index = 1, name = "The Magician",
     hand_indices = { 1, 2 }, _action_id = "magician-12" })
   check("Magician on two cards that omit the forced card is refused before execution",
     exec == nil and type(err) == "table",
@@ -117,7 +120,7 @@ do
 
   board({ forced = 3 })
   G.consumeables.cards = { magician() }
-  exec, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician",
+  exec, err = use_card({ area = "consumables", index = 1, name = "The Magician",
     hand_indices = { 1, 3 }, _action_id = "magician-13" })
   check("Magician on the forced card and one more is accepted", type(exec) == "function",
     type(err) == "table" and err.message or tostring(err))
@@ -131,12 +134,67 @@ do
   G.consumeables.cards = { magician() }
   G.hand:add_to_highlighted(G.hand.cards[5])
   local before = G.hand.highlighted
-  local exec = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician",
+  local exec = use_card({ area = "consumables", index = 1, name = "The Magician",
     hand_indices = { 1, 2 }, _action_id = "magician-plain" })
   check("the usability check puts the live selection back untouched",
     G.hand.highlighted == before and Engine.ids(G.hand.highlighted) == "5", Engine.ids(G.hand.highlighted))
   if type(exec) == "function" then exec() end
   check("an earlier stray selection is not carried into the use", captured == "1,2", captured)
+end
+
+do
+  board()
+  G.consumeables.cards = { magician() }
+  local exec, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician",
+    hand_indices = { 1, 2 }, hand_cards = { "Ace of Spades", "Ace of Spades" }, _action_id = "magician-stale" })
+  check("a consumable aimed at cards that moved is refused as stale and never used",
+    exec == nil and type(err) == "table" and err.reason_code == "STALE_TARGET" and calls == 0,
+    type(err) == "table" and tostring(err.reason_code) .. " " .. tostring(err.message) or tostring(exec))
+  exec, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician",
+    hand_indices = { 1, 2 }, _action_id = "magician-unnamed" })
+  check("hand_cards is an optional echo: targets without names are accepted (handlers must not refuse an absent optional field)",
+    type(exec) == "function", type(err) == "table" and tostring(err.message) or tostring(exec))
+end
+
+do
+  board()
+  G.consumeables.cards = { magician() }
+  local exec, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician",
+    hand_indices = { 1 }, hand_cards = {}, _action_id = "magician-empty-echo" })
+  check("an empty hand_cards names nothing and counts as absent",
+    type(exec) == "function", type(err) == "table" and tostring(err.message) or tostring(exec))
+  G.consumeables.cards = { Engine.consumable(54, "Death", "c_death", "Tarot",
+    { max_highlighted = 2, min_highlighted = 2, mod_num = 2 }, G.consumeables) }
+  exec, err = require("handlers.directional_card").handle({ area = "consumables", index = 1, name = "Death",
+    left_index = 1, left_card = "", right_index = 2,
+    _action_name = "use_directional_consumable", _action_id = "death-empty-echo" })
+  check("an empty left_card and an absent right_card count as absent",
+    type(exec) == "function", type(err) == "table" and tostring(err.reason_code) .. " " .. tostring(err.message) or tostring(exec))
+end
+
+do
+  board()
+  G.consumeables.cards = { Engine.consumable(52, "Death", "c_death", "Tarot",
+    { max_highlighted = 2, min_highlighted = 2, mod_num = 2 }, G.consumeables) }
+  local exec, err = require("handlers.directional_card").handle({ area = "consumables", index = 1, name = "Death",
+    left_index = 1, left_card = "Ace of Spades", right_index = 2, right_card = "Ace of Spades",
+    _action_name = "use_directional_consumable", _action_id = "death-stale" })
+  check("a directional card aimed at moved cards is refused as stale",
+    exec == nil and type(err) == "table" and err.reason_code == "STALE_TARGET",
+    type(err) == "table" and tostring(err.reason_code) .. " " .. tostring(err.message) or tostring(exec))
+end
+
+do
+  board()
+  G.consumeables.cards = { magician() }
+  local _, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "The Magician", _action_id = "magician-none" })
+  local text = type(err) == "table" and tostring(err.message) or ""
+  check("a targeting card sent without targets states its range and a sendable example",
+    text:find("needs 1 to 2 card(s)", 1, true) ~= nil and text:find('{"hand_indices":[1]}', 1, true) ~= nil, text)
+  G.consumeables.cards = { Engine.consumable(53, "Aura", "c_aura", "Spectral", { max_highlighted = 1 }, G.consumeables) }
+  _, err = UseCard.handle_use_card({ area = "consumables", index = 1, name = "Aura", hand_indices = {}, _action_id = "aura-none" })
+  text = type(err) == "table" and tostring(err.message) or ""
+  check("a one-target card asks for exactly one card", text:find("needs exactly 1 card(s)", 1, true) ~= nil, text)
 end
 
 done()

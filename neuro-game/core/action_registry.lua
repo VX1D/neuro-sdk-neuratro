@@ -302,11 +302,11 @@ local function provider(tbl, name)
   return tbl[name]
 end
 
-local function availability_check(name)
+local function availability_check(name, data)
   if not contracts[name] then return false, "There is no action named '" .. tostring(name) .. "'." end
   local predicate = provider(availability, name)
   if not predicate then return true end
-  local ok, result, reason = pcall(predicate)
+  local ok, result, reason = pcall(predicate, data)
   if not ok then
     provider_failed("availability", name, result)
     return false, "The game could not check whether that move is possible right now; choose another."
@@ -315,8 +315,9 @@ local function availability_check(name)
   return false, reason
 end
 
-function M.unavailable_reason(name) return (select(2, availability_check(name))) end
+function M.unavailable_reason(name, data) return (select(2, availability_check(name, data))) end
 function M.available(name) return (availability_check(name)) end
+M.availability = availability_check
 
 function M.preflight(name, data)
   local preflight = preflights[name]

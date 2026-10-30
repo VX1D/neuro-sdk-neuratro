@@ -27,6 +27,15 @@ end
 local function verbalize(board) return verbalize_sections({ board }) end
 
 local function cards_list(ix) return table.concat(ix, ", ") end
+local function named_cards(ix)
+  local hand = G and G.hand and G.hand.cards or {}
+  local out = {}
+  for k, i in ipairs(ix) do
+    local card = hand[i]
+    out[k] = card and (i .. ": " .. require("facts.card_area_util").hand_card_name(card)) or tostring(i)
+  end
+  return table.concat(out, ", ")
+end
 
 local function attach(out, piece)
   if piece == "" then return out end
@@ -90,7 +99,7 @@ local function ready_prose(ready)
   for i, r in ipairs(ready) do
     local n = notes[i]
     local pieces = {
-      #r.ix > 0 and (" (cards " .. cards_list(r.ix) .. ")") or "",
+      #r.ix > 0 and (" (cards " .. named_cards(r.ix) .. ")") or "",
       r.level and string.format("(level %g, %g chips x%g mult)", r.level.score_level, r.level.chips, r.level.mult) or "",
       inline(n.pre[1]), inline(n.pre[2]),
       r.cost and (" (" .. Utils.money(-r.cost) .. ")") or "", r.ox and " (OX: zeroes $ if played)" or "",

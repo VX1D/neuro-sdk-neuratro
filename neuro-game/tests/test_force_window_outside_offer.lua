@@ -100,17 +100,19 @@ do
     forces[1] and forces[1].actions)
 
   G.OVERLAY_MENU = require("tests.helpers").options_overlay()
+  local pw = require("core.window").current()
   local r = answer(b, "exit_overlay_menu", "{}")
   check("P: the out-of-offer answer is admitted", r and r.ok == true
       and r.code == "ACTION_ACCEPTED",
     r and (tostring(r.code) .. "/" .. tostring(r.ok)))
-  check("P: the accepted outside answer leaves the sent offer pending and registered",
-    phase() == Window.FORCED and in_flight() and #withdrawn == 0, phase())
+  check("P: any accepted answer ends the window (ActionWindowResponse.cs:20)",
+    not in_flight() and pw.ended_by == "answered", tostring(pw.ended_by))
   check("P: the decision was not made, so its serial does not move",
     G.NEURO.decision_serial == 1, tostring(G.NEURO.decision_serial))
   local before = #forces
-  tick_for(30)
-  check("P: no second force lands on the pending one", #forces == before, #forces)
+  G.OVERLAY_MENU = nil
+  check("P: a fresh force follows", tick_until(function() return #forces > before end, 30)
+    and #forces == before + 1, #forces)
 end
 
 do
@@ -144,9 +146,12 @@ do
   board("SELECTING_HAND")
   local b = bridge_stub()
   tick_for(10)
-  for _ = 1, 3 do answer(b, "play_hand", '{"indices":[1,2,99]}') end
-  local terminal = answer_now(b, "play_hand", '{"indices":[1,2,99]}')
-  check("N: the spent retry budget answers terminally, which resolves the force on the server",
+  for _ = 1, 4 do answer(b, "play_hand", '{"indices":[1,2,99]}') end
+  local refused = answer_now(b, "play_hand", '{"indices":[1,2,99]}')
+  check("N: a repeated refusal stays success=false and leaves the force standing",
+    refused and refused.ok == false and phase() == Window.FORCED and #withdrawn == 0, phase())
+  local terminal = answer_now(b, "discard_hand", '{"indices":[1,2]}')
+  check("N: her answer from the offer resolves the force",
     terminal and terminal.ok == true and phase() == Window.ENDED and #withdrawn == 0, phase())
 
   local before, serial_before = #forces, G.NEURO.decision_serial
@@ -176,20 +181,23 @@ do
   tick_for(10)
   check("M: set_joker_order is valid here",
     Actions.is_action_valid("set_joker_order") == true)
-  check("M: set_joker_order is outside the offer",
-    forces[1] and forces[1].actions:find("set_joker_order", 1, true) == nil,
-    forces[1] and forces[1].actions)
+  check("M: set_joker_order is listed in the offer, like every usable action (action_window.gd _send_force)",
+    forces[#forces] and forces[#forces].actions:find("set_joker_order", 1, true) ~= nil,
+    forces[#forces] and forces[#forces].actions)
   local before = #forces
+  local mw = require("core.window").current()
   local r = answer(b, "set_joker_order", '{"from_index":1,"to_index":2}')
-  check("M: the outside action is admitted without answering the force",
-    r and r.ok == true and r.code == "ACTION_ACCEPTED",
+  check("M: the tool is admitted", r and r.ok == true and r.code == "ACTION_ACCEPTED",
     r and (tostring(r.code) .. "/" .. tostring(r.ok)))
-  check("M: the sent offer stays pending after the outside answer",
-    phase() == Window.FORCED and in_flight() and #withdrawn == 0, phase())
-  check("M: the outside action stays outside the decision",
+  check("M: its success ends the window (ActionWindowResponse.cs:20)",
+    not in_flight() and mw.ended_by == "answered", tostring(mw.ended_by))
+  check("M: the tool does not spend the decision",
     G.NEURO.decision_serial == 1, tostring(G.NEURO.decision_serial))
-  tick_for(30)
-  check("M: no replacement force lands on the pending one", #forces == before, #forces)
+  check("M: the decision is asked again with a fresh force",
+    tick_until(function() return #forces > before end, 30) and #forces == before + 1 and phase() == Window.FORCED,
+    #forces)
+  before = #forces
+  withdrawn = {}
   local r2 = answer(b, "discard_hand", '{"indices":[1,2]}')
   check("M: her answer from the offer then resolves the force",
     r2 and r2.ok == true and phase() == Window.ENDED and #withdrawn == 0, phase())
@@ -220,15 +228,16 @@ do
   local r = answer(b, "exit_overlay_menu", "{}")
   check("S: the outside action is accepted", r and r.ok == true and r.code == "ACTION_ACCEPTED",
     r and (tostring(r.code) .. "/" .. tostring(r.ok)))
+  check("S: its success ends the shop window (ActionWindowResponse.cs:20)",
+    w.phase == Window.ENDED and w.ended_by == "answered", tostring(w.ended_by))
+  G.OVERLAY_MENU = nil
   tick_for(30)
   local missing = {}
   for _, name in ipairs(offered) do
     if not G.NEURO._registered_sigs[name] then missing[#missing + 1] = name end
   end
-  check("S: nothing is withdrawn and every offered shop action stays registered",
-    #withdrawn == 0 and #missing == 0, table.concat(missing, ","))
-  check("S: the same force stays pending and no second force is sent",
-    #forces == 1 and phase() == Window.FORCED and require("core.window").current() == w, #forces)
+  check("S: the next shop force re-registers every offered action",
+    #missing == 0 and #forces == 2 and phase() == Window.FORCED, table.concat(missing, ","))
   local per_id = 0
   for _, result in ipairs(results) do
     if result.id == id then per_id = per_id + 1 end

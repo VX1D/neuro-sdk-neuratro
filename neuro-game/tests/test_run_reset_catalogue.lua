@@ -17,6 +17,8 @@ local Window = { REGISTERED = "registered", FORCED = "forced", ENDED = "ended" }
 Orchestrator._step_bridge_init()
 assert(G.NEURO and G.NEURO._bridge_init_complete, "bridge init")
 local bridge = G.NEURO
+bridge.persona = "neuro"
+require("core.window").register_catalogue()
 
 local function frames()
   return require("tests.helpers").outbox_frames(ipc_dir .. "/" .. bridge.outbox_file, { must = true })
@@ -44,7 +46,8 @@ local function registered_count()
 end
 
 local full = registered_count()
-check("the boot registered the whole catalogue", full >= 20, tostring(full))
+check("the boot registered the menu's actions", full > 0 and Registry.is_registered("open_run_setup")
+  and not Registry.is_registered("play_hand"), tostring(full))
 
 do
   local mark = #frames()
@@ -53,23 +56,23 @@ do
   local changes = catalogue_frames(since(mark))
   check("a new run with no force open leaves the catalogue alone", #changes == 0,
     table.concat(changes, " | "))
-  check("and every action is still registered and accepted",
-    registered_count() == full and Registry.is_registered("play_hand"), tostring(registered_count()))
+  check("and every menu action is still registered and accepted",
+    registered_count() == full and Registry.is_registered("open_run_setup"), tostring(registered_count()))
 end
 
 do
-  G.NEURO.force_window = { names = { "play_hand", "discard_hand" }, phase = Window.FORCED }
+  G.NEURO.force_window = { names = { "select_stake", "select_deck" }, phase = Window.FORCED }
   local mark = #frames()
   Lifecycle.reset_run_state()
   require("core.window").register_catalogue()
   local changes = catalogue_frames(since(mark))
   check("an open force from the old run is cancelled by withdrawing exactly its actions",
-    changes[1] == "unregister:play_hand,discard_hand" or changes[1] == "unregister:discard_hand,play_hand",
+    changes[1] == "unregister:select_deck,select_stake" or changes[1] == "unregister:select_stake,select_deck",
     table.concat(changes, " | "))
   check("and they stay off until a force offers them again (README.md:27)", #changes == 1,
     table.concat(changes, " | "))
-  check("leaving the rest of the catalogue registered",
-    registered_count() == full - 2 and not Registry.is_registered("play_hand"), tostring(registered_count()))
+  check("leaving the rest of the menu actions registered",
+    registered_count() == full - 2 and not Registry.is_registered("select_deck"), tostring(registered_count()))
 end
 
 for _, case in ipairs({
@@ -78,6 +81,8 @@ for _, case in ipairs({
   end, { "open_run_setup", "select_deck" } },
 }) do
   local label, arrange, want = case[1], case[2], case[3]
+  bridge._withdrawn_held = nil
+  require("core.window").register_catalogue()
   arrange()
   local mark = #frames()
   local runs = engine_runs
@@ -96,7 +101,9 @@ for _, case in ipairs({
 end
 
 do
+  bridge.persona = "hiyori"
   require("core.window").reset()
+  require("core.window").register_catalogue()
   bridge:withdraw_actions({ "choose_persona" })
   local mark = #frames()
   require("core.window").register_catalogue()
@@ -120,11 +127,16 @@ do
 end
 
 do
-  bridge:withdraw_actions({ "start_run" })
+  bridge.persona = "neuro"
+  require("core.window").reset()
+  bridge:withdraw_actions({ "open_run_setup" })
   bridge:send_startup({ reconnect = true })
   require("core.window").register_catalogue()
+  local names = {}
+  for name in pairs(bridge._registered_sigs or {}) do names[#names + 1] = name end
+  table.sort(names)
   check("a new startup brings the whole catalogue back",
-    bridge._registered_sigs.start_run ~= nil and registered_count() == full, tostring(registered_count()))
+    bridge._registered_sigs.open_run_setup ~= nil and registered_count() == full, table.concat(names, ","))
 end
 
 TmpWork.close()

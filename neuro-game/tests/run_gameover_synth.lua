@@ -111,6 +111,7 @@ do
   _G.G = { P_CENTERS = require("tests.engine_centers").centers(), STATE = STATES.GAME_OVER, STATES = STATES, GAME = { won = false, round_resets = { ante = 3 } },
     OVERLAY_MENU = overlay_with({ from_game_over = true }), NEURO = { enabled = true, persona = "evil",
     dispatcher = Dispatcher, actions = Actions }, FUNCS = {} }
+  G.OVERLAY_MENU.config = { no_esc = true }
   local f = require("force.force_router").get_force_for_state("GAME_OVER")
   local has_exit, has_setup = false, false
   for _, a in ipairs((f or {}).actions or {}) do
@@ -122,16 +123,44 @@ do
   check("game-over progression screen offers open_run_setup (no soft-hang)", has_setup)
 end
 
-do
-  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), STATE = STATES.SHOP, STATES = STATES, GAME = { won = true, win_notified = true, round_resets = { ante = 9 } },
-    OVERLAY_MENU = overlay_with({ from_game_won = true }), NEURO = { enabled = true, persona = "evil",
-    dispatcher = Dispatcher, actions = Actions }, FUNCS = {} }
-  local f = require("force.force_router").get_force_for_state("SHOP")
-  local has_exit = false
-  for _, a in ipairs((f or {}).actions or {}) do if a == "exit_overlay_menu" then has_exit = true end end
-  print("[WIN] win overlay at non-GAME_OVER state -> forces exit_overlay_menu=" .. tostring(has_exit))
-  check("win screen forces exit_overlay_menu", has_exit)
+-- The win screen is opened no_esc (state_events.lua:38) yet closes through its own Endless button (UI_definitions.lua:2987).
+local function win_G(overlay)
+  overlay.config = { no_esc = true }
+  _G.G = { P_CENTERS = require("tests.engine_centers").centers(), STATE = STATES.ROUND_EVAL, STATES = STATES,
+    GAME = { won = true, win_notified = true, win_ante = 8, round_resets = { ante = 8 } },
+    OVERLAY_MENU = overlay, NEURO = { enabled = true, persona = "evil",
+    dispatcher = Dispatcher, actions = Actions }, FUNCS = {}, round_eval = {} }
 end
+
+do
+  win_G(overlay_with({ from_game_won = true, you_win_UI = true }))
+  local f = require("force.force_router").get_force_for_state("ROUND_EVAL")
+  local listed = table.concat((f or {}).actions or {}, ",")
+  print("[WIN] win overlay over ROUND_EVAL -> force " .. listed)
+  check("win screen forces exit_overlay_menu alone", listed == "exit_overlay_menu", listed)
+  check("win screen: closing it is valid", Actions.is_action_valid("exit_overlay_menu"))
+  check("win screen: cash_out under it is not", not Actions.is_action_valid("cash_out"))
+end
+
+do
+  win_G(overlay_with({ run_setup_seed = true }))
+  check("a run setup the win screen opened (no way back) is the RUN_SETUP screen",
+    require("core.state").get_state_name() == "RUN_SETUP", require("core.state").get_state_name())
+  check("and cash_out is not usable under it", not Actions.is_action_valid("cash_out"))
+end
+
+do
+  win_G(overlay_with({}))
+  local f = require("force.force_router").get_force_for_state("ROUND_EVAL")
+  check("a modal with no way to close it leaves no in-run move usable or forced",
+    not Actions.is_action_valid("cash_out") and not Actions.is_action_valid("exit_overlay_menu") and f == nil,
+    table.concat((f or {}).actions or {}, ","))
+end
+
+check("is_closable_overlay: the game-over screen is not closable", (function()
+  _G.G = { OVERLAY_MENU = require("tests.helpers").game_over_overlay() }; return not StateKinds.is_closable_overlay() end)())
+check("is_closable_overlay: an escape-closable options menu is", (function()
+  _G.G = { OVERLAY_MENU = require("tests.helpers").options_overlay() }; return StateKinds.is_closable_overlay() end)())
 
 check("is_progression_overlay: game-over screen", (function()
   _G.G = { P_CENTERS = require("tests.engine_centers").centers(), OVERLAY_MENU = overlay_with({ from_game_over = true }) }; return StateKinds.is_progression_overlay() end)())

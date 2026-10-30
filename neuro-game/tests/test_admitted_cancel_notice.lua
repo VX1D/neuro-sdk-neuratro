@@ -5,7 +5,8 @@ local function notices()
   local out = {}
   for _, f in ipairs(H.frames()) do
     if f.command == "context" and type(f.data) == "table"
-        and tostring(f.data.message):find("did not complete successfully", 1, true) then
+        and (tostring(f.data.message):find("did not complete", 1, true)
+          or tostring(f.data.message):find("(play a hand)", 1, true)) then
       out[#out + 1] = f.data.message
     end
   end
@@ -25,9 +26,8 @@ do
   H.tick(8)
   check("the cancelled play never ran", H.calls.play == 0, tostring(H.calls.play))
   local seen = notices()
-  check("she is told the admitted play did not run",
-    #seen == 1 and seen[1]:find("(play a hand)", 1, true) ~= nil,
-    table.concat(seen, " | "))
+  check("she is told once that the accepted play did not take effect",
+    #seen == 1 and seen[1]:find("(play a hand) did not take effect", 1, true) ~= nil, table.concat(seen, " | "))
 end
 
 do
@@ -36,6 +36,38 @@ do
   H.tick(10)
   check("a play that runs produces no such notice", H.calls.play == 1 and #notices() == 0,
     H.calls.play .. "/" .. #notices())
+end
+
+do
+  local Execute = require("core.execute")
+  H.board({ confirm_hand = false }); H.tick(8)
+  H.send("play_hand", { indices = { 1, 2 } })
+  for _ = 1, 30 do
+    H.tick(0.02, 0.02)
+    if Execute.busy() == "staged" then break end
+  end
+  G.NEURO.run_generation = G.NEURO.run_generation + 1
+  H.tick(8)
+  check("a move cancelled by a new connection is not reported: the connection changed, not her move",
+    H.calls.play == 0 and #notices() == 0, H.calls.play .. "/" .. table.concat(notices(), " | "))
+end
+
+do
+  local Execute, Staging = require("core.execute"), require("core.staging")
+  H.board({ confirm_hand = false }); H.tick(8)
+  H.send("play_hand", { indices = { 1, 2 } })
+  for _ = 1, 30 do
+    H.tick(0.02, 0.02)
+    if Execute.busy() == "staged" then break end
+  end
+  local ready = Staging.ready
+  Staging.ready = function() return false end
+  H.tick(30)
+  Staging.ready = ready
+  H.tick(2)
+  local seen = notices()
+  check("a move whose staging times out is reported once", H.calls.play == 0 and #seen == 1,
+    H.calls.play .. "/" .. table.concat(seen, " | "))
 end
 
 H.finish(check, done)

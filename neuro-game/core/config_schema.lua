@@ -75,6 +75,7 @@ local entries = {
   number("NEURO_CENTER_SCALE", "ACQUIRE HUD SCALE", "LAYOUT", 0.5, 1.5, 0.05, 1.0, "x"),
 
   enum("NEURO_PERSONA", "PERSONA", "SYSTEM", { "neuro", "evil", "hiyori" }, "hiyori", { runtime = true, session = true }),
+  enum("NEURO_SERVER_CHARACTER", "LAST SERVER CHARACTER", "SYSTEM", { "none", "neuro", "evil" }, "none", { memo = true }),
   toggle("NEURO_DEBUG", "DEBUG LOG", "SYSTEM", false, { runtime = true }),
   toggle("NEURO_AI_CARD_GLOW", "AI CARD GLOW", "SYSTEM", true, { runtime = true, restart_required = true }),
   toggle("NEURO_CRASH_GUARDS", "CRASH GUARDS", "SYSTEM", true, { runtime = true, restart_required = true }),
@@ -87,7 +88,10 @@ for i = 1, #entries do
   local d = entries[i]
   assert(not by_key[d.key], "duplicate config key: " .. d.key)
   by_key[d.key] = d
-  if d.runtime then runtime[#runtime + 1] = d else regular[#regular + 1] = d end
+  -- A memo is stored config the mod writes for itself; it has no row on the panel.
+  if not d.memo then
+    if d.runtime then runtime[#runtime + 1] = d else regular[#regular + 1] = d end
+  end
 end
 
 return {

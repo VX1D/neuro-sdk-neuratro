@@ -1,6 +1,6 @@
 require("tests.stubs").setup({ love = "timers", G = "timed" })
 
-local check, done = require("tests.helpers").harness("force-retry-budget")
+local check, done = require("tests.helpers").harness("force-no-retry-budget")
 
 local Dispatcher = require("core.dispatcher")
 local Enforce = require("tests.helpers").enforce()
@@ -64,15 +64,9 @@ local function stuck(id, b)
   b.results = {}
 end
 
-local ENFORCE_SRC = (function()
-  local fh = assert(io.open("core/validate.lua", "r"))
-  local src = fh:read("*a"); fh:close(); return src
-end)()
-local REJECT_STREAK_LIMIT = tonumber(ENFORCE_SRC:match("REJECT_STREAK_LIMIT%s*=%s*(%d+)"))
-
-local function bounded(label, b, sends)
+local function all_refused(label, b, sends)
   local retried, terminal = counts(b)
-  check(label, retried < sends and terminal > 0,
+  check(label, retried == sends and terminal == 0,
     string.format("sends=%d success:false=%d success:true=%d", sends, retried, terminal))
 end
 
@@ -83,17 +77,10 @@ do
     send(b, { command = "action", data = { id = "m1-" .. i, name = "play_hand",
       data = payloads[(i % 2) + 1] } })
   end
-  bounded("M1: a refusal reworded on every retry still runs out of retries", b, 30)
-  local before = 0
-  for _, r in ipairs(b.results) do
-    if r.ok ~= false then break end
-    before = before + 1
-  end
-  check("a reworded refusal spends the streak limit, not the window budget",
-    before == REJECT_STREAK_LIMIT,
-    "success:false answers before the first success:true: " .. before)
-  check("the terminal answer says nothing ran",
-    b.results[#b.results].ok == true,
+  all_refused("M1: a refusal reworded on every retry is success:false every time", b, 30)
+  check("no refusal claims a spent budget",
+    not b.results[#b.results].message:find("retry budget", 1, true)
+      and not b.results[#b.results].message:find("Nothing was executed", 1, true),
     b.results[#b.results].message)
 end
 
@@ -108,7 +95,7 @@ do
     local v = vectors[(i % 3) + 1]
     send(b, { command = "action", data = { id = "m2-" .. i, name = v[1], data = v[2] } })
   end
-  bounded("M2: rotating the class of the fault does not renew the budget", b, 30)
+  all_refused("M2: rotating the class of the fault is success:false every time", b, 30)
 end
 
 do
@@ -170,13 +157,6 @@ do
   local paused = b.results[1] or {}
   check("F3: an unknown action is refused with success=false even while paused",
     paused.ok == false and paused.reason == "ACTION_UNKNOWN", tostring(paused.ok) .. "/" .. tostring(paused.reason))
-  b.results = {}
-  for i = 1, REJECT_STREAK_LIMIT + 1 do
-    send(b, { command = "action", data = { id = "f3-" .. i, name = "play_hand", data = '{"indices":[97]}' } })
-  end
-  local retried = counts(b)
-  check("unrecognised actions spend nothing of the decision's retry budget",
-    retried == REJECT_STREAK_LIMIT and b.results[#b.results].ok == true, "success:false " .. retried)
 end
 
 do
@@ -186,7 +166,7 @@ do
     send(b, { command = "action", data = { id = "v-" .. i, name = "play_hand",
       data = '{"indices":[1,2]}' } })
   end
-  bounded("F4: a stuck verification does not refuse every send forever", b, 30)
+  all_refused("F4: a stuck verification is told to wait with success:false every time", b, 30)
   require("core.execute").abort("test")
 end
 
@@ -209,108 +189,34 @@ do
     send(b, { command = "action", data = { id = "p-" .. i, name = "play_hand",
       data = payloads[(i % 2) + 1] } })
   end
-  local _, terminal_before = counts(b)
-  check("the exhausted decision is answering terminally before progress", terminal_before > 0)
-  b.results = {}
-  G.NEURO.decision_serial = G.NEURO.decision_serial + 1
-  send(b, { command = "action", data = { id = "p-next", name = "play_hand",
-    data = '{"indices":[97]}' } })
-  check("the next decision refuses again rather than swallowing the failure",
-    b.results[1] and b.results[1].ok == false, b.results[1] and tostring(b.results[1].ok))
+  all_refused("the tenth identical-class refusal and every one after it is still success:false", b, 20)
+  for _, name in ipairs({ "play_hand", "record_plan" }) do
+    b.results = {}
+    Enforce.note_accepted({ name = name })
+    G.NEURO.decision_serial = G.NEURO.decision_serial + 1
+    send(b, { command = "action", data = { id = "p-next-" .. name, name = "play_hand",
+      data = '{"indices":[97]}' } })
+    check("an accepted " .. name .. " or a new decision changes nothing: the refusal is success:false",
+      b.results[1] and b.results[1].ok == false, b.results[1] and tostring(b.results[1].ok))
+  end
 end
 
 do
   local b = env(785)
-  for i = 1, REJECT_STREAK_LIMIT + 1 do
+  for i = 1, 12 do
     send(b, { command = "action", data = { id = "c-" .. i, name = "play_hand",
       data = '{"indices":[1,' .. (90 + i) .. ']}' } })
   end
   local last = b.results[#b.results] or {}
-  local msg = tostring(last.message)
-  check("a spent budget over changed payloads says what it counted, not that the send repeated",
-    last.ok == true, msg)
+  check("changed payloads are all refused with their own reason, never a budget statement",
+    last.ok == false and not tostring(last.message):find("refused %d+ times")
+      and not tostring(last.message):find("retry budget", 1, true), tostring(last.message))
 end
 
 do
-  local b = env(790)
-  for i = 1, 20 do
-    send(b, { command = "action", data = { id = "q-" .. i, name = "play_hand",
-      data = '{"indices":[' .. (90 + (i % 5)) .. ']}' } })
-  end
-  b.results = {}
-  Enforce.note_accepted({ name = "play_hand" })
-  send(b, { command = "action", data = { id = "q-next", name = "play_hand",
-    data = '{"indices":[97]}' } })
-  check("a PROGRESS action that actually ran buys the decision a fresh retry budget",
-    b.results[1] and b.results[1].ok == false, b.results[1] and tostring(b.results[1].ok))
-end
-
-do
-  local b = env(795)
-  for i = 1, 20 do
-    send(b, { command = "action", data = { id = "r-" .. i, name = "play_hand",
-      data = '{"indices":[' .. (90 + (i % 5)) .. ']}' } })
-  end
-  b.results = {}
-  Enforce.note_accepted({ name = "record_plan" })
-  send(b, { command = "action", data = { id = "r-next", name = "play_hand",
-    data = '{"indices":[97]}' } })
-  check("a NON_PROGRESS answer does NOT hand the exhausted decision a fresh retry budget",
-    b.results[1] and b.results[1].ok == true, b.results[1] and tostring(b.results[1].ok))
-end
-
-do
-  local function refusals_before_terminal(fingerprint_of)
-    Enforce.reset_run_state()
-    G.NEURO = { decision_serial = 1, run_generation = 1 }
-    for i = 1, 64 do
-      if Enforce.note_rejection("play_hand", fingerprint_of(i)) then return i - 1 end
-    end
-    return -1
-  end
-  local varying = refusals_before_terminal(function(i) return "reason-" .. i end)
-  local repeated = refusals_before_terminal(function() return "same" end)
-
-  check("a fingerprint that never repeats spends exactly 2 * REJECT_STREAK_LIMIT refusals",
-    varying == 2 * REJECT_STREAK_LIMIT,
-    "refusals before the terminal answer: " .. varying .. ", expected " .. (2 * REJECT_STREAK_LIMIT))
-  check("a fingerprint that repeats spends exactly REJECT_STREAK_LIMIT refusals",
-    repeated == REJECT_STREAK_LIMIT,
-    "refusals before the terminal answer: " .. repeated .. ", expected " .. REJECT_STREAK_LIMIT)
-
-  Enforce.reset_run_state()
-  G.NEURO = { decision_serial = 1, run_generation = 1 }
-  for i = 1, 12 do Enforce.note_rejection("play_hand", "reason-" .. i) end
-  G.NEURO.decision_serial = 2
-  check("the next decision starts from zero",
-    Enforce.note_rejection("play_hand", "reason-fresh") == false)
-end
-
-do
-  local ActionPolicy = require("core.action_policy")
-  for name in pairs(ActionPolicy.NON_PROGRESS) do
-    Enforce.reset_run_state()
-    G.NEURO = { decision_serial = 1, run_generation = 1 }
-    local acknowledged = false
-    for i = 1, 40 do
-      acknowledged = Enforce.note_rejection("buy_from_shop", "reason-" .. i) or acknowledged
-      Enforce.note_accepted({ name = name })
-    end
-    check("" .. name .. " between refusals cannot renew the decision's budget",
-      acknowledged == true)
-  end
-end
-
-do
-  Enforce.reset_run_state()
-  G.NEURO = { decision_serial = 1, run_generation = 1 }
-  local acknowledged = false
-  for i = 1, 40 do
-    acknowledged = Enforce.note_rejection("buy_from_shop", "reason-" .. i) or acknowledged
-    Enforce.note_accepted({ name = "play_hand" })
-  end
-  check("a PROGRESS answer between refusals keeps the decision retryable",
-    acknowledged == false)
+  local Validate = require("core.validate")
+  check("the validator keeps no decision budget to spend",
+    Validate.decision_spent == nil and (Validate._test == nil or Validate._test.note_rejection == nil))
 end
 
 done()

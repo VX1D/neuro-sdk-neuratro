@@ -146,20 +146,11 @@ do
 end
 
 do
-  Enforce.reset_run_state()
-  local note_rejection = require("core.validate")._test.note_rejection
-  local acknowledged = false
-  for _ = 1, 4 do acknowledged = note_rejection("play_hand", "same-decision") end
-  check("A: an unchanged rejection scope eventually becomes a terminal acknowledgement",
-    acknowledged == true)
-  check("A: real decision progress resets the rejection acknowledgement streak",
-    note_rejection("play_hand", "next-decision") == false)
-end
-
-do
   selecting_hand_env(1000)
   local N = force_bridge()
   G.NEURO = N
+  local stages, stage = G.STAGES, G.STAGE
+  G.STAGES = { RUN = 2 }; G.STAGE = 2
   require("core.window")._test.emit_glossary("SELECTING_HAND")
   local first = #N.emitted
   check("first glossary emission delivers the common legend",
@@ -168,7 +159,8 @@ do
   check("the same ante does not re-emit glossaries", #N.emitted == first, tostring(#N.emitted))
   G.GAME.round_resets.ante = 2
   require("core.window")._test.emit_glossary("SELECTING_HAND")
-  check("a new ante stays silent under session epoch", #N.emitted == first, tostring(#N.emitted))
+  check("a new ante repeats the glossaries", #N.emitted > first, tostring(#N.emitted))
+  G.STAGES, G.STAGE = stages, stage
 end
 
 do

@@ -27,40 +27,45 @@ end
 
 local base_G = H.base_G
 
-local FactHints = require("facts.fact_hints")
+local CtxJokers = require("context.ctx_jokers")
 
-local function acorn_chain(order)
+local function compat(j)
+  j.config.center.blueprint_compat = true
+  return j
+end
+
+local function acorn_section(order)
   local g = base_G()
   g.jokers.cards = order
   for _, j in ipairs(order) do j.area = g.jokers; j.facing = "back" end
-  return (FactHints.copy_chain() or "")
+  return tostring(CtxJokers.jokers_section("SELECTING_HAND"))
 end
 
 local bp_a  = joker("j_blueprint", "Blueprint", {}, "Copies ability of Joker to the right")
-local bar_a = joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult")
-local chain_bp_first = acorn_chain({ bp_a, bar_a })
+local bar_a = compat(joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult"))
+local section_bp_first = acorn_section({ bp_a, bar_a })
 
 local bp_b  = joker("j_blueprint", "Blueprint", {}, "Copies ability of Joker to the right")
-local bar_b = joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult")
-local chain_bar_first = acorn_chain({ bar_b, bp_b })
+local bar_b = compat(joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult"))
+local section_bar_first = acorn_section({ bar_b, bp_b })
 
-check("Amber Acorn: shuffled face-down order is not derivable from the copy-chain hint",
-  chain_bp_first == chain_bar_first, "[" .. chain_bp_first .. "] vs [" .. chain_bar_first .. "]")
-check("Amber Acorn: the copy-chain hint says nothing at all while the roster is hidden",
-  chain_bp_first == "", "[" .. chain_bp_first .. "]")
+check("Amber Acorn: shuffled face-down order is not derivable from the jokers section",
+  section_bp_first == section_bar_first, "[" .. section_bp_first .. "] vs [" .. section_bar_first .. "]")
+check("Amber Acorn: no copy target is stated while the roster is hidden",
+  section_bp_first:find("copying now", 1, true) == nil and section_bp_first:find("Blueprint", 1, true) == nil,
+  section_bp_first)
 
 do
   local g = base_G()
   local bp  = joker("j_blueprint", "Blueprint", {}, "Copies ability of Joker to the right")
-  local bar = joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult")
+  local bar = compat(joker("j_baron", "Baron", { extra = 1.5 }, "Each King held in hand gives X1.5 Mult"))
   g.jokers.cards = { bp, bar }
   for _, j in ipairs(g.jokers.cards) do j.area = g.jokers end
-  local text = (FactHints.copy_chain() or "")
-  check("face-up roster: the copy-chain hint still names Blueprint's target",
-    text:find("Blueprint (slot 1) copies the joker to its right (Baron)", 1, true) ~= nil, text)
+  local text = tostring(CtxJokers.jokers_section("SELECTING_HAND"))
+  check("face-up roster: Blueprint's row names its target",
+    text:find("1. Blueprint -- Copies ability of Joker to the right, copying now: Baron\n", 1, true) ~= nil, text)
 end
 
-local CtxJokers = require("context.ctx_jokers")
 local Scoring = require("util.scoring")
 
 local function quantity_sig(q)

@@ -28,6 +28,12 @@ local function load_real()
     end
   end
   assert(n == 4, "engine_centers: expected Steamodded's four edition configs, found " .. n)
+  for name, rest in go:gmatch("SMODS%.Enhancement:take_ownership%('(%w+)',%s*(%b{})") do
+    local center = centers["m_" .. name]
+    for field, value in rest:gmatch("\n%s*([%w_]+)%s*=%s*(%a+),") do
+      if center and (value == "true" or value == "false") then center[field] = value == "true" end
+    end
+  end
   return centers
 end
 

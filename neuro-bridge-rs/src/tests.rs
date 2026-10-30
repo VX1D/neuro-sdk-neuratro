@@ -1841,7 +1841,13 @@ async fn a_pretty_printed_notification_reaches_the_mod_and_the_next_action_arriv
     )
     .await;
     assert_eq!(
-        delivered.lines().collect::<Vec<_>>(),
+        delivered
+            .lines()
+            .map(|line| line
+                .split_once(',')
+                .filter(|(ts, _)| ts.starts_with("{\"ts\":"))
+                .map_or(line.to_string(), |(_, rest)| format!("{{{rest}")))
+            .collect::<Vec<_>>(),
         [
             r#"{"command":"startup","data":{"session":{"characterId":"neuro"}}}"#,
             r#"{"command":"startup","data":{"session":{"characterId":"neuro"}}}"#,
@@ -1982,4 +1988,37 @@ async fn a_restarted_relay_drops_a_result_written_before_its_startup() {
         "{frames:#?}"
     );
     second.abort();
+}
+
+#[test]
+fn inbox_timestamps_are_utc_with_milliseconds() {
+    assert_eq!(
+        utc_timestamp(Duration::from_millis(0)),
+        "1970-01-01T00:00:00.000Z"
+    );
+    assert_eq!(
+        utc_timestamp(Duration::from_millis(1_793_263_921_970)),
+        "2026-10-29T08:52:01.970Z"
+    );
+    assert_eq!(
+        utc_timestamp(Duration::from_millis(951_782_400_001)),
+        "2000-02-29T00:00:00.001Z"
+    );
+}
+
+#[tokio::test]
+async fn a_frame_at_the_size_limit_is_appended_without_its_timestamp() {
+    let dir = std::env::temp_dir().join(format!("neuro_stamp_limit_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let inbox = dir.join("neuro_inbox.jsonl");
+    let head = r#"{"command":"action","data":{"id":"big","name":"help","data":""#;
+    let tail = r#""}}"#;
+    let line = format!(
+        "{head}{}{tail}",
+        "x".repeat(MAX_COMMAND_BYTES - head.len() - tail.len())
+    );
+    append_line(&inbox, &line).await.unwrap();
+    let written = std::fs::read_to_string(&inbox).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(written.trim_end_matches('\n'), line);
 }

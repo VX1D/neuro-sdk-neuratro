@@ -2,7 +2,7 @@ require("tests.stubs").setup({ love = "lazy", G = "hand" })
 
 local HF = require("facts.hand_facts")
 local CR = require("context.context_readable")
-local function prose() return CR.structure_prose(HF.structure()) end
+local function prose() return require("tests.helpers").index_only(CR.structure_prose(HF.structure())) end
 
 local check, done = require("tests.helpers").harness("hand-facts")
 

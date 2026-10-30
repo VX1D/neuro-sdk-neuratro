@@ -141,7 +141,6 @@ local function _step_state_transition(state_name, state_changed, prev_state)
     G.NEURO.seed_pasted = nil
     CtxHand.clear_last_play()
   end
-  Window.register_catalogue()
   if Utils.engine_settled() then Window.emit_rules(state_name) end
   local rmsg, rspoken, roccurrence = Rewards.outcome(prev_state, state_name)
   if rmsg and rspoken then

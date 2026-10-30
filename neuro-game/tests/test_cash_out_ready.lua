@@ -15,6 +15,19 @@ local function forces_with(name)
   return out
 end
 
+local function first_frame(command, name, from)
+  for i, f in ipairs(H.frames()) do
+    if i > (from or 0) and f.command == command then
+      local names = f.data.action_names or {}
+      for _, a in ipairs(f.data.actions or {}) do names[#names + 1] = a.name end
+      for _, n in ipairs(names) do
+        if n == name then return i end
+      end
+    end
+  end
+  return nil
+end
+
 local function round_eval_board()
   H.board()
   G.STATE = H.STATES.ROUND_EVAL
@@ -69,6 +82,24 @@ do
   G.I.UIBOX = {}
   line = require("context.ctx_blind").round_eval_section() or ""
   check("without the button no payout figure is stated", line:find("Earnings", 1, true) == nil, line)
+end
+
+do
+  H.board()
+  H.tick(5)
+  local mark = #H.frames()
+  G.STATE = H.STATES.ROUND_EVAL
+  G.round_eval = {}
+  H.tick(20)
+  check("entering the round summary does not register cash_out while it is still counting (README.md:35)",
+    first_frame("actions/register", "cash_out", mark) == nil, tostring(first_frame("actions/register", "cash_out", mark)))
+  Helpers.cash_out_ready(G, 11)
+  H.tick(12)
+  local registered_at, forced_at = first_frame("actions/register", "cash_out", mark),
+    first_frame("actions/force", "cash_out", mark)
+  check("cash_out is registered once its button exists, right before the force that lists it",
+    registered_at ~= nil and forced_at ~= nil and registered_at < forced_at,
+    tostring(registered_at) .. "/" .. tostring(forced_at))
 end
 
 H.finish(check, done)

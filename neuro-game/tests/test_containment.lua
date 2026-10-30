@@ -58,8 +58,8 @@ do
   local b1 = bridge_mock()
   D.handle_message(preview_msg("pv-1"), b1)
   check("ride-along preview succeeded", b1.last and b1.last.ok == true, b1.last and b1.last.msg)
-  check("ride-along preview leaves the force it did not answer pending",
-    Window.current() ~= nil and withdrawn == nil, table.concat(withdrawn or {}, ","))
+  check("a success beside the listed set still ends the window (ActionWindowResponse.cs:20)",
+    Window.current() == nil)
 
   setup()
   withdrawn = nil

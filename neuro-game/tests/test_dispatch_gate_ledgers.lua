@@ -30,15 +30,15 @@ do
   local b = bridge()
   admit(b, { id = "g03-1", name = "play_hand", exec = function() error("boom") end })
   check("an execution throw records the readable reason, not the phase token",
-    G.NEURO.last_failed_reason == "action did not apply", tostring(G.NEURO.last_failed_reason))
+    G.NEURO.last_failed_reason == "execution outcome is ambiguous", tostring(G.NEURO.last_failed_reason))
   check("the failed action name is recorded with it",
     G.NEURO.last_failed_action == "play_hand", tostring(G.NEURO.last_failed_action))
   check("an action that already answered success does not send a second result",
     #b.results == 1 and b.results[1].ok == true and b.results[1].reason == "ACTION_ACCEPTED",
     tostring(#b.results))
   local said = table.concat(b.emitted, " | ")
-  check("the failure still reaches her, on the only channel left",
-    said:find("did not complete successfully", 1, true) ~= nil, said)
+  check("she is told once that the move could not be confirmed",
+    #b.emitted == 1 and said:find("(play a hand) could not be confirmed", 1, true) ~= nil, said)
 end
 
 do

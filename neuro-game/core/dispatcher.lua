@@ -1,6 +1,7 @@
 local Wire = require("core.bridge").wire
 local Actions = require("core.actions")
 local Utils = require("util.utils")
+local Config = require("core.config")
 local Metrics = require("util.metrics")
 local Tx = require("core.bridge").tx
 local PlanTransaction = require("core.plan_transaction")
@@ -28,14 +29,16 @@ local function persona_display_name(persona)
   return persona == "evil" and "Evil Neuro" or "Neuro-sama"
 end
 
+local function at_menu()
+  return require("core.state_kinds").is_menu_state(require("core.state").get_state_name())
+end
+
 local function apply_persona(persona)
   local display_name = persona_display_name(persona)
   if G and G.NEURO then
     local previous = G.NEURO.persona
     G.NEURO.persona = persona
-    local StateKinds = require("core.state_kinds")
-    local at_menu = StateKinds.is_menu_state(require("core.state").get_state_name())
-    if at_menu and not G.NEURO.login_anim then
+    if at_menu() and not G.NEURO.login_anim then
       G.NEURO.login_anim = {
         start = Utils.now(),
         name = display_name,
@@ -52,13 +55,6 @@ local ACTION_PREFLIGHTS = {
     local persona = data.persona
     if persona ~= "neuro" and persona ~= "evil" then
       return nil, "Choose 'neuro' for Neuro-sama or 'evil' for Evil Neuro."
-    end
-    if G and G.NEURO and G.NEURO.persona ~= "hiyori" then
-      if G.NEURO.persona == persona then
-        return function() return ActionResult.done() end
-      end
-      local cur = persona_display_name(G.NEURO.persona)
-      return nil, "Identity already set to " .. cur .. ". Cannot change mid-session."
     end
     return function() return apply_persona(persona) end
   end,
@@ -95,7 +91,7 @@ local ACTION_PREFLIGHTS = {
 
 function Dispatcher.skip_pack_reject_reason()
   if require("core.validate").stop_use_active() then
-    return "The pack is still resolving the last action. Wait a moment, then skip."
+    return ActionResult.wait("The pack is still resolving the last action, so nothing was applied.")
   end
   return nil
 end
@@ -106,10 +102,12 @@ local function handle_simple_action(name)
   local refusal = ActionRegistry.unavailable_reason(name)
   if refusal then return nil, refusal end
   if name == "reroll_shop" and not G.shop then
-    return nil, "Shop is not open. Wait for the shop screen."
+    return nil, ActionResult.wait("The shop is not open yet, so nothing was applied.",
+      "Wait for the shop screen, then choose again.")
   end
   if name == "reroll_boss" and not G.blind_select then
-    return nil, "Blind select is not open. Wait for the blind select screen."
+    return nil, ActionResult.wait("The blind select screen is not open yet, so nothing was applied.",
+      "Wait for the blind select screen, then choose again.")
   end
   if name == "skip_pack" then
     local reason = Dispatcher.skip_pack_reject_reason()
@@ -142,7 +140,7 @@ local function handle_simple_action(name)
     if name == "start_run" then
       local key = G and G.NEURO and G.NEURO.selected_back_key
       if key and not MenuHandlers.apply_selected_back(key) then
-        error("selected deck is no longer available: " .. tostring(key))
+        return nil, "the selected deck is no longer available: " .. tostring(key)
       end
       selected_center = DeckFacts.run_deck_center()
       selected_stake = DeckFacts.run_stake()
@@ -165,7 +163,7 @@ local function handle_simple_action(name)
     end
     if name == "cash_out" then
       local button = GameFacts.cash_out_button()
-      if not button then error("the Cash Out button is gone; the payout was not collected", 0) end
+      if not button then return nil, "the Cash Out button is gone; the payout was not collected" end
       fn(button)
       return nil
     end
@@ -201,7 +199,7 @@ end)
 ActionRegistry.bind_preflight("leave_shop", function(data)
   local tag, refusal
   if data.intents ~= nil then
-    tag, refusal = PlanHandlers.handle_record_joker_roles(data)
+    tag, refusal = PlanHandlers.prepare_joker_intents(data)
     if not tag then return nil, refusal end
   end
   local covered, missing = {}, {}
@@ -255,16 +253,19 @@ ActionRegistry.bind_candidates("buy_from_shop", function()
   return out
 end)
 
+local function mid_round_sell_rule(subject)
+  local reason = require("facts.boss.legality").in_round_sell_note()
+  return "Mid-round, a card can be sold only when its sale does something this round"
+    .. (reason and (": " .. reason) or "") .. ". Sell " .. subject .. " in the shop instead."
+end
+
 ActionRegistry.bind_payload_guard("sell_card", function(data)
   local Legality = require("facts.boss.legality")
   if not Legality.sell_blocked_now() then return true end
   local _, card, index = CardArea.resolve_target(data, CardArea.TARGET_RULES.sell_card)
   if not card or not Legality.sell_blocked_now(card) then return true end
-  local reason = Legality.in_round_sell_note()
   return false, ActionResult.error("ACTION_UNAVAILABLE",
-    "Mid-round, a card can be sold only when its sale does something this round"
-      .. (reason and (": " .. reason) or "") .. ". Sell " .. require("facts.public_card_identity").label(card, data.area, index)
-      .. " in the shop instead.")
+    mid_round_sell_rule(require("facts.public_card_identity").label(card, data.area, index)))
 end)
 
 ActionRegistry.bind_candidates("sell_card", function()
@@ -318,14 +319,37 @@ end)
 
 local NO_CANDIDATE_REASON = {
   buy_from_shop = "Nothing on offer can be bought right now (money, free slots, or an empty shop); sell, reroll or leave instead.",
-  sell_card = "Nothing you own can be sold right now; choose another action.",
-  select_blind = "No blind is selectable right now; wait for the blind select screen.",
+  sell_card = function(data)
+    local held, empty = {}, {}
+    for _, entry in ipairs({ { "jokers", G and G.jokers }, { "consumables", G and G.consumeables } }) do
+      local cards, sellable = (entry[2] and entry[2].cards) or {}, 0
+      for _, card in ipairs(cards) do
+        if not (card.ability and card.ability.eternal) then sellable = sellable + 1 end
+      end
+      if sellable > 0 then held[#held + 1] = entry[1] elseif #cards == 0 then empty[#empty + 1] = entry[1] end
+    end
+    if #held == 0 or not require("facts.boss.legality").sell_blocked_now() then
+      return "Nothing you own can be sold right now; choose another action."
+    end
+    local subject = #held > 1 and "your cards" or ("your " .. held[1])
+    if type(data) == "table" and data.area ~= nil then
+      local _, card, index, _, err = CardArea.resolve_target(data, CardArea.TARGET_RULES.sell_card)
+      if card then subject = require("facts.public_card_identity").label(card, data.area, index) end
+      return (card and "" or (err .. " ")) .. mid_round_sell_rule(subject)
+    end
+    local none = #empty > 0 and ("You hold no " .. empty[1] .. ". ") or ""
+    return none .. mid_round_sell_rule(subject)
+  end,
+  select_blind = function()
+    return ActionResult.wait("No blind is selectable yet, so nothing was selected.",
+      "Wait for the blind select screen, then choose again.")
+  end,
 }
 for name, reason in pairs(NO_CANDIDATE_REASON) do
   local candidate_name, refusal = name, reason
-  ActionRegistry.bind_availability(candidate_name, function()
+  ActionRegistry.bind_availability(candidate_name, function(data)
     if #ActionRegistry.candidates(candidate_name) > 0 then return true end
-    return false, refusal
+    return false, type(refusal) == "function" and refusal(data) or refusal
   end)
 end
 
@@ -351,8 +375,15 @@ local function handle_startup(msg)
     return drop("handle_startup_invalid")
   end
   if not (G and G.NEURO) then return end
-  if (session.characterId == "neuro" or session.characterId == "evil") and G.NEURO.persona == "hiyori" then
-    apply_persona(session.characterId)
+  local character = session.characterId
+  if character ~= "neuro" and character ~= "evil" then return end
+  Config.set("NEURO_SERVER_CHARACTER", character)
+  Config.save()
+  -- During boot the login waits for the title screen so its animation is seen.
+  local screen = require("core.state").get_state_name()
+  if Actions.awaiting_persona() and (screen == nil or screen == "SPLASH" or screen == "UNKNOWN") then return end
+  if G.NEURO.persona ~= character then
+    apply_persona(character)
     require("core.window").withdraw("persona_from_startup")
   end
 end
@@ -396,13 +427,20 @@ function Dispatcher.handle_message(msg, bridge)
   return dispatch(msg, bridge, false)
 end
 
-function Dispatcher.reset_run_state(reason, announce)
-  require("core.execute").abort(reason or "run state reset", announce)
+-- Without an acknowledgement naming her, she logs in as the character the server named last.
+function Dispatcher.recall_persona()
+  if not Actions.awaiting_persona() then return end
+  local remembered = Config.get_raw("NEURO_SERVER_CHARACTER")
+  if remembered == "neuro" or remembered == "evil" then apply_persona(remembered) end
+end
+
+function Dispatcher.reset_run_state(reason)
+  require("core.execute").abort(reason or "run state reset")
   PlanTransaction.release()
 end
 
 function Dispatcher.reset_transport_state(reason)
-  Dispatcher.reset_run_state(reason or "transport reconnected", true)
+  Dispatcher.reset_run_state(reason or "transport reconnected")
   Tx.reset()
   if G and G.NEURO then
     G.NEURO.pack_exit_pending = nil

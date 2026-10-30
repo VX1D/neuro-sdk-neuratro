@@ -250,33 +250,46 @@ end
 local _run_reset_hooked = false
 local function hook_run_reset()
   if _run_reset_hooked or not (G and G.FUNCS) then return end
-  local resetting = false
-  local hooked = false
-  local function wrap(name)
-    local orig = G.FUNCS[name]
-    if type(orig) ~= "function" then return end
-    G.FUNCS[name] = function(...)
+  local resetting, pending = false, false
+  local function reset()
+    Lifecycle.withdraw_open_force()
+    Lifecycle.bump_run_generation("run restarted")
+    Lifecycle.reset_run_state(true)
+  end
+  local function guarded(orig, before)
+    return function(...)
       local args = { ... }
       local argc = select("#", ...)
       local results = { xpcall(function()
         if not resetting then
           resetting = true
-          Lifecycle.withdraw_open_force()
-          Lifecycle.bump_run_generation("run restarted")
-          Lifecycle.reset_run_state(true)
+          before()
         end
         return orig(unpack_values(args, 1, argc))
       end, debug.traceback) }
       resetting = false
       local ok = results[1]
-      if not ok then error(results[2], 0) end
+      if not ok then
+        pending = false
+        error(results[2], 0)
+      end
       return unpack_values(results, 2)
     end
-    hooked = true
   end
-  wrap("start_run")
-  wrap("start_challenge_run")
-  _run_reset_hooked = hooked
+  for _, name in ipairs({ "start_run", "start_challenge_run" }) do
+    if type(G.FUNCS[name]) == "function" then
+      G.FUNCS[name] = guarded(G.FUNCS[name], function() reset(); pending = true end)
+    end
+  end
+  local game = rawget(_G, "Game")
+  local game_start_run = type(game) == "table" and game.start_run
+  if type(game_start_run) == "function" then
+    game.start_run = function(...)
+      if pending then pending = false elseif not resetting then reset() end
+      return game_start_run(...)
+    end
+  end
+  _run_reset_hooked = true
 end
 
 local _blind_defeat_hooked = false
@@ -310,6 +323,7 @@ local function hook_love_quit()
 end
 if _G.NEURO_TEST then
   BridgeInit.hook_love_quit = hook_love_quit
+  BridgeInit.hook_run_reset = hook_run_reset
 end
 
 function BridgeInit.run()

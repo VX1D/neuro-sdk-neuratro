@@ -64,7 +64,7 @@ local function trance_pick(id, land_after_cap)
     table.remove(G.pack_cards.cards, 1)
     return true
   end
-  local rc = exec_now(Handle.handle_use_card({ area = "booster_pack", index = 1, hand_indices = { 1 }, _action_id = id }))
+  local rc = exec_now(Handle.handle_use_card(require("tests.helpers").with_card_names("use_consumable", { area = "booster_pack", index = 1, hand_indices = { 1 }, _action_id = id })))
   check(id .. ": the pick was accepted and used", type(rc) == "table" and seal_event ~= nil, tostring(rc))
   G.E_MANAGER = { queues = { base = { { blocking = true, blockable = true } } } }
   local t = Receipt.now()

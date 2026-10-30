@@ -77,7 +77,7 @@ local function describe_key(key, advertised)
   return text
 end
 
-local function ignored_plan_note(action_name, explicit, advertised)
+local function ignored_plan_note(explicit, advertised)
   local ignored = {}
   for key in pairs(explicit) do
     if not takes(advertised, key) then ignored[#ignored + 1] = describe_key(key, advertised) end
@@ -85,7 +85,7 @@ local function ignored_plan_note(action_name, explicit, advertised)
   if #ignored == 0 then return nil end
   table.sort(ignored)
   local note = "Not saved: " .. table.concat(ignored, ", ")
-    .. (#ignored == 1 and " is not a plan field of " or " are not plan fields of ") .. action_name
+    .. (#ignored == 1 and " is not a plan field of this move" or " are not plan fields of this move")
   if (explicit.primary ~= nil or explicit.fallback ~= nil) and (advertised == nil or advertised.hand_focus) then
     note = note .. "; a hand focus goes inside plan.hand_focus as {\"primary\": ..., \"fallback\": ...}"
   end
@@ -197,11 +197,24 @@ local function held_values(scopes, proposal_ref, choice)
   return out
 end
 
+local ROUND_ACTIONS = { play_hand = true, discard_hand = true }
+
+local function boss_plan_open(action_name)
+  local blind = G and G.GAME and G.GAME.blind
+  if ROUND_ACTIONS[action_name] and not (blind and blind.boss) then
+    return false, "Not saved: a play or discard saves plan.boss_plan only on the Boss round, and this blind is not the Boss."
+  end
+  if not PlanHandlers.boss_plan_writable() then
+    return false, "Not saved: plan.boss_plan is kept for the boss this ante shows, and none is shown yet."
+  end
+  return true
+end
+
 local function plan_fields_note(action_name, explicit, advertised)
-  local note = ignored_plan_note(action_name, explicit, advertised)
-  if explicit.boss_plan ~= nil and takes(advertised, "boss_plan") and not PlanHandlers.boss_plan_writable()
-      and not blank_text(explicit.boss_plan) then
-    note = with_note(note, "Not saved: plan.boss_plan is kept for the boss this ante shows, and none is shown yet.")
+  local note = ignored_plan_note(explicit, advertised)
+  if explicit.boss_plan ~= nil and takes(advertised, "boss_plan") and not blank_text(explicit.boss_plan) then
+    local open, why = boss_plan_open(action_name)
+    if not open then note = with_note(note, why) end
   end
   return note
 end
@@ -231,7 +244,7 @@ function M.prepare(action_name, data)
 
   local advertised = advertised_plan_keys(action_name)
   local ignored_note = explicit and plan_fields_note(action_name, explicit, advertised) or nil
-  local boss_writable = PlanHandlers.boss_plan_writable()
+  local boss_writable = boss_plan_open(action_name)
   if explicit then
     for field, key in pairs(PLAN_KEYS) do
       local in_scope = (advertised == nil or advertised[key] == true) and (field ~= "boss" or boss_writable)

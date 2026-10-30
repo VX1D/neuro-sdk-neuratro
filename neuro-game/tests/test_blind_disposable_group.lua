@@ -51,7 +51,8 @@ do
   check("select_blind unregisters select_blind and skip_blind, not the record_plan tool, before its result",
     seq:find("unregister:select_blind,skip_blind ; result", 1, true) ~= nil, seq)
   check("the round's force follows with neither blind answer registered",
-    seq:find("force:play_hand,discard_hand", 1, true) ~= nil and seq:find("; register:", 1, true) == nil, seq)
+    seq:find("force:play_hand,discard_hand", 1, true) ~= nil
+      and not seq:find("%f[%a]register:[^;]*select_blind") and not seq:find("%f[%a]register:[^;]*skip_blind"), seq)
 end
 
 do

@@ -88,6 +88,20 @@ function Rules.check_applied_stakes(stake, deck)
   return true
 end
 
+local function smods_source_fn(smods, name)
+  local dump = os.getenv("BALATRO_DUMP")
+  local fh = dump and dump ~= "" and io.open(dump .. "/../../smods/src/utils.lua", "r")
+  if not fh then return nil end
+  local src = fh:read("*a")
+  fh:close()
+  local body = src:match("\nfunction SMODS%." .. name .. "%(.-\nend\n")
+  if not body then return nil end
+  local chunk = assert(loadstring(body, "@smods/src/utils.lua"))
+  setfenv(chunk, setmetatable({ SMODS = smods }, { __index = _G }))
+  chunk()
+  return smods[name]
+end
+
 function M.install_smods(t)
   t = t or {}
   for name, fn in pairs(Rules) do
@@ -98,6 +112,7 @@ function M.install_smods(t)
   t.Suit = t.Suit or { obj_buffer = { "Diamonds", "Clubs", "Hearts", "Spades" } }
   t.RunSelect = t.RunSelect or { Pages = {}, Internals = { pages = {}, current_page = 1 },
     Setup = { choices = { seed = "" } }, Functions = {} }
+  t.has_playing_card_property = t.has_playing_card_property or smods_source_fn(t, "has_playing_card_property")
   _G.SMODS = t
   return t
 end

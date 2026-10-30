@@ -108,7 +108,7 @@ do
   tick_for(12)
   check("fixture: ROUND_EVAL asks and waits on the wire", #forces == 1 and Window.current() ~= nil, #forces)
   local q1, a1 = forces[1].query, forces[1].actions
-  check("fixture: the offer is the narrowed one -- cash_out alone", a1 == "cash_out", a1)
+  check("fixture: the offer lists every usable action -- cash_out and record_plan", a1 == "cash_out,record_plan", a1)
   check("fixture: the handler supplies the live query", Router.get_force_for_state("ROUND_EVAL").query == q1)
 
   local serial_before = G.NEURO.decision_serial
@@ -123,7 +123,7 @@ do
     nonsilent_contexts() == before_contexts, nonsilent_contexts() - before_contexts)
   check("withdrawal does not spend the decision", G.NEURO.decision_serial == serial_before)
   check("the decision is asked again, re-registering what the withdrawal took off",
-    tick_until(function() return #forces == 2 end, 30) and forces[2].actions == "cash_out"
+    tick_until(function() return #forces == 2 end, 30) and forces[2].actions == "cash_out,record_plan"
       and Window.current() ~= nil and wire[#wire].op == "force" and wire[#wire - 1].op == "register",
     tostring(#forces))
   check("the re-ask keeps the same decision serial", G.NEURO.decision_serial == serial_before)

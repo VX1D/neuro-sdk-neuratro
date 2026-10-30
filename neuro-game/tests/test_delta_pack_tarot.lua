@@ -40,6 +40,7 @@ local function pack_then_shop(seed, extra)
     end
   end
   for k, v in pairs(shop) do G[k] = v end
+  G.shop = {}
   G.NEURO.decision_serial = G.NEURO.decision_serial + 1
   G.NEURO.answered_decisions = (tonumber(G.NEURO.answered_decisions) or 0) + 1
   return since(FP.build("SHOP"))

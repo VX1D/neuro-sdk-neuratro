@@ -651,7 +651,7 @@ local SCENARIOS = {
       }
     end) },
 
-  { state = "GAME_OVER", desc = "Persona nil", progress = { "open_run_setup" }, no_force = true,
+  { state = "GAME_OVER", desc = "Persona nil", progress = { "choose_persona", "open_run_setup" }, no_force = true,
     mock = mock("board", nil, set({ NEURO_PERSONA = EXPLICIT_NIL })) },
 
   { state = "GAME_OVER", desc = "Persona evil", progress = { "open_run_setup" }, no_force = true,
@@ -661,7 +661,7 @@ local SCENARIOS = {
 
   { state = "MENU", desc = "No G.GAME at all", progress = { "open_run_setup" }, no_force = true, mock = mock("menu", EXPLICIT_NIL) },
 
-  { state = "MENU", desc = "Persona nil", progress = { "open_run_setup" }, no_force = true,
+  { state = "MENU", desc = "Persona nil", progress = { "choose_persona", "open_run_setup" }, no_force = true,
     mock = mock("menu", nil, set({ NEURO_PERSONA = EXPLICIT_NIL })) },
 
   { state = "SPLASH", desc = "Persona nil", no_force = true,
@@ -757,7 +757,7 @@ local SCENARIOS = {
 
   { state = "BLIND_SELECT", desc = "$0, boss only, no vouchers", progress = { "select_blind" }, mock = mock("blind", dollars(0), opts("Boss")) },
 
-  { state = "SMODS_BOOSTER_OPENED", desc = "pack_choices=0 (no picks left)", progress = { "choose_pack_card", "skip_pack", "use_consumable" },
+  { state = "SMODS_BOOSTER_OPENED", desc = "pack_choices=0 (no picks left)", progress = { "choose_pack_card", "sell_card", "skip_pack", "use_consumable" },
     mock = mock("board", function(g) g.pack_choices = 0 end, function() return {
       consumeables = area(2, { consumable("c_hermit") }),
       pack_cards = row(make_card()),
@@ -779,7 +779,7 @@ local SCENARIOS = {
   { state = "MENU", desc = "Persona hiyori", no_force = true,
     mock = mock("menu", nil, function() return { NEURO_PERSONA = "hiyori" } end) },
 
-  { state = "MENU", desc = "Overlay + persona hiyori", progress = { "exit_overlay_menu", "open_run_setup" },
+  { state = "MENU", desc = "Overlay + persona hiyori", progress = { "exit_overlay_menu" },
     mock = mock("menu", nil, function() return { OVERLAY_MENU = options_overlay(), NEURO_PERSONA = "hiyori" } end) },
 
   { state = "SELECTING_HAND", desc = "Overlay blocks during hand selection",

@@ -145,6 +145,14 @@ local function permits_null(schema)
   return false
 end
 
+local function required_path(spec, path)
+  local inner = type(spec) == "table" and spec.required or nil
+  if type(inner) ~= "table" or #inner == 0 then return path end
+  local parts = {}
+  for i = 1, #inner do parts[i] = path .. "." .. inner[i] end
+  return path .. " (with " .. table.concat(parts, ", ") .. ")"
+end
+
 local function walk(schema, value, label, nested)
   if schema == nil then
     return true
@@ -163,7 +171,7 @@ local function walk(schema, value, label, nested)
       local key = required[i]
       if value[key] == nil
           or (json.is_null(value[key]) and not permits_null(props[key])) then
-        missing[#missing + 1] = key
+        missing[#missing + 1] = required_path(props[key], nested and (label .. "." .. key) or key)
       end
     end
     if #missing > 0 then

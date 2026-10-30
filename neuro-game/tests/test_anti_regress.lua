@@ -838,7 +838,7 @@ do
     send_action_result = require("tests.helpers").result_log(results, { "_", "ok", "msg", "reason" }),
   }
   require("tests.helpers").stage_registered(nil, { "record_plan" })
-  for i = 1, 4 do
+  for i = 1, 10 do
     G.NEURO.force_window = nil
     require("tests.helpers").open_force("SHOP", { "record_plan" })
     D.handle_message({
@@ -846,8 +846,8 @@ do
       data = { id = "n3f7-" .. i, name = "record_plan", data = "{}" },
     }, bridge)
   end
-  check("four record_plan|{} rejections are recorded",
-    #results == 4, tostring(#results))
+  check("ten record_plan|{} rejections are recorded",
+    #results == 10, tostring(#results))
   check("the first three record_plan|{} rejections carry PRECONDITION_FAILED and success=false",
     results[1].ok == false and results[1].reason == "PRECONDITION_FAILED"
       and results[2].ok == false and results[2].reason == "PRECONDITION_FAILED"
@@ -856,9 +856,12 @@ do
       tostring(results[1].ok), tostring(results[1].reason),
       tostring(results[2].ok), tostring(results[2].reason),
       tostring(results[3].ok), tostring(results[3].reason)))
-  check("the fourth rejection is acknowledged after the rejection streak threshold",
-    results[4].ok == true and results[4].reason == "PRECONDITION_FAILED",
-    tostring(results[4].ok) .. "/" .. tostring(results[4].reason))
+  local all_refused = true
+  for i = 4, 10 do
+    all_refused = all_refused and results[i].ok == false and results[i].reason == "PRECONDITION_FAILED"
+  end
+  check("there is no retry budget: the tenth identical rejection is still success=false", all_refused,
+    tostring(results[4].ok) .. "/" .. tostring(results[10].ok))
 
   G.shop = nil; G.jokers = nil
   G.NEURO.force_window = nil
@@ -917,7 +920,8 @@ do
     }, { hc[1], hc[2], hc[3], hc[6], hc[7] }, nil
   end
   local q = require("tests.helpers").force_payload("SELECTING_HAND")
-  check("force query carries ready indices", q:find("Full House (cards 1, 2, 3, 6, 7)", 1, true) ~= nil)
+  check("force query carries ready indices",
+    require("tests.helpers").index_only(q):find("Full House (cards 1, 2, 3, 6, 7)", 1, true) ~= nil)
 
   G.FUNCS.get_poker_hand_info = nil
 end
@@ -1068,9 +1072,9 @@ do
   local f = require("force.force_router").get_force_for_state("MENU")
   check("seed chain: MENU force offers open_run_setup", f and has(f.actions, "open_run_setup"))
   check("seed chain: MENU force omits toggle_seeded_run (fails without overlay)",
-    not has((f or {}).actions, "toggle_seeded_run"))
+    not has((f or {}).actions, "toggle_seeded_run") and not has((f or {}).tools, "toggle_seeded_run"))
   check("seed chain: MENU force omits paste_seed (wiped by overlay rebuild)",
-    not has((f or {}).actions, "paste_seed"))
+    not has((f or {}).actions, "paste_seed") and not has((f or {}).tools, "paste_seed"))
   check("seed chain: MENU force omits start_run (dispatcher rejects it)",
     not has((f or {}).actions, "start_run"))
   check("seed chain: toggle_seeded_run invalid without overlay", not A.is_action_valid("toggle_seeded_run"))

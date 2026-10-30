@@ -27,9 +27,8 @@ for _, board in ipairs(boards) do
   local payload = FP.build(board.state)
   if payload then
     framed = framed + 1
-    local offered = {}
-    for _, name in ipairs(payload.actions) do offered[name] = true end
-    for name in pairs(offered) do
+    local force = require("force.force_router").get_force_for_state(board.state) or {}
+    for _, name in ipairs(force.tools or {}) do
       if Policy.is_tool(name) then tools_seen = tools_seen + 1 end
     end
     for field, text in pairs({ query = payload.query, state = payload.state }) do
@@ -41,7 +40,7 @@ for _, board in ipairs(boards) do
 end
 
 check("the sweep framed the whole corpus", framed == #boards, framed .. "/" .. #boards)
-check("the forces offer tools beside their decisions", tools_seen >= 25, tostring(tools_seen))
+check("the forces describe tools beside their decisions", tools_seen >= 25, tostring(tools_seen))
 check("no query or state names an action", #stray == 0,
   table.concat(stray, "; "))
 

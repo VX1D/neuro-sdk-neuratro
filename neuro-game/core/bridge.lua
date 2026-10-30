@@ -252,6 +252,7 @@ function Bridge:new(opts)
   o.heartbeat_file = opts.heartbeat_file or "neuro_heartbeat.txt"
   o.inbox_pos = 0
   o._inbox_anchor = ""
+  o.inbox_serial = 0
   o.seq = 0
   o.last_transition_at = 0
   mirror(o)
@@ -284,7 +285,42 @@ local FNV_PRIME = U64(0x100000000) * 0x100 + 0x1b3
 local FENCE_CHUNK = 64 * 1024
 local CURSOR_WORDS = 7
 
-local function mix(hash, word) return bit.bxor(hash, word) * FNV_PRIME end
+local TWO32 = 2 ^ 32
+
+-- os.time has whole seconds only; the outbox timestamps need milliseconds.
+local wall_ms = function() return os.time() * 1000 end
+pcall(function()
+  if ffi.os == "Windows" then
+    pcall(ffi.cdef, "void GetSystemTimeAsFileTime(uint64_t *filetime);")
+    local filetime = ffi.new("uint64_t[1]")
+    ffi.C.GetSystemTimeAsFileTime(filetime)
+    wall_ms = function()
+      ffi.C.GetSystemTimeAsFileTime(filetime)
+      return tonumber(filetime[0] / 10000) - 11644473600000
+    end
+  else
+    pcall(ffi.cdef, "typedef struct { long tv_sec; long tv_usec; } neuro_timeval; int gettimeofday(neuro_timeval *tv, void *tz);")
+    local tv = ffi.new("neuro_timeval")
+    ffi.C.gettimeofday(tv, nil)
+    wall_ms = function()
+      ffi.C.gettimeofday(tv, nil)
+      return tonumber(tv.tv_sec) * 1000 + math.floor(tonumber(tv.tv_usec) / 1000)
+    end
+  end
+end)
+
+local function utc_timestamp()
+  local ms = wall_ms()
+  return os.date("!%Y-%m-%dT%H:%M:%S", math.floor(ms / 1000)) .. string.format(".%03dZ", ms % 1000)
+end
+
+local function xor64(a, b)
+  local hi = bit.bxor(tonumber(a / TWO32), tonumber(b / TWO32)) % TWO32
+  local lo = bit.bxor(tonumber(a % TWO32), tonumber(b % TWO32)) % TWO32
+  return U64(hi) * TWO32 + lo
+end
+
+local function mix(hash, word) return xor64(hash, word) * FNV_PRIME end
 
 local function words_of(bytes)
   local n = math.ceil(#bytes / 8)
@@ -379,6 +415,7 @@ function Bridge:flush_outbox()
     end
     table.remove(fifo, 1)
     self._torn = false
+    self:_stamp_inbox_marks(1)
   end
   return true
 end
@@ -398,7 +435,8 @@ end
 
 local function encode(self, message)
   if message.game ~= nil and message.game ~= self.game then return nil, "ipc_game_mismatch_rejected" end
-  local ok, encoded = pcall(json.encode, { command = message.command, game = self.game, data = message.data })
+  local ok, encoded = pcall(json.encode,
+    { ts = utc_timestamp(), command = message.command, game = self.game, data = message.data })
   if not ok or type(encoded) ~= "string" then return nil, "ipc_unencodable_frame_rejected" end
   if #encoded + 1 > MAX_LINE_BYTES then return nil, "ipc_oversized_frame_rejected" end
   return encoded .. "\n"
@@ -422,7 +460,12 @@ local function assert_no_action_names(message)
   local catalog = {}
   for _, name in ipairs(require("core.action_registry").names()) do catalog[name] = true end
   for _, field in ipairs(PROSE_FIELDS[message.command] or {}) do
-    local named = require("force.force_references").named_actions(message.data and message.data[field], catalog)
+    local text = message.data and message.data[field]
+    -- The reference SDK's unknown-action reply echoes the name she sent.
+    if message.command == C.RESULT and type(text) == "string" and text:find("^Action failed%. Unknown action '") then
+      text = nil
+    end
+    local named = require("force.force_references").named_actions(text, catalog)
     if #named > 0 then
       error(message.command .. " " .. field .. " names the action " .. table.concat(named, ", ") .. ": "
         .. tostring(message.data[field]), 3)
@@ -474,7 +517,6 @@ end
 function Bridge:release_force_lock()
   if type(self) ~= "table" then return end
   self._force_open = nil
-  self._active_force_proposal_ref = nil
 end
 
 function Bridge:send_startup(opts)
@@ -483,7 +525,10 @@ function Bridge:send_startup(opts)
   if not opts.reconnect and not self._startup_complete then self:_skip_stale_inbox() end
   local line = encode(self, W.startup(self.game))
   local answer = W.startup_answer(self.game, self.transport_session)
-  if answer then line = json.encode(answer) .. "\n" .. line end
+  if answer then
+    answer.ts = utc_timestamp()
+    line = json.encode(answer) .. "\n" .. line
+  end
   self.session_id = (self.session_id or 0) + 1
   self.last_state = nil
   self.last_transition_at = Utils.gate_now("bridge_transition_cooldown")
@@ -598,7 +643,7 @@ function Bridge:register_actions(actions)
   return true
 end
 
-function Bridge:withdraw_actions(action_names)
+local function unregister(self, action_names, hold)
   local seen, names = {}, {}
   for _, name in ipairs(action_names or {}) do
     if type(name) == "string" and name ~= "" and not seen[name] then
@@ -618,13 +663,16 @@ function Bridge:withdraw_actions(action_names)
   local held = self._withdrawn_held or {}
   for _, name in ipairs(names) do
     self._registered_sigs[name] = nil
-    held[name] = true
+    if hold then held[name] = true end
   end
   self._last_register_key = nil
   self._withdrawn_held = held
   note_registry("note_unregistered", names)
   return true
 end
+
+function Bridge:withdraw_actions(action_names) return unregister(self, action_names, true) end
+function Bridge:retire_actions(action_names) return unregister(self, action_names, false) end
 
 function Bridge:unregister_all()
   mirror(self)
@@ -655,15 +703,44 @@ function Bridge:force_actions(state, query, action_names, opts)
   end
   local receipt = { kind = "actions_force", actions = action_names }
   if not self:send(frame_out, receipt) then return false, receipt end
-  self._active_force_proposal_ref = opts.confirmation_proposal_ref
   Metrics.incr("force_sent")
   Metrics.set("force_available_actions", #action_names)
   Metrics.set("force_context_bytes", #(state or "") + #query)
   return true, receipt
 end
 
-function Bridge:confirmation_proposal_ref(_id)
-  return self._active_force_proposal_ref
+-- Inbox bytes present now: a line below this position was written before anything that lands now.
+function Bridge:_inbox_present()
+  local path, anchor = self:fs_path(self.inbox_file), self._inbox_anchor
+  local unread = file_size(path) - self.inbox_pos
+  if self.inbox_pos > 0 then
+    local head = read_from(path, self.inbox_pos - #anchor)
+    if head == nil or head:sub(1, #anchor) ~= anchor then
+      unread = math.max(0, file_size(path .. ".1") - self.inbox_pos) + file_size(path)
+    end
+  end
+  return (self.inbox_serial or 0) + math.max(0, unread)
+end
+
+-- Each waiter counts down the outbox lines queued up to and including its own frame.
+function Bridge:_stamp_inbox_marks(landed)
+  local waiting = {}
+  for _, waiter in ipairs(self._inbox_mark_waiters or {}) do
+    waiter.ahead = waiter.ahead - landed
+    if waiter.ahead <= 0 then waiter.target.inbox_mark = self:_inbox_present() else waiting[#waiting + 1] = waiter end
+  end
+  self._inbox_mark_waiters = waiting
+end
+
+function Bridge:mark_inbox_on_landing(target)
+  if type(target) ~= "table" then return end
+  self._inbox_mark_waiters = self._inbox_mark_waiters or {}
+  table.insert(self._inbox_mark_waiters, { target = target, ahead = #pending(self) })
+  self:_stamp_inbox_marks(0)
+end
+
+function Bridge:inbox_line_serial()
+  return self._line_serial
 end
 
 
@@ -743,6 +820,7 @@ function Bridge:_deliver_inbox_message(msg, handler)
 end
 
 local function advance(self, bytes)
+  self.inbox_serial = (self.inbox_serial or 0) + #bytes
   self.inbox_pos = self.inbox_pos + #bytes
   self._inbox_anchor = (self._inbox_anchor .. bytes):sub(-INBOX_ANCHOR_BYTES)
 end
@@ -767,6 +845,7 @@ function Bridge:_consume(data)
       return true
     end
     local line = data:sub(start, newline - 1)
+    self._line_serial = self.inbox_serial or 0
     advance(self, data:sub(start, newline))
     start = newline + 1
     line = line:gsub("\r$", "")

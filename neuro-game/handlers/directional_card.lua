@@ -38,7 +38,7 @@ function M.handle(data)
   local contract = Contracts.get(card)
   if not contract or contract.mode ~= "ordered_pair" then
     return ActionResult.reject("INVALID_SELECTION",
-      "This card has no registered directional target contract; use " .. UseCard.canonical_action(data.area, false) .. ".")
+      "This card has no directional targets; use it with " .. UseCard.move_for(data.area, false) .. ".")
   end
   local left, right = data.left_index, data.right_index
   if left == right then

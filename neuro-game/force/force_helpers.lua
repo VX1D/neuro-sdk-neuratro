@@ -60,7 +60,7 @@ function M.repeat_pressure_note(offered)
     return string.format("Your last action was sent with the same parameters %s in a row; another identical send "
       .. "is refused and changes nothing. ", times)
   end
-  local rule = require("core.validate").repeat_rule(name)
+  local rule = require("core.validate").repeat_rule()
   return string.format(
     "You have made the same move (%s) with the same parameters %s in a row; another identical send is refused and changes nothing%s. ",
     (require("core.action_registry").phrase(name):gsub("^%u", string.lower)), times, rule and (" -- " .. rule) or "")
@@ -68,11 +68,9 @@ end
 
 function M.menu_action_tree_query(offered)
   offered = offered or {}
-  local parts = {
-    "open run setup, where the run is started",
-    "select a deck to switch the deck",
-    "select a stake to switch the stake",
-  }
+  local parts = { "open run setup, where the run is started" }
+  if offered.select_deck then parts[#parts + 1] = "select a deck to switch the deck" end
+  if offered.select_stake then parts[#parts + 1] = "select a stake to switch the stake" end
   if Actions.is_action_valid("copy_seed") then
     parts[#parts + 1] = "copy the current seed"
   end
@@ -83,7 +81,7 @@ function M.menu_action_tree_query(offered)
 end
 
 function M.hiyori_persona_gate()
-  if G and G.NEURO and G.NEURO.persona == "hiyori" then
+  if Actions.awaiting_persona() then
     return {
       query = "Identity not selected. Choose a persona: persona 'neuro' for Neuro-sama or 'evil' for Evil Neuro.",
       actions = { "choose_persona" }

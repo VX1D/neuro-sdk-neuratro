@@ -266,10 +266,50 @@ fn append_record(slot: &mut Option<OpenInbox>, path: &Path, record: &[u8]) -> Re
     Ok(())
 }
 
+pub(crate) fn utc_timestamp(since_epoch: Duration) -> String {
+    let secs = since_epoch.as_secs();
+    let days = (secs / 86_400) as i64;
+    let (z, rem) = (days + 719_468, secs % 86_400);
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60,
+        since_epoch.subsec_millis()
+    )
+}
+
+pub(crate) fn stamped(line: &str) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    match line.strip_prefix('{') {
+        Some(rest) if !rest.trim_start().starts_with('}') => {
+            format!("{{\"ts\":\"{}\",{rest}", utc_timestamp(now))
+        }
+        _ => line.to_string(),
+    }
+}
+
 pub(crate) async fn append_line(path: &Path, line: &str) -> Result<()> {
     if line.trim().is_empty() {
         return Ok(());
     }
+    let stamp = stamped(line);
+    // The timestamp is diagnostic; a frame at the size limit goes in without it.
+    let line = if stamp.len() <= MAX_COMMAND_BYTES {
+        stamp.as_str()
+    } else {
+        line
+    };
     if line.contains('\r') || line.contains('\n') {
         anyhow::bail!("refusing to append a line containing a newline");
     }

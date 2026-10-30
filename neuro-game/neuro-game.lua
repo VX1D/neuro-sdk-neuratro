@@ -3,8 +3,8 @@
 --- MOD_ID: neuro-game
 --- MOD_AUTHOR: [x264.webrip]
 --- MOD_DESCRIPTION: Neuro SDK bridge + IPC for Balatro
---- MOD_VERSION: 1.2.0
---- DEPENDENCIES: [Steamodded>=1.0.0~BETA-1827b]
+--- MOD_VERSION: 1.2.1
+--- DEPENDENCIES: [Steamodded>=26.1002.0]
 
 if rawget(_G, "NEURO_SDK_MOD_LOADED") then
   local info = debug and type(debug.getinfo) == "function" and debug.getinfo(1, "S")

@@ -155,8 +155,8 @@ do
   check("exactly one result", #results == 1, #results)
   check("paused result is acknowledged success with no mutation",
     results[1] and results[1].success == true, results[1] and tostring(results[1].success))
-  check("paused action outside the force leaves that force pending",
-    require("core.window").current() ~= nil)
+  check("the paused acknowledgement completes the force, asked again after the pause (ActionWindowResponse.cs:20)",
+    require("core.window").current() == nil)
   D.route_message({ command = "action",
     data = { id = "pause-1", name = "play_hand", data = '{"indices":[1,2]}' } }, b)
   check("same-session redelivery of paused id is suppressed",
@@ -191,8 +191,8 @@ do
     command = "action",
     data = { id = "foreign-setup", name = "exit_overlay_menu", data = "{}" },
   }, sending_bridge())
-  check("an accepted foreign setup action leaves the force pending",
-    require("core.window").current() ~= nil and G.NEURO.force_window.ended_by == nil,
+  check("any accepted action ends the force, listed or not (ActionWindowResponse.cs:20)",
+    require("core.window").current() == nil and G.NEURO.force_window.ended_by == "answered",
     tostring(G.NEURO.force_window and G.NEURO.force_window.ended_by))
 
   arm_foreign_force("SHOP")
@@ -353,15 +353,14 @@ do
   local Metrics = require("util.metrics")
   local function invalid_acks() return Metrics._counters.dispatch_startup_ack_invalid or 0 end
   local invalid_before = invalid_acks()
-  local persona_before = G.NEURO.persona
   local ok_call = pcall(D.route_message, {
     command = "startup",
     data = { session = { sessionId = "sess-77", characterId = "neuro", displayName = "Neuro" } },
   }, b)
   check("startup ack never throws", ok_call == true)
   check("a startup ack with a characterId is accepted", invalid_acks() == invalid_before)
-  check("startup ack does not touch persona selection", G.NEURO.persona == persona_before,
-    tostring(G.NEURO.persona))
+  check("the server's characterId decides the persona", G.NEURO.persona == "neuro", tostring(G.NEURO.persona))
+  local persona_before = G.NEURO.persona
   check("startup ack emits no wire frame", #b.sent == 0, #b.sent)
 
   local ok_malformed = pcall(D.route_message, { command = "startup", data = {} }, b)
@@ -495,7 +494,7 @@ do
   local _, ordinary = UseCard.handle_use_card({ area = "shop_jokers", index = 1, name = "Death" })
   check("directional shop rejection: ordinary use is refused with a directional remedy",
     type(ordinary) == "table" and ordinary.reason_code == "INVALID_SELECTION"
-      and tostring(ordinary.message):find("use_directional_consumable", 1, true) ~= nil,
+      and tostring(ordinary.message):find("Use a directional consumable", 1, true) ~= nil,
     ordinary and ordinary.message)
 
   local ContextCompact = require("context.context_compact")
@@ -626,8 +625,7 @@ end
 do
   local Dispatcher = require("core.dispatcher")
   local Registry = require("core.action_registry")
-  local Enforce = { pre_action = function(_, name, data) return require("tests.helpers").pre_action(name, data) end, reset_run_state = require("core.validate").reset_run_state, reset_streaks = require("core.validate").reset_streaks, note_rejection = function() end }
-  local Metrics = require("util.metrics")
+  local Enforce = { pre_action = function(_, name, data) return require("tests.helpers").pre_action(name, data) end, reset_run_state = require("core.validate").reset_run_state, reset_streaks = require("core.validate").reset_streaks }
 
   local serial = 0
   local function refuse(name)
@@ -650,11 +648,9 @@ do
   require("core.window").reset()
   require("tests.helpers").stage_registered(nil, { "play_hand", "discard_hand", "buy_from_shop" })
   local unknown = refuse("no_such_action_at_all")
-  check("an unknown name is refused with the reference SDK text (NeuroSdkStrings.cs:16) plus this screen's registered offer",
-    unknown.success == false
-      and unknown.message:find("play_hand", 1, true) ~= nil
-      and unknown.message:find("discard_hand", 1, true) ~= nil
-      and unknown.message:find("buy_from_shop", 1, true) == nil, unknown.message)
+  check("an unknown name is refused with exactly the reference SDK text (NeuroSdkStrings.cs:16)",
+    unknown.success == false and unknown.code == "ACTION_UNKNOWN"
+      and unknown.message == "Action failed. Unknown action 'no_such_action_at_all'.", unknown.message)
 
   Registry.reset()
   require("core.bridge").tx.reset()
@@ -663,38 +659,35 @@ do
   Registry.note_unregistered({ "discard_hand" }, Registry.now())
   local gone = refuse("discard_hand")
   check("a recently withdrawn action fails like the reference SDKs (Action.cs:55-57, NeuroSdkStrings.cs:15)",
-    gone.success == false
-      and gone.message:find("play_hand", 1, true) ~= nil,
+    gone.success == false and gone.code == "ACTION_UNREGISTERED"
+      and gone.message == "This action has been recently unregistered and can no longer be used.",
     tostring(gone.success) .. " " .. gone.message)
   Registry.note_unregistered({ "play_hand" }, Registry.now() - Registry.DYING_GRACE - 1)
   local stale = refuse("play_hand")
-  check("past the dying grace a withdrawn game action is refused as not available, never as unknown (BEST_PRACTICES.md:23)",
-    stale.success == false,
+  check("past the dying grace a withdrawn game action is refused with the reference SDK's unknown-action text (BEST_PRACTICES.md:23)",
+    stale.success == false and stale.message == "Action failed. Unknown action 'play_hand'.",
     tostring(stale.success) .. " " .. stale.message)
   Registry.note_registered({ "discard_hand" })
   require("tests.helpers").open_force("SELECTING_HAND", { "play_hand", "discard_hand" })
   local outside = refuse("play_hand")
   require("core.window").reset()
-  check("a game action outside the registered set names only the open force's registered actions",
-    outside.success == false and outside.message:find("discard_hand", 1, true) ~= nil,
+  check("a game action outside the registered set gets the plain unknown-action text with no offer list",
+    outside.success == false and outside.message == "Action failed. Unknown action 'play_hand'.",
     outside.message)
 
-  -- Rejection streaks key on the fault fingerprint; adding changing prose prevents the threshold.
   Registry.reset()
   require("core.bridge").tx.reset()
   require("core.window").reset()
   Enforce.reset_run_state()
-  local function ack_count() return Metrics._counters.action_rejection_acknowledged or 0 end
-  local before = ack_count()
-  for i = 1, 4 do
+  local refused = 0
+  for i = 1, 10 do
     Registry.reset()
     require("tests.helpers").stage_registered(nil,
       i % 2 == 0 and { "play_hand" } or { "play_hand", "discard_hand" })
-    refuse("play_hand")
+    if refuse("play_hand").success == false then refused = refused + 1 end
   end
-  local after = ack_count()
-  check("a repeated fault accumulates its streak even as the accepted set changes around it",
-    after > before, tostring(before) .. " -> " .. tostring(after))
+  check("a repeated fault is refused with success=false every time: there is no retry budget",
+    refused == 10, tostring(refused))
 
   require("core.window").reset()
   Registry.reset()
@@ -738,26 +731,69 @@ do
 end
 
 do
-  local Catalogue = Actions.catalogue_signature
-  check("the catalogue exposes its signature for this check", type(Catalogue) == "function")
-  local before = Catalogue()
-  local moved = {}
-  local function mutate(label, fn)
-    fn()
-    if Catalogue() ~= before then moved[#moved + 1] = label end
+  local LB = require("tests.fixtures.live_board")
+  local Window = require("core.window")
+  local TmpWork = require("tests.tmp_workdir")
+  local dir = TmpWork.open("sdk_compliance_churn")
+  os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "'")
+  LB.load("SHOP", "Normal: affordable joker, affordable booster, $10")
+  local b = Bridge:new({ enabled = true, fs_dir = dir })
+  for key, value in pairs(G.NEURO) do b[key] = value end
+  G.NEURO = b
+  b:send_startup()
+  b._bridge_init_complete = true
+  local seen = 0
+  local function refresh(step)
+    if step then step() end
+    local frames = require("tests.helpers").outbox_frames(dir .. "/neuro_outbox.jsonl")
+    local registered, unregistered, sent = {}, {}, 0
+    for i = seen + 1, #frames do
+      local d = frames[i].data or {}
+      if frames[i].command == "actions/register" then
+        sent = sent + 1
+        for _, a in ipairs(d.actions or {}) do registered[a.name] = true end
+      elseif frames[i].command == "actions/unregister" then
+        sent = sent + 1
+        for _, name in ipairs(d.action_names or {}) do unregistered[name] = true end
+      end
+    end
+    seen = #frames
+    return sent, registered, unregistered
   end
-  local function card(name)
-    return { ability = { name = name, set = "Joker" }, sort_id = 1,
-      config = { center = { key = "j_" .. name, set = "Joker" } } }
+  local function both(registered, unregistered)
+    for name in pairs(registered) do if unregistered[name] then return name end end
+    return nil
   end
-  mutate("a card in hand", function() G.hand = { cards = { card("ten"), card("jack") } } end)
-  mutate("a joker bought", function() G.jokers = { cards = { card("blueprint") } } end)
-  local EngineCards = require("tests.engine_cards")
-  mutate("a consumable held", function() G.consumeables = { cards = { EngineCards.consumable("c_hermit") } } end)
-  mutate("shop stock", function() G.shop_jokers = { cards = { card("mime") } } end)
-  mutate("a pack opened", function() G.pack_cards = { cards = { EngineCards.consumable("c_fool") } } end)
-  check("volatile board content does not churn the registered catalogue (BEST_PRACTICES.md:16)",
-    #moved == 0, table.concat(moved, ", "))
+  G.consumeables.cards = {}
+  refresh(Window.register_catalogue)
+  check("setup: the shop registers buying", b._registered_sigs.buy_from_shop ~= nil)
+  local sent = refresh(Window.register_catalogue)
+  check("an unchanged board sends no catalogue frame (BEST_PRACTICES.md:16)", sent == 0, tostring(sent))
+  G.GAME.dollars = G.GAME.dollars + 1
+  G.jokers.cards[#G.jokers.cards + 1] = G.jokers.cards[1]
+  sent = refresh(Window.register_catalogue)
+  check("board content that flips no move's usability sends nothing", sent == 0, tostring(sent))
+  local dollars = G.GAME.dollars
+  G.GAME.dollars = 0
+  sent = refresh()
+  check("a board change between windows sends no catalogue frame (BEST_PRACTICES.md:16)", sent == 0, tostring(sent))
+  local _, registered, unregistered = refresh(Window.register_catalogue)
+  check("the next window build unregisters buying once broke, and nothing is unregistered and re-registered in one refresh",
+    unregistered.buy_from_shop and b._registered_sigs.buy_from_shop == nil and both(registered, unregistered) == nil,
+    tostring(both(registered, unregistered)))
+  G.GAME.dollars = dollars
+  _, registered, unregistered = refresh(Window.register_catalogue)
+  check("money back registers buying again at the next window build (README.md:35)",
+    registered.buy_from_shop and b._registered_sigs.buy_from_shop ~= nil and both(registered, unregistered) == nil)
+  sent = refresh(Window.register_catalogue)
+  check("and the next refresh of the same board is silent", sent == 0, tostring(sent))
+  local hermit = require("tests.engine_cards").consumable("c_hermit", { sort_id = 9911, cost = 3, sell_cost = 1 })
+  hermit.area = G.consumeables
+  G.consumeables.cards = { hermit }
+  sent = refresh()
+  _, registered = refresh(Window.register_catalogue)
+  check("a consumable arriving registers its use at the next window build, not before",
+    sent == 0 and registered.use_consumable and b._registered_sigs.use_consumable ~= nil)
 end
 
 do
