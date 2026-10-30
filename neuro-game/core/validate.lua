@@ -276,6 +276,10 @@ local function with_remedy(code, message)
   return (message ~= "" and (sentence(message) .. " ") or "") .. remedy
 end
 
+local function inbox_line(bridge)
+  return type(bridge) == "table" and type(bridge.inbox_line_serial) == "function" and bridge:inbox_line_serial() or nil
+end
+
 local function refuse(bridge, id, name, rejection, forced)
   local code = rejection.reason_code
   if ActionResult.unrecognised(code) then
@@ -476,13 +480,15 @@ local function parameters(msg, bridge, name)
     for key in pairs(data) do
       if key ~= "answer" then return nil, ActionResult.error("SCHEMA_INVALID", CONFIRMATION_FIELDS_ONLY) end
     end
-    local tx = Gate.proposal()
-    local has_ref = bridge and type(bridge.confirmation_proposal_ref) == "function"
-    local ok_ref, active = true, nil
-    if has_ref then ok_ref, active = pcall(bridge.confirmation_proposal_ref, bridge, msg.data.id) end
-    if not tx or (has_ref and (not ok_ref or active ~= tx.ref)) then
+    local tx, line = Gate.proposal(), inbox_line(bridge)
+    if tx and line and (tx.inbox_mark == nil or line < tx.inbox_mark) then
       return nil, ActionResult.error("POLICY_ACKNOWLEDGED",
-        "This confirmation is stale or no longer offered; nothing was applied. Choose the currently offered confirmation action.")
+        "That answer was sent before the current play review reached you, so nothing was applied. "
+          .. "Answer the review as it is shown now.")
+    end
+    if not tx then
+      return nil, ActionResult.error("POLICY_ACKNOWLEDGED", "No play review is open, so nothing was applied."
+        .. moves_sentence("offered now", offered_moves(State.get_state_name())))
     end
   end
   local ok_schema, schema_err = SchemaValidate.validate_value(schema, data, "parameters")
@@ -496,11 +502,14 @@ local function parameters(msg, bridge, name)
   return data
 end
 
-local function admission(name, data, forced, state_name)
+local function review_pending(name)
   if name ~= "resolve_play" and Gate.stale_mutator(name) then
     return ActionResult.error("POLICY_ACKNOWLEDGED",
       "A play review is awaiting your answer; this move was acknowledged without changing anything. Answer the review first.")
   end
+end
+
+local function admission(name, data, forced, state_name)
   local overlay = Actions.overlay_block_reason(name)
   if overlay and forced then return ActionResult.wait(Actions.OVERLAY_FACT, Actions.OVERLAY_RETRY, Actions.OVERLAY_REASKED) end
   if overlay then return ActionResult.error("ACTION_UNAVAILABLE", overlay) end
@@ -580,16 +589,22 @@ function M.validate(msg, bridge)
     refuse(bridge, id, name, ActionResult.wait(busy, retry), forced)
     return nil
   end
+  local review = review_pending(name)
   local overlay_move = Utils.list_to_set(Actions.overlay_actions(state_name) or {})[name]
-  if not overlay_move and not unmodelled(state_name) and not Actions.screen_action_set(state_name) then
+  if not review and not overlay_move and not unmodelled(state_name) and not Actions.screen_action_set(state_name) then
     refuse(bridge, id, name, ActionResult.wait("The game is still changing screens, so nothing was applied."), forced)
     return nil
   end
-  if off_screen(name, state_name) then
+  if not review and off_screen(name, state_name) then
     refuse(bridge, id, name, unavailable(name, state_name), forced)
     return nil
   end
   local data, bad, decoded = parameters(msg, bridge, name)
+  if review then
+    if not data then review.message = review.message .. " It was not valid either: " .. bad.message end
+    refuse(bridge, id, name, review, forced)
+    return nil
+  end
   if not data then
     refuse(bridge, id, name, with_notes(bad, type(decoded) == "table" and unknown_fields_note(name, decoded) or nil), forced)
     return nil
@@ -637,7 +652,7 @@ function M.crashed(bridge, id, name)
 end
 
 if rawget(_G, "NEURO_TEST") then
-  M._test = { admission = admission }
+  M._test = { admission = admission, review_pending = review_pending }
 end
 
 return M

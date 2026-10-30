@@ -17,8 +17,7 @@ local Gate = require("core.gate")
 local card = require("tests.fake_cards").five_of_spades
 
 local function bridge()
-  return require("tests.helpers").fake_bridge({ ack = "written", context = "contexts", cooldown = true,
-    over = { confirmation_proposal_ref = function() return Gate.proposal_ref() end } })
+  return require("tests.helpers").fake_bridge({ ack = "written", context = "contexts", cooldown = true })
 end
 
 local function base(opts)

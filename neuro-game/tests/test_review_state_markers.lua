@@ -46,17 +46,19 @@ end
 
 do
   fresh("SHOP", "Normal: affordable joker, affordable booster, $10")
+  require("core.window").reset()
   send("sell_card", { area = "jokers", index = 1, plan = { build_plan = "x", money_plan = "y" } })
-  pin("sell", FP.next())
+  pin("sell outside a force", FP.next())
 end
 
 do
   fresh("SHOP", "Only vouchers affordable (no jokers/boosters)")
   G.GAME.dollars = 20
   local name = require("util.utils").real_name_or(G.shop_vouchers.cards[1])
+  require("core.window").reset()
   send("buy_from_shop", { area = "shop_vouchers", index = 1, name = name,
     plan = { money_plan = "Buy the voucher now." } })
-  pin("voucher", FP.next())
+  pin("voucher outside a force", FP.next())
 end
 
 do

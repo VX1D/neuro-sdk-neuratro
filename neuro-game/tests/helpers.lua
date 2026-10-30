@@ -235,7 +235,7 @@ function M.pre_action(name, data, bridge)
   local Validate = require("core.validate")
   local forced = require("core.window").forced(name)
   local busy, retry = Validate.busy_reason(name, bridge)
-  local refusal = busy and require("core.action_result").wait(busy, retry) or nil
+  local refusal = busy and require("core.action_result").wait(busy, retry) or Validate._test.review_pending(name)
   local streak
   if not refusal then
     refusal, streak = Validate._test.admission(name, data or {}, forced, require("core.state").get_state_name())

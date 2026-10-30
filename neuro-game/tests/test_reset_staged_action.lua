@@ -59,9 +59,6 @@ local bridge = {
     self.contexts[#self.contexts + 1] = tostring(msg)
   end,
   register_actions = function() end,
-  confirmation_proposal_ref = function()
-    return require("core.gate").proposal_ref()
-  end,
 }
 
 local function play_msg(id)

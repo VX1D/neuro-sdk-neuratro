@@ -261,7 +261,6 @@ local function build()
         require("context.state_doc").section("Proposed play", pending_facts), hand_options(structure, nil, debuff_lead)),
       actions = { "resolve_play" },
       decision_snapshot = tx and Gate.snapshot_proposal() or nil,
-      confirmation_proposal_ref = tx and tx.ref or nil,
     }, true)
   end
 

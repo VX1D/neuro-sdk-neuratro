@@ -252,6 +252,7 @@ function Bridge:new(opts)
   o.heartbeat_file = opts.heartbeat_file or "neuro_heartbeat.txt"
   o.inbox_pos = 0
   o._inbox_anchor = ""
+  o.inbox_serial = 0
   o.seq = 0
   o.last_transition_at = 0
   mirror(o)
@@ -414,6 +415,7 @@ function Bridge:flush_outbox()
     end
     table.remove(fifo, 1)
     self._torn = false
+    self:_stamp_inbox_marks(1)
   end
   return true
 end
@@ -515,7 +517,6 @@ end
 function Bridge:release_force_lock()
   if type(self) ~= "table" then return end
   self._force_open = nil
-  self._active_force_proposal_ref = nil
 end
 
 function Bridge:send_startup(opts)
@@ -702,15 +703,44 @@ function Bridge:force_actions(state, query, action_names, opts)
   end
   local receipt = { kind = "actions_force", actions = action_names }
   if not self:send(frame_out, receipt) then return false, receipt end
-  self._active_force_proposal_ref = opts.confirmation_proposal_ref
   Metrics.incr("force_sent")
   Metrics.set("force_available_actions", #action_names)
   Metrics.set("force_context_bytes", #(state or "") + #query)
   return true, receipt
 end
 
-function Bridge:confirmation_proposal_ref(_id)
-  return self._active_force_proposal_ref
+-- Inbox bytes present now: a line below this position was written before anything that lands now.
+function Bridge:_inbox_present()
+  local path, anchor = self:fs_path(self.inbox_file), self._inbox_anchor
+  local unread = file_size(path) - self.inbox_pos
+  if self.inbox_pos > 0 then
+    local head = read_from(path, self.inbox_pos - #anchor)
+    if head == nil or head:sub(1, #anchor) ~= anchor then
+      unread = math.max(0, file_size(path .. ".1") - self.inbox_pos) + file_size(path)
+    end
+  end
+  return (self.inbox_serial or 0) + math.max(0, unread)
+end
+
+-- Each waiter counts down the outbox lines queued up to and including its own frame.
+function Bridge:_stamp_inbox_marks(landed)
+  local waiting = {}
+  for _, waiter in ipairs(self._inbox_mark_waiters or {}) do
+    waiter.ahead = waiter.ahead - landed
+    if waiter.ahead <= 0 then waiter.target.inbox_mark = self:_inbox_present() else waiting[#waiting + 1] = waiter end
+  end
+  self._inbox_mark_waiters = waiting
+end
+
+function Bridge:mark_inbox_on_landing(target)
+  if type(target) ~= "table" then return end
+  self._inbox_mark_waiters = self._inbox_mark_waiters or {}
+  table.insert(self._inbox_mark_waiters, { target = target, ahead = #pending(self) })
+  self:_stamp_inbox_marks(0)
+end
+
+function Bridge:inbox_line_serial()
+  return self._line_serial
 end
 
 
@@ -790,6 +820,7 @@ function Bridge:_deliver_inbox_message(msg, handler)
 end
 
 local function advance(self, bytes)
+  self.inbox_serial = (self.inbox_serial or 0) + #bytes
   self.inbox_pos = self.inbox_pos + #bytes
   self._inbox_anchor = (self._inbox_anchor .. bytes):sub(-INBOX_ANCHOR_BYTES)
 end
@@ -814,6 +845,7 @@ function Bridge:_consume(data)
       return true
     end
     local line = data:sub(start, newline - 1)
+    self._line_serial = self.inbox_serial or 0
     advance(self, data:sub(start, newline))
     start = newline + 1
     line = line:gsub("\r$", "")

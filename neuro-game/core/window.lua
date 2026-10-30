@@ -420,8 +420,7 @@ local function arm(state_name)
   local withheld, told = Budget.pending_note(state_name, Actions.get_action_names_for_state(state_name))
   if withheld then force.query = force.query .. "\n\n" .. withheld end
   local ok, sent = pcall(n.force_actions, n, Utils.trim_line_ends(context), Utils.trim_line_ends(force.query),
-    force.actions, { priority = ForceHelpers.force_priority(), ephemeral_context = force.ephemeral_context ~= false,
-      confirmation_proposal_ref = force.confirmation_proposal_ref })
+    force.actions, { priority = ForceHelpers.force_priority(), ephemeral_context = force.ephemeral_context ~= false })
   if not ok or sent == false then
     if not ok then print("[neuro-game] force send error: " .. Utils.safe_tostring(sent)) end
     finish("unsent")
@@ -429,6 +428,10 @@ local function arm(state_name)
   end
   w.phase, w.sent_at = FORCED, Utils.gate_now("force_liveness_timeout")
   if told then told() end
+  local review = w.set.resolve_play and require("core.gate").proposal()
+  if review and review.inbox_mark == nil and type(n.mark_inbox_on_landing) == "function" then
+    n:mark_inbox_on_landing(review)
+  end
   Once.commit_journal(journal)
   DecisionDelta.commit(candidate)
 end
