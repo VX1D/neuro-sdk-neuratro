@@ -345,7 +345,7 @@ local function handle_buy_from_shop(data)
         deadline = ActionResult.now() + (buy_and_use and UseCard.OUTCOME_SETTLE_MAX or 0) + math.max(3,
           shop_buy_delay
             + Utils.gate_seconds("shop_buy_watchdog_grace", "NEURO_SHOP_BUY_WATCHDOG_GRACE") + 1),
-        timeout_outcome = "failed",
+        timeout_outcome = "ambiguous",
         debug = { area = buy_area_name, index = buy_index, card = card_name },
         probe = function()
           if explicit_failure then return "failed", { cause = explicit_failure } end
@@ -492,7 +492,7 @@ local function handle_sell_card(data)
       name = "sell_card",
       run_generation = G and G.NEURO and G.NEURO.run_generation,
       deadline = ActionResult.now() + 3,
-      timeout_outcome = "failed",
+      timeout_outcome = "ambiguous",
       debug = { area = data.area, index = data.index, card = card_name },
       probe = function()
         if not sell_card_is_live() then return "applied", { target_left_area = true } end

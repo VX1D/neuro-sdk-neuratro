@@ -144,7 +144,7 @@ local function handle_simple_action(name)
     if name == "start_run" then
       local key = G and G.NEURO and G.NEURO.selected_back_key
       if key and not MenuHandlers.apply_selected_back(key) then
-        error("selected deck is no longer available: " .. tostring(key))
+        return nil, "the selected deck is no longer available: " .. tostring(key)
       end
       selected_center = DeckFacts.run_deck_center()
       selected_stake = DeckFacts.run_stake()
@@ -167,7 +167,7 @@ local function handle_simple_action(name)
     end
     if name == "cash_out" then
       local button = GameFacts.cash_out_button()
-      if not button then error("the Cash Out button is gone; the payout was not collected", 0) end
+      if not button then return nil, "the Cash Out button is gone; the payout was not collected" end
       fn(button)
       return nil
     end

@@ -383,8 +383,8 @@ do
   for _, text in ipairs(b.contexts) do
     if tostring(text):find("(reroll the shop)", 1, true) then told = true end
   end
-  check("and the failure after admission is not sent to her at all",
-    not told and #b.contexts == 0, table.concat(b.contexts, " || "))
+  check("and the failure after admission is reported to her once",
+    told and #b.contexts == 1, table.concat(b.contexts, " || "))
   check("throw path commits no plan", G.NEURO.plan == nil)
 end
 

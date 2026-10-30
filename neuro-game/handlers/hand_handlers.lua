@@ -629,7 +629,7 @@ local function commit_hand(data, action, confirmed, confirmation_tx)
       name = action == "play" and "play_hand" or "discard_hand",
       run_generation = G and G.NEURO and G.NEURO.run_generation,
       deadline = ActionResult.now() + 4,
-      timeout_outcome = "failed",
+      timeout_outcome = "ambiguous",
       debug = { indices = indices, target_count = #target_cards },
       probe = function()
         local left = 0

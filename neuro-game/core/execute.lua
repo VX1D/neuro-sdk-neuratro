@@ -299,6 +299,17 @@ local function steps(kind, done, list)
   end
 end
 
+local function report_failure(done, outcome, cause)
+  print("[neuro-game] Action " .. tostring(done.name) .. " (" .. tostring(done.id) .. ") did not apply: "
+    .. tostring(outcome) .. (cause and (": " .. Utils.safe_tostring(cause)) or ""))
+  if not done.bridge then return end
+  local move = "Your move (" .. require("core.action_registry").phrase(done.name):gsub("^%u", string.lower) .. ")"
+  ContextDelivery.event_at("action_failed", ContextDelivery.here(), outcome == "ambiguous"
+      and move .. " could not be confirmed in the game; check the current state before choosing again."
+      or move .. " did not take effect in the game, so nothing changed.",
+    { bridge = done.bridge, occurrence = done.id })
+end
+
 local function finalize_failed(done, outcome, details)
   if job == done then job = nil end
   Staging.finish(done, false)
@@ -313,6 +324,10 @@ local function finalize_failed(done, outcome, details)
       if not declined then
         Lifecycle.record_failure(done.name, outcome == "ambiguous" and "execution outcome is ambiguous" or "action did not apply")
       end
+    end },
+    { "failure report", function()
+      if declined then return end
+      report_failure(done, outcome, type(details) == "table" and (details.error or details.cause or details.reason) or nil)
     end },
   })
 end
@@ -371,14 +386,14 @@ local function settle(done, now)
 end
 
 local function run(done)
-  done.phase = "executing"
   Staging.take(done)
   Metrics.time_begin("action_exec")
+  done.phase = "executing"
   local ok, result = xpcall(done.exec, Utils.safe_tostring)
   Metrics.time_end("action_exec")
   if not ok then
     Metrics.incr("action_fail")
-    return finalize_failed(done, "failed", { error = tostring(result) })
+    return finalize_failed(done, "ambiguous", { error = tostring(result) })
   end
   if ActionResult.is_receipt(result) then
     done.phase, done.receipt = "verifying", result
@@ -386,13 +401,19 @@ local function run(done)
   end
   if ActionResult.is_outcome(result) then
     if result.status == "applied" then return finalize_applied(done) end
-    return finalize_failed(done, result.status, result.details)
+    local details = type(result.details) == "table" and result.details or {}
+    if details.reason == nil and result.message then details.reason = result.message end
+    return finalize_failed(done, result.status, details)
   end
   Metrics.incr("action_contract_violation")
   finalize_failed(done, "ambiguous", { reason = "missing_execution_evidence", result_type = type(result) })
 end
 
-function M.abort(reason)
+local function pipeline_failed(done, err)
+  finalize_failed(done, done.phase == "staged" and "failed" or "ambiguous", { error = err })
+end
+
+function M.abort(reason, report)
   local done = job
   if not done then return false end
   job = nil
@@ -400,6 +421,10 @@ function M.abort(reason)
   if done.receipt then ActionResult.finish(done.receipt, "ambiguous", { reason = reason }, true) end
   restore(done)
   Lifecycle.record_failure(done.name, reason)
+  if report then
+    local ok, err = pcall(report_failure, done, done.receipt and "ambiguous" or "failed", reason)
+    if not ok then print("[neuro-game] Warning: abort report for action " .. tostring(done.id) .. " failed: " .. tostring(err)) end
+  end
   return true
 end
 
@@ -432,7 +457,7 @@ function M.admit(done, staged)
   local ok, err = xpcall(run, Utils.safe_tostring, done)
   if not ok then
     Metrics.incr("action_pipeline_fail")
-    finalize_failed(done, "ambiguous", { error = err })
+    pipeline_failed(done, err)
   end
 end
 
@@ -444,12 +469,12 @@ function M.step(now)
     if (G and G.NEURO and G.NEURO.run_generation) ~= done.run_generation then
       return M.abort("transport generation changed")
     elseif current ~= done.state then
-      return M.abort("Action cancelled: game state changed")
+      return M.abort("Action cancelled: game state changed", true)
     elseif Staging.stalled(done) then
-      return M.abort("Action cancelled: staging timeout")
+      return M.abort("Action cancelled: staging timeout", true)
     elseif Staging.ready(done) then
       local ok, err = xpcall(run, Utils.safe_tostring, done)
-      if not ok then finalize_failed(done, "ambiguous", { error = err }) end
+      if not ok then pipeline_failed(done, err) end
     end
   elseif done.phase == "verifying" then
     settle(done, now or ActionResult.now())
