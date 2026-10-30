@@ -779,7 +779,7 @@ local SCENARIOS = {
   { state = "MENU", desc = "Persona hiyori", no_force = true,
     mock = mock("menu", nil, function() return { NEURO_PERSONA = "hiyori" } end) },
 
-  { state = "MENU", desc = "Overlay + persona hiyori", progress = { "exit_overlay_menu", "open_run_setup" },
+  { state = "MENU", desc = "Overlay + persona hiyori", progress = { "exit_overlay_menu" },
     mock = mock("menu", nil, function() return { OVERLAY_MENU = options_overlay(), NEURO_PERSONA = "hiyori" } end) },
 
   { state = "SELECTING_HAND", desc = "Overlay blocks during hand selection",

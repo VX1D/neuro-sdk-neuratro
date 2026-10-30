@@ -81,7 +81,7 @@ function M.menu_action_tree_query(offered)
 end
 
 function M.hiyori_persona_gate()
-  if G and G.NEURO and G.NEURO.persona == "hiyori" then
+  if Actions.awaiting_persona() then
     return {
       query = "Identity not selected. Choose a persona: persona 'neuro' for Neuro-sama or 'evil' for Evil Neuro.",
       actions = { "choose_persona" }

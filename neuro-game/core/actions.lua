@@ -230,7 +230,7 @@ local function build_param_actions()
       properties = { seed = { type = "string", pattern = "^[A-Za-z0-9]*$", maxLength = 8 } },
       required = {}
     }),
-    choose_persona = action_def("choose_persona", "Set the persona with required persona (neuro or evil).", {
+    choose_persona = action_def("choose_persona", "Set the persona once per session with required persona (neuro or evil).", {
     type = "object",
     properties = {
       persona = {
@@ -473,6 +473,14 @@ end
 local VALIDATORS = {}
 local CHOOSE_OFFERED = "; choose one of the actions offered now."
 
+local function persona_chosen()
+  return G and G.NEURO and G.NEURO.persona and G.NEURO.persona ~= "hiyori" or false
+end
+
+function Actions.awaiting_persona()
+  return G and G.NEURO and G.NEURO.persona == "hiyori" or false
+end
+
 -- A gate replaces the validator where registration must lead usability: a review is answerable once it opens.
 local REGISTRATION_GATES = {
   resolve_play = function()
@@ -482,7 +490,7 @@ local REGISTRATION_GATES = {
 }
 
 VALIDATORS.choose_persona = function()
-  if G and G.NEURO and G.NEURO.persona and G.NEURO.persona ~= "hiyori" then
+  if persona_chosen() then
     return false, "Your persona is already set for this session; continue with the actions offered now."
   end
 end
@@ -676,6 +684,19 @@ VALIDATORS.leave_shop = function()
   end
 end
 
+-- The menu forces ask for the persona first; outside a force these moves are unavailable until it is chosen.
+local PERSONA_FIRST = { "open_run_setup", "select_deck", "select_stake", "select_challenge", "start_challenge_run",
+  "toggle_seeded_run", "paste_seed", "copy_seed", "start_run" }
+for _, name in ipairs(PERSONA_FIRST) do
+  local own = VALIDATORS[name]
+  VALIDATORS[name] = function(action_name)
+    if Actions.awaiting_persona() then
+      return false, "Your persona is not chosen yet; choose a persona first."
+    end
+    if own then return own(action_name) end
+  end
+end
+
 for name, validator in pairs(VALIDATORS) do
   local predicate = validator
   local action_name = name
@@ -808,6 +829,7 @@ local function caps_signature()
     table.concat(challenge_ids() or {}, ","),
     table.concat(GameFacts.visible_hand_names() or {}, ","),
     confirm_hand_on() and "1" or "0",
+    persona_chosen() and "1" or "0",
   }, "/")
 end
 

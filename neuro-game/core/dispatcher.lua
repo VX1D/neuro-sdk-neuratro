@@ -1,6 +1,7 @@
 local Wire = require("core.bridge").wire
 local Actions = require("core.actions")
 local Utils = require("util.utils")
+local Config = require("core.config")
 local Metrics = require("util.metrics")
 local Tx = require("core.bridge").tx
 local PlanTransaction = require("core.plan_transaction")
@@ -28,14 +29,16 @@ local function persona_display_name(persona)
   return persona == "evil" and "Evil Neuro" or "Neuro-sama"
 end
 
+local function at_menu()
+  return require("core.state_kinds").is_menu_state(require("core.state").get_state_name())
+end
+
 local function apply_persona(persona)
   local display_name = persona_display_name(persona)
   if G and G.NEURO then
     local previous = G.NEURO.persona
     G.NEURO.persona = persona
-    local StateKinds = require("core.state_kinds")
-    local at_menu = StateKinds.is_menu_state(require("core.state").get_state_name())
-    if at_menu and not G.NEURO.login_anim then
+    if at_menu() and not G.NEURO.login_anim then
       G.NEURO.login_anim = {
         start = Utils.now(),
         name = display_name,
@@ -52,13 +55,6 @@ local ACTION_PREFLIGHTS = {
     local persona = data.persona
     if persona ~= "neuro" and persona ~= "evil" then
       return nil, "Choose 'neuro' for Neuro-sama or 'evil' for Evil Neuro."
-    end
-    if G and G.NEURO and G.NEURO.persona ~= "hiyori" then
-      if G.NEURO.persona == persona then
-        return function() return ActionResult.done() end
-      end
-      local cur = persona_display_name(G.NEURO.persona)
-      return nil, "Identity already set to " .. cur .. ". Cannot change mid-session."
     end
     return function() return apply_persona(persona) end
   end,
@@ -356,8 +352,15 @@ local function handle_startup(msg)
     return drop("handle_startup_invalid")
   end
   if not (G and G.NEURO) then return end
-  if (session.characterId == "neuro" or session.characterId == "evil") and G.NEURO.persona == "hiyori" then
-    apply_persona(session.characterId)
+  local character = session.characterId
+  if character ~= "neuro" and character ~= "evil" then return end
+  Config.set("NEURO_SERVER_CHARACTER", character)
+  Config.save()
+  -- During boot the login waits for the title screen so its animation is seen.
+  local screen = require("core.state").get_state_name()
+  if Actions.awaiting_persona() and (screen == nil or screen == "SPLASH" or screen == "UNKNOWN") then return end
+  if G.NEURO.persona ~= character then
+    apply_persona(character)
     require("core.window").withdraw("persona_from_startup")
   end
 end
@@ -399,6 +402,13 @@ end
 
 function Dispatcher.handle_message(msg, bridge)
   return dispatch(msg, bridge, false)
+end
+
+-- Without an acknowledgement naming her, she logs in as the character the server named last.
+function Dispatcher.recall_persona()
+  if not Actions.awaiting_persona() then return end
+  local remembered = Config.get_raw("NEURO_SERVER_CHARACTER")
+  if remembered == "neuro" or remembered == "evil" then apply_persona(remembered) end
 end
 
 function Dispatcher.reset_run_state(reason)

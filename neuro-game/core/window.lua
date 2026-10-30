@@ -395,6 +395,7 @@ local function arm(state_name)
   local journal = Once.begin_journal()
   local function abandon() Once.rollback_journal(journal) end
   Utils.begin_text_build()
+  require("core.dispatcher").recall_persona()
   local force = Router.get_force_for_state(state_name)
   if not force then return Once.rollback_journal(journal) end
   local context, candidate = M.build_payload(state_name, force)

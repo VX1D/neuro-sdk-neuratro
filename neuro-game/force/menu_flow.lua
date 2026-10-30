@@ -116,6 +116,8 @@ local function seed_steps(offered, seeded)
 end
 
 function M.run_setup()
+  local hg = hiyori_persona_gate()
+  if hg then return hg end
   local candidates = { "start_run", "select_deck", "toggle_seeded_run",
     "paste_seed", "copy_seed", "select_stake", "exit_overlay_menu" }
   local actions, offered = offer("RUN_SETUP", candidates)

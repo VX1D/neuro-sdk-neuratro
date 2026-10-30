@@ -353,15 +353,14 @@ do
   local Metrics = require("util.metrics")
   local function invalid_acks() return Metrics._counters.dispatch_startup_ack_invalid or 0 end
   local invalid_before = invalid_acks()
-  local persona_before = G.NEURO.persona
   local ok_call = pcall(D.route_message, {
     command = "startup",
     data = { session = { sessionId = "sess-77", characterId = "neuro", displayName = "Neuro" } },
   }, b)
   check("startup ack never throws", ok_call == true)
   check("a startup ack with a characterId is accepted", invalid_acks() == invalid_before)
-  check("startup ack does not touch persona selection", G.NEURO.persona == persona_before,
-    tostring(G.NEURO.persona))
+  check("the server's characterId decides the persona", G.NEURO.persona == "neuro", tostring(G.NEURO.persona))
+  local persona_before = G.NEURO.persona
   check("startup ack emits no wire frame", #b.sent == 0, #b.sent)
 
   local ok_malformed = pcall(D.route_message, { command = "startup", data = {} }, b)

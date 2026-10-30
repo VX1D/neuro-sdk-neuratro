@@ -226,6 +226,7 @@ run overlay_trans "$LUAJIT" tests/test_overlay_transitional.lua
 run review_ack    "$LUAJIT" tests/test_review_acknowledgement.lua
 run card_binding  "$LUAJIT" tests/test_card_binding.lua
 run stray_hand_idx  "$LUAJIT" tests/test_stray_hand_indices.lua
+run persona_memory "$LUAJIT" tests/test_persona_memory.lua
 run refused_reask "$LUAJIT" tests/test_refused_reask_clock.lua
 run force_binding "$LUAJIT" tests/test_force_decision_binding.lua
 run bridge_hash_lj20 "$LUAJIT" tests/test_bridge_hash_luajit20.lua

@@ -102,7 +102,6 @@ end
 
 do
   bridge.persona = "hiyori"
-  bridge._withdrawn_held = nil
   require("core.window").reset()
   require("core.window").register_catalogue()
   bridge:withdraw_actions({ "choose_persona" })
