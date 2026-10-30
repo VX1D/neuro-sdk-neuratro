@@ -476,7 +476,9 @@ local function collect_ui_lines(node, lines, depth)
   end
 
   local cfg = node.config
-  if type(cfg) == "table" and cfg.text ~= nil then
+  local dyna = type(cfg) == "table" and type(cfg.object) == "table"
+    and type(cfg.object.config) == "table" and type(cfg.object.config.string) == "table"
+  if type(cfg) == "table" and cfg.text ~= nil and not dyna then
     if type(cfg.text) == "table" then
       for _, v in ipairs(cfg.text) do
         push_line(lines, v)
@@ -486,8 +488,7 @@ local function collect_ui_lines(node, lines, depth)
     end
   end
 
-  if type(cfg) == "table" and type(cfg.object) == "table"
-     and type(cfg.object.config) == "table" and type(cfg.object.config.string) == "table" then
+  if dyna then
     local strs = cfg.object.config.string
     local function dyna_str(e)
       local s = (type(e) == "string" and e) or (type(e) == "table" and e.string) or nil
@@ -547,11 +548,12 @@ local function row_text_styles(node, out, depth)
   if depth > 14 or type(node) ~= "table" then return end
   local cfg = node.config
   if type(cfg) == "table" then
-    if type(cfg.text) == "string" and cfg.text:find("%S") then
+    local oc = type(cfg.object) == "table" and cfg.object.config
+    local dyna = type(oc) == "table" and type(oc.string) == "table"
+    if type(cfg.text) == "string" and cfg.text:find("%S") and not dyna then
       out[#out + 1] = { scale = tonumber(cfg.scale), colour = cfg.colour }
     end
-    local oc = type(cfg.object) == "table" and cfg.object.config
-    if type(oc) == "table" and type(oc.string) == "table" then
+    if dyna then
       out[#out + 1] = { scale = tonumber(oc.scale), colour = type(oc.colours) == "table" and oc.colours[1] or nil }
     end
   end

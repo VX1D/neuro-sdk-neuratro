@@ -218,11 +218,21 @@ function M.run_seed()
   return on and true or false, seed
 end
 
+function M.stake_index(choice)
+  local stake = type(choice) == "string" and G and G.P_STAKES and G.P_STAKES[choice]
+  return stake and tonumber(stake.order) or tonumber(choice)
+end
+
+function M.stake_key(index)
+  local stake = G and G.P_CENTER_POOLS and G.P_CENTER_POOLS.Stake and G.P_CENTER_POOLS.Stake[index]
+  return stake and stake.key or nil
+end
+
 local function stake_on_screen()
   local profile = current_profile()
   local choices = M.run_select_choices()
   local last = profile and profile.last_choices
-  return tonumber(choices and choices.stake_choice) or tonumber(last and last.stake_choice)
+  return M.stake_index(choices and choices.stake_choice) or M.stake_index(last and last.stake_choice)
 end
 
 function M.run_stake()

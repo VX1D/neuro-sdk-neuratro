@@ -97,8 +97,8 @@ function M.new(opts)
   end
 
   function H.action_line(id, name, payload)
-    if type(payload) == "table" then payload = json.encode(payload) end
     payload = payload or '{"indices":[1,2]}'
+    if type(payload) == "table" then payload = json.encode(payload) end
     return string.format('{"command":"action","data":{"id":%s,"name":%q,"data":%q}}',
       json.encode(id), name or "play_hand", payload)
   end

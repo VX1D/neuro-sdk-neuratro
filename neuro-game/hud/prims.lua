@@ -719,7 +719,6 @@ local function bake_run(cw, ch, ox, oy, paint)
   bake_supported = true
   if canvas.setFilter then pcall(canvas.setFilter, canvas, "nearest", "nearest") end
 
-  local prev_canvas = love.graphics.getCanvas()
   love.graphics.push("all")
   love.graphics.origin()
   love.graphics.setCanvas(canvas)
@@ -728,7 +727,6 @@ local function bake_run(cw, ch, ox, oy, paint)
   love.graphics.setBlendMode("alpha", "alphamultiply")
   love.graphics.clear(0, 0, 0, 0)
   local painted = pcall(paint, ox, oy)
-  if prev_canvas then love.graphics.setCanvas(prev_canvas) else love.graphics.setCanvas() end
   love.graphics.pop()
 
   if not painted then

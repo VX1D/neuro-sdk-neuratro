@@ -43,7 +43,7 @@ The Lua mod reads game state, figures out valid actions, and sends a force reque
 |---|---|
 | [Balatro](https://store.steampowered.com/app/2379780/Balatro/) | Steam version |
 | [Lovely injector v0.9.0](https://github.com/ethangreen-dev/lovely-injector/releases/tag/v0.9.0) | Drop `version.dll` into the Balatro game folder |
-| [Steamodded](https://github.com/Steamodded/smods) | Mod framework |
+| [Steamodded 26.1002.0 or newer](https://github.com/Steamodded/smods/releases/tag/26.1002.0) | Mod framework |
 | [Rust toolchain](https://rustup.rs/) | To build the bridge |
 
 ---

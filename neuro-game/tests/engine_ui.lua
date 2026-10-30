@@ -119,7 +119,7 @@ function M.load(label, lost_if_skipped)
 
   local SM = {}
   for _, name in ipairs({ "localize_box", "signed", "signed_dollars", "localize_perma_bonuses",
-      "info_queue_desc_from_rows", "merge_defaults", "get_probability_vars" }) do
+      "info_queue_desc_from_rows", "merge_defaults", "get_probability_vars", "get_loc_colour" }) do
     local header = "function SMODS." .. name .. "("
     local s = assert(src.s_utils:find("\n" .. header, 1, true), "smods/utils.lua: no " .. header)
     local args = src.s_utils:match("%b()", s)
@@ -362,12 +362,13 @@ local function walk(node, out, depth)
   if depth > 40 or type(node) ~= "table" then return end
   local cfg = node.config
   if type(cfg) == "table" then
-    if cfg.text ~= nil then out[#out + 1] = tostring(cfg.text) end
+    local obj = cfg.object
+    local dyna = type(obj) == "table" and type(obj.config) == "table" and type(obj.config.string) == "table"
+    if cfg.text ~= nil and not dyna then out[#out + 1] = tostring(cfg.text) end
     if cfg.text == nil and type(cfg.ref_table) == "table" and cfg.ref_value ~= nil then
       out[#out + 1] = tostring(cfg.ref_table[cfg.ref_value] or "")
     end
-    local obj = cfg.object
-    if type(obj) == "table" and type(obj.config) == "table" and type(obj.config.string) == "table" then
+    if dyna then
       local parts = {}
       for _, s in ipairs(obj.config.string) do
         parts[#parts + 1] = type(s) == "table" and tostring(s.string or "") or tostring(s)

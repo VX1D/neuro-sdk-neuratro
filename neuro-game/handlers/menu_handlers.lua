@@ -28,9 +28,10 @@ local function sync_run_select()
   local rs = SMODS.RunSelect
   local center, stake = DeckFacts.run_deck_center(), DeckFacts.run_stake()
   local deck_moved = center ~= nil and choices.deck_choice ~= center.key
-  local stake_moved = choices.stake_choice ~= stake
+  local stake_key = DeckFacts.stake_key(stake)
+  local stake_moved = stake_key ~= nil and choices.stake_choice ~= stake_key
   if center then choices.deck_choice = center.key end
-  choices.stake_choice = stake
+  if stake_key then choices.stake_choice = stake_key end
   local internals, fns = rs.Internals, rs.Functions
   local page = rs.Pages[internals.pages[internals.current_page]]
   if type(page) ~= "table" then return end
@@ -38,7 +39,7 @@ local function sync_run_select()
     pcall(fns.populate_preview_ui, "deck_choice", center.key, true)
   end
   if (deck_moved or stake_moved) and page.include_stake_tower and internals.stake_tower then
-    pcall(fns.populate_stake_tower, stake, true)
+    pcall(fns.populate_stake_tower, stake_key, true)
   end
 end
 
